@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect x="0" y="0" width="1280" height="720" fill="#F7F5F0"/>
+  <text x="64" y="86" font-family="Microsoft YaHei, Arial, sans-serif" font-size="34" font-weight="700" fill="#17212B" data-max-width="780">{{PAGE_TITLE}}</text>
+  <text x="66" y="122" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" fill="#5E6B73" data-max-width="880">{{PAGE_SUBTITLE}}</text>
+
+  <rect x="88" y="182" width="1104" height="118" rx="22" fill="#DCEDEA" stroke="#0C6B64" stroke-width="1"/>
+  <text x="126" y="232" font-family="Microsoft YaHei, Arial, sans-serif" font-size="26" font-weight="700" fill="#17212B" data-max-width="960">{{VALIDATION_STATEMENT_LINE_1}}</text>
+  <text x="126" y="266" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" fill="#17212B" data-max-width="960">{{VALIDATION_STATEMENT_LINE_2}}</text>
+
+  <rect x="88" y="354" width="328" height="134" rx="18" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <circle cx="126" cy="398" r="13" fill="#7AA36F"/>
+  <path d="M120 398 L125 404 L135 391" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  <text x="158" y="406" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#0C6B64" data-max-width="210">{{RESULT_1}}</text>
+  <text x="126" y="448" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_1_LINE_1}}</text>
+  <text x="126" y="472" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_1_LINE_2}}</text>
+
+  <rect x="476" y="354" width="328" height="134" rx="18" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <circle cx="514" cy="398" r="13" fill="#7AA36F"/>
+  <path d="M508 398 L513 404 L523 391" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  <text x="546" y="406" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#285A8E" data-max-width="210">{{RESULT_2}}</text>
+  <text x="514" y="448" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_2_LINE_1}}</text>
+  <text x="514" y="472" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_2_LINE_2}}</text>
+
+  <rect x="864" y="354" width="328" height="134" rx="18" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <circle cx="902" cy="398" r="13" fill="#7AA36F"/>
+  <path d="M896 398 L901 404 L911 391" stroke="#FFFFFF" stroke-width="3" fill="none"/>
+  <text x="934" y="406" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#D65A3A" data-max-width="210">{{RESULT_3}}</text>
+  <text x="902" y="448" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_3_LINE_1}}</text>
+  <text x="902" y="472" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="250">{{RESULT_3_LINE_2}}</text>
+
+  <path d="M88 552 L1192 552" stroke="#D7D9D2" stroke-width="2"/>
+  <text x="88" y="590" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" font-weight="700" fill="#17212B" data-max-width="260">{{NEXT_STEP_LABEL}}</text>
+  <text x="352" y="590" font-family="Microsoft YaHei, Arial, sans-serif" font-size="16" fill="#5E6B73" data-max-width="730">{{NEXT_STEP}}</text>
+  <text x="76" y="650" font-family="Microsoft YaHei, Arial, sans-serif" font-size="14" fill="#5E6B73" data-role="footer" data-max-width="820">{{SOURCE_TRACE}}</text>
+</svg>

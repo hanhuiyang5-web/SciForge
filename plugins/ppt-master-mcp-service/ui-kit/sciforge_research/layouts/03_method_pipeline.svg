@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect x="0" y="0" width="1280" height="720" fill="#F7F5F0"/>
+  <text x="64" y="86" font-family="Microsoft YaHei, Arial, sans-serif" font-size="34" font-weight="700" fill="#17212B" data-max-width="780">{{PAGE_TITLE}}</text>
+  <text x="66" y="122" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" fill="#5E6B73" data-max-width="880">{{PAGE_SUBTITLE}}</text>
+
+  <rect x="86" y="188" width="456" height="124" rx="18" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <text x="122" y="234" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#17212B" data-max-width="360">{{STEP_1_TITLE}}</text>
+  <text x="122" y="268" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_1_LINE_1}}</text>
+  <text x="122" y="292" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_1_LINE_2}}</text>
+  <path d="M542 250 L690 250" stroke="#0C6B64" stroke-width="4" fill="none"/>
+  <polygon points="690,250 678,242 678,258" fill="#0C6B64"/>
+
+  <rect x="714" y="188" width="456" height="124" rx="18" fill="#DCEDEA" stroke="#0C6B64" stroke-width="1"/>
+  <text x="750" y="234" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#17212B" data-max-width="360">{{STEP_2_TITLE}}</text>
+  <text x="750" y="268" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_2_LINE_1}}</text>
+  <text x="750" y="292" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_2_LINE_2}}</text>
+  <path d="M942 312 L942 374" stroke="#285A8E" stroke-width="4" fill="none"/>
+  <polygon points="942,374 934,362 950,362" fill="#285A8E"/>
+
+  <rect x="714" y="398" width="456" height="124" rx="18" fill="#DFEAF5" stroke="#285A8E" stroke-width="1"/>
+  <text x="750" y="444" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#17212B" data-max-width="360">{{STEP_3_TITLE}}</text>
+  <text x="750" y="478" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_3_LINE_1}}</text>
+  <text x="750" y="502" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_3_LINE_2}}</text>
+  <path d="M714 460 L566 460" stroke="#D65A3A" stroke-width="4" fill="none"/>
+  <polygon points="566,460 578,452 578,468" fill="#D65A3A"/>
+
+  <rect x="86" y="398" width="456" height="124" rx="18" fill="#F6E3DB" stroke="#D65A3A" stroke-width="1"/>
+  <text x="122" y="444" font-family="Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="700" fill="#17212B" data-max-width="360">{{STEP_4_TITLE}}</text>
+  <text x="122" y="478" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_4_LINE_1}}</text>
+  <text x="122" y="502" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="372">{{STEP_4_LINE_2}}</text>
+
+  <rect x="126" y="568" width="994" height="48" rx="16" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <text x="158" y="599" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" font-weight="700" fill="#17212B" data-max-width="910">{{GUARDRAIL}}</text>
+  <text x="76" y="650" font-family="Microsoft YaHei, Arial, sans-serif" font-size="14" fill="#5E6B73" data-role="footer" data-max-width="820">{{SOURCE_TRACE}}</text>
+</svg>

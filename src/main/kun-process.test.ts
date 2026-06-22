@@ -423,7 +423,7 @@ describe('syncGuiManagedKunConfig', () => {
       }
     })
     expect(parsed.models.profiles['deepseek-v4-flash']).toMatchObject({
-      aliases: ['deepseek-chat', 'deepseek-reasoner'],
+      aliases: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-gui-router'],
       contextWindowTokens: 1_000_000,
       contextCompaction: {
         softThreshold: 980_000,
@@ -748,6 +748,53 @@ describe('syncGuiManagedKunConfig', () => {
         Authorization: 'Bearer docs-token'
       },
       trustScope: 'user'
+    })
+  })
+
+  it('lets GUI-managed MCP server updates override stale runtime config snapshots', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const mcpConfigPath = join(tempRoot, 'mcp.json')
+    writeFileSync(configPath, JSON.stringify({
+      capabilities: {
+        mcp: {
+          enabled: true,
+          servers: {
+            ppt_master: {
+              enabled: true,
+              transport: 'stdio',
+              command: 'npm',
+              args: ['--workspace', 'sciforge-ppt-master-mcp-service', 'run', 'start'],
+              env: {},
+              trustScope: 'user'
+            }
+          }
+        }
+      }
+    }), 'utf8')
+    writeFileSync(mcpConfigPath, JSON.stringify({
+      servers: {
+        ppt_master: {
+          enabled: true,
+          transport: 'stdio',
+          command: 'npm',
+          args: ['--workspace', 'sciforge-ppt-master-mcp-service', 'run', 'start'],
+          env: {
+            PPT_MASTER_PYTHON: '/opt/codex/python3'
+          },
+          trustScope: 'user'
+        }
+      }
+    }), 'utf8')
+    const module = await import('./kun-process')
+
+    await module.syncGuiManagedKunConfig(tempRoot, defaultKunRuntimeSettings(), {
+      mcpConfigPath
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.mcp.servers.ppt_master.env).toEqual({
+      PPT_MASTER_PYTHON: '/opt/codex/python3'
     })
   })
 

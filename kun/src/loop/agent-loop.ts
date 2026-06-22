@@ -78,6 +78,19 @@ const MAX_TURN_MODEL_STEPS = 64
 const DEFAULT_COMPACTION_SUMMARY_TIMEOUT_MS = 15_000
 const DEFAULT_COMPACTION_SUMMARY_MAX_TOKENS = 1_200
 const DEFAULT_COMPACTION_SUMMARY_INPUT_MAX_BYTES = 96 * 1024
+const PPT_MASTER_TOOL_PREFIX = 'ppt_master_'
+const PPT_MASTER_STATUS_TOOL_NAME = 'ppt_master_status'
+const PPT_MASTER_ROUTE_TOOL_ORDER = [
+  'ppt_master_status',
+  'ppt_master_project_status',
+  'ppt_master_sciforge_intake',
+  'ppt_master_convert_source',
+  'ppt_master_init_project',
+  'ppt_master_split_notes',
+  'ppt_master_quality_check',
+  'ppt_master_finalize_svg',
+  'ppt_master_export_pptx'
+]
 
 const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
   setup: 'Setup',
@@ -299,6 +312,30 @@ function allowedToolNamesWithGuiStateTools(
   next.add(TODO_LIST_TOOL_NAME)
   next.add(TODO_WRITE_TOOL_NAME)
   return [...next]
+}
+
+function pptMasterIntentRoutingInstruction(tools: readonly ModelToolSpec[]): string | null {
+  const toolNames = new Set(tools.map((tool) => tool.name))
+  const hasPptMaster = toolNames.has(PPT_MASTER_STATUS_TOOL_NAME) ||
+    [...toolNames].some((name) => name.startsWith(PPT_MASTER_TOOL_PREFIX))
+  if (!hasPptMaster) return null
+  const advertised = PPT_MASTER_ROUTE_TOOL_ORDER
+    .filter((name) => toolNames.has(name))
+    .map((name) => `\`${name}\``)
+    .join(', ')
+  return [
+    '<ppt_master_intent_routing>',
+    'The connected ppt_master MCP tools are an optional presentation production path, not an always-on answer mode.',
+    'Classify the current user request yourself. If the user is asking for a PPT, PPTX, slide deck, slides, presentation, or 演示文稿 deliverable, use the ppt_master MCP workflow instead of replying with a generic capability menu.',
+    advertised ? `Advertised ppt_master tools: ${advertised}.` : 'Advertised ppt_master tools are available in this turn.',
+    'For a positive presentation intent, start with `ppt_master_status`, then use current thread/workspace material and call `ppt_master_sciforge_intake` plus the staged project/export tools as needed.',
+    'Do not inspect, patch, or modify `~/.codex/skills/ppt-master` or SciForge plugin source code to make a deck; treat those as implementation details behind the MCP tools.',
+    'Keep the exact deck `projectPath` returned by `ppt_master_sciforge_intake`, `ppt_master_init_project`, or `ppt_master_project_status`; pass that same deck directory to quality_check, split_notes, finalize_svg, and export_pptx. Do not pass the workspace root unless it itself contains the deck folders such as `sources/`, `svg_output/`, `notes/`, and `exports/`.',
+    'Keep raw scientific modality files in the SciForge/Model Router evidence flow. Pass translated evidence, quotes, drafts, existing figures, and traceable paths into `ppt_master_sciforge_intake`.',
+    'Preserve ppt-master Step 4 confirmations and sequential per-slide SVG authoring. Do not batch-generate final SVG pages inside MCP.',
+    'If you classify the request as not asking for a presentation deliverable, do not call ppt_master tools. If a presentation request lacks a topic, source material, or target audience, ask one concise clarification.',
+    '</ppt_master_intent_routing>'
+  ].join('\n')
 }
 
 export type AgentLoopOptions = {
@@ -720,6 +757,7 @@ export class AgentLoop {
     await this.recordPipelineStage(threadId, turnId, 'input_compressed', {
       historyItems: history.length
     })
+    const pptMasterRoutingInstruction = pptMasterIntentRoutingInstruction(effectiveToolSpecs)
     const contextInstructions = [
       ...(activeGoalInstruction ? [activeGoalInstruction] : []),
       ...(activeGoalInstruction && (this.goalNoToolRecoveryStepsByTurn.get(turnId) ?? 0) > 0
@@ -728,6 +766,7 @@ export class AgentLoop {
       ...(activeTodoInstruction ? [activeTodoInstruction] : []),
       ...memoryInstructions(memories),
       ...skillResolution.instructions,
+      ...(pptMasterRoutingInstruction ? [pptMasterRoutingInstruction] : []),
       ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
       ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
     ]

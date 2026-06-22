@@ -348,6 +348,21 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
     }
   },
   {
+    id: 'ppt_master',
+    kind: 'mcp',
+    titleKey: 'pluginMcpPptMasterTitle',
+    descriptionKey: 'pluginMcpPptMasterDesc',
+    group: 'recommended',
+    mcpConfig: async (workspaceRoot) => {
+      if (typeof window.dsGui?.buildPptMasterMcpConfig !== 'function') {
+        throw new Error('ppt-master MCP config is unavailable in this build.')
+      }
+      const result = await window.dsGui.buildPptMasterMcpConfig(workspaceRoot || undefined)
+      if (!result.ok) throw new Error(result.message)
+      return result.config
+    }
+  },
+  {
     id: 'code-review',
     kind: 'skill',
     titleKey: 'pluginSkillReviewTitle',

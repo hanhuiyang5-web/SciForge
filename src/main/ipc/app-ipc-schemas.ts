@@ -772,6 +772,12 @@ export const figureStyleReviewPayloadSchema = z
   })
   .strict()
 
+export const pptMasterMcpConfigPayloadSchema = z
+  .object({
+    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
+  })
+  .strict()
+
 export const rootPathSchema = trimmedString(MAX_PATH_LENGTH)
 export const deepseekConfigContentSchema = z.string().max(MAX_CONFIG_FILE_BYTES)
 

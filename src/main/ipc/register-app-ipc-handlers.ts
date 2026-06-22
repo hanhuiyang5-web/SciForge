@@ -66,6 +66,7 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
+  pptMasterMcpConfigPayloadSchema,
   rootPathSchema,
   scheduleTaskFromTextPayloadSchema,
   scientificPlottingPrepareReferencePayloadSchema,
@@ -102,6 +103,10 @@ import {
   buildScientificPlottingMcpConfigFragment,
   type ScientificPlottingMcpLaunchConfig
 } from '../scientific-plotting-mcp-config'
+import {
+  buildPptMasterMcpConfigFragment,
+  type PptMasterMcpLaunchConfig
+} from '../ppt-master-mcp-config'
 import {
   getScientificPlottingStatus,
   prepareScientificPlottingReference
@@ -281,6 +286,7 @@ type RegisterAppIpcHandlersOptions = {
   resolveLogDirectory: () => string
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
+  getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
   installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   getScientificPlottingStatus?: () => Promise<ScientificPlottingStatusResult>
   prepareScientificPlottingReference?: (
@@ -404,6 +410,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     resolveLogDirectory,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
+    getPptMasterMcpLaunchConfig,
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
     getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
     prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
@@ -1144,6 +1151,30 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     )
     try {
       return reviewFigureStyleHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('mcp:ppt-master-config', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'mcp:ppt-master-config',
+      pptMasterMcpConfigPayloadSchema,
+      payload
+    )
+    try {
+      const launch = getPptMasterMcpLaunchConfig?.() ?? {
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        isPackaged: app.isPackaged
+      }
+      return {
+        ok: true as const,
+        config: buildPptMasterMcpConfigFragment(launch, request.workspaceRoot)
+      }
     } catch (error) {
       return {
         ok: false as const,

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect x="0" y="0" width="1280" height="720" fill="#F7F5F0"/>
+  <rect x="72" y="62" width="254" height="34" rx="17" fill="#DCEDEA" stroke="#0C6B64" stroke-width="1"/>
+  <text x="96" y="85" font-family="Microsoft YaHei, Arial, sans-serif" font-size="14" fill="#0C6B64" data-max-width="210">{{PROJECT_LABEL}}</text>
+
+  <text x="72" y="192" font-family="Microsoft YaHei, Arial, sans-serif" font-size="60" font-weight="700" fill="#17212B" data-max-width="590">{{TITLE_LINE_1}}</text>
+  <text x="72" y="264" font-family="Microsoft YaHei, Arial, sans-serif" font-size="60" font-weight="700" fill="#17212B" data-max-width="590">{{TITLE_LINE_2}}</text>
+  <text x="76" y="320" font-family="Microsoft YaHei, Arial, sans-serif" font-size="24" fill="#5E6B73" data-max-width="560">{{SUBTITLE_LINE_1}}</text>
+  <text x="76" y="352" font-family="Microsoft YaHei, Arial, sans-serif" font-size="24" fill="#5E6B73" data-max-width="560">{{SUBTITLE_LINE_2}}</text>
+
+  <path d="M76 420 L454 420" stroke="#0C6B64" stroke-width="4"/>
+  <text x="76" y="466" font-family="Microsoft YaHei, Arial, sans-serif" font-size="24" font-weight="700" fill="#17212B" data-max-width="390">{{AUDIENCE}}</text>
+  <text x="76" y="500" font-family="Microsoft YaHei, Arial, sans-serif" font-size="16" fill="#5E6B73" data-max-width="410">{{DATE_OR_CONTEXT}}</text>
+  <text x="76" y="536" font-family="Microsoft YaHei, Arial, sans-serif" font-size="16" fill="#5E6B73" data-max-width="410">{{BOUNDARY_NOTE}}</text>
+
+  <rect x="700" y="126" width="454" height="414" rx="28" fill="#FFFFFF" stroke="#D7D9D2" stroke-width="1"/>
+  <text x="736" y="184" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" font-weight="700" fill="#17212B" data-max-width="310">{{VISUAL_TITLE}}</text>
+  <path d="M744 438 C794 388 842 406 890 344 C932 290 992 282 1046 232" stroke="#0C6B64" stroke-width="6" fill="none"/>
+  <path d="M744 472 C810 454 838 470 884 424 C922 386 970 404 1046 356" stroke="#285A8E" stroke-width="4" fill="none"/>
+  <circle cx="744" cy="438" r="8" fill="#0C6B64"/>
+  <circle cx="890" cy="344" r="10" fill="#0C6B64"/>
+  <circle cx="1046" cy="232" r="12" fill="#0C6B64"/>
+  <circle cx="884" cy="424" r="9" fill="#285A8E"/>
+  <rect x="736" y="222" width="132" height="34" rx="17" fill="#DCEDEA" stroke="#0C6B64" stroke-width="1"/>
+  <text x="760" y="244" font-family="Microsoft YaHei, Arial, sans-serif" font-size="13" fill="#0C6B64" data-max-width="88">{{ASSET_TAG}}</text>
+  <rect x="884" y="222" width="148" height="34" rx="17" fill="#DFEAF5" stroke="#285A8E" stroke-width="1"/>
+  <text x="908" y="244" font-family="Microsoft YaHei, Arial, sans-serif" font-size="13" fill="#285A8E" data-max-width="100">{{EVIDENCE_TAG}}</text>
+  <text x="736" y="504" font-family="Microsoft YaHei, Arial, sans-serif" font-size="15" fill="#5E6B73" data-max-width="360">{{VISUAL_CAPTION}}</text>
+
+  <text x="72" y="650" font-family="Microsoft YaHei, Arial, sans-serif" font-size="14" fill="#5E6B73" data-role="footer" data-max-width="760">{{TRACEABILITY_NOTE}}</text>
+</svg>

@@ -150,6 +150,8 @@ function createApi(): DsGuiApi {
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildScientificPlottingMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+    buildPptMasterMcpConfig: (workspaceRoot) =>
+      invoke('mcp:ppt-master-config', { workspaceRoot }),
     getScientificSkillsStatus: (workspaceRoot) =>
       invoke('mcp:scientific-skills-status', { workspaceRoot }),
     installScientificSkills: (request) =>

@@ -622,6 +622,8 @@
   "pluginScientificSkillsRootWorkspaceSkills": "Workspace skills",
   "pluginScientificSkillsRootGlobalAgents": "Global .agents",
   "pluginScientificSkillsRootGlobalKun": "Global .kun",
+  "pluginMcpPptMasterTitle": "ppt-master",
+  "pluginMcpPptMasterDesc": "Turn SciForge research context, drafts, quotes, and Model Router evidence into ppt-master presentation projects.",
   "pluginSkillReviewTitle": "Code Review",
   "pluginSkillReviewDesc": "Review code changes for defects, regressions, and missing tests.",
   "pluginSkillFrontendTitle": "Frontend Polish",

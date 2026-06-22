@@ -1292,6 +1292,49 @@ describe('registerAppIpcHandlers', () => {
     })).rejects.toThrow('Invalid payload for figure-style:review')
   })
 
+  it('builds the ppt-master MCP config fragment through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const appPath = mkdtempSync(join(tmpdir(), 'ppt-master-mcp-app-'))
+    const execPath = join(appPath, 'DeepSeek GUI')
+
+    try {
+      registerAppIpcHandlers(registerOptions({
+        getPptMasterMcpLaunchConfig: () => ({
+          appPath,
+          execPath,
+          isPackaged: false
+        })
+      }))
+
+      await expect(handlers.get('mcp:ppt-master-config')?.({}, {
+        workspaceRoot: '/tmp/workspace'
+      })).resolves.toMatchObject({
+        ok: true,
+        config: {
+          servers: {
+            ppt_master: {
+              enabled: true,
+              transport: 'stdio',
+              command: execPath,
+              args: [
+                join(appPath, 'out/main/ppt-master-mcp-node-entry.js'),
+                '--ppt-master-mcp-server'
+              ],
+              env: {
+                ELECTRON_RUN_AS_NODE: '1'
+              },
+              trustScope: 'workspace',
+              trustedWorkspaceRoots: ['/tmp/workspace'],
+              timeoutMs: 120_000
+            }
+          }
+        }
+      })
+    } finally {
+      rmSync(appPath, { recursive: true, force: true })
+    }
+  })
+
   it('opens the local Model Router config file through the injected handler', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const openModelRouterConfigFile = vi.fn(async () => ({

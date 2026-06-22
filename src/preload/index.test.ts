@@ -84,6 +84,18 @@ describe('preload agentRuntime bridge', () => {
     })
   })
 
+  it('exposes ppt-master MCP config IPC', async () => {
+    const api = exposedApi as {
+      buildPptMasterMcpConfig(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.buildPptMasterMcpConfig('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('mcp:ppt-master-config', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
   it('exposes scientific skills local status IPC', async () => {
     const api = exposedApi as {
       getScientificSkillsStatus(workspaceRoot?: string): Promise<unknown>
