@@ -199,6 +199,9 @@ export type ScientificSkillsMcpConfigResult =
 export type ScientificPlottingMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
+export type PptMasterMcpConfigResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; message: string }
 export type ScientificSkillsInstallRequest = {
   workspaceRoot: string
   backend?: 'git' | 'npx'
@@ -462,6 +465,7 @@ export type DsGuiApi = {
   openDeepseekConfigDir: () => Promise<PathOpenResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
+  buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
   installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   getScientificPlottingStatus: (workspaceRoot?: string) => Promise<ScientificPlottingStatusResult>

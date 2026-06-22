@@ -60,6 +60,8 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildScientificPlottingMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+  buildPptMasterMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:ppt-master-config', { workspaceRoot }),
   getScientificSkillsStatus: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-skills-status', { workspaceRoot }),
   installScientificSkills: (request) =>

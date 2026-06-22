@@ -131,17 +131,20 @@ describe('electron-builder Kun packaging', () => {
     expect(bundledDirectoryFileSets).not.toEqual(expect.arrayContaining([
       'plugins',
       'plugins/vision-router-service',
-      'plugins/sci-modality-router-service'
+      'plugins/sci-modality-router-service',
+      'plugins/ppt-master-mcp-service'
     ]))
     expect(builderConfig.files).not.toEqual(expect.arrayContaining([
       'plugins/**/*',
       'plugins/vision-router-service/**/*',
-      'plugins/sci-modality-router-service/**/*'
+      'plugins/sci-modality-router-service/**/*',
+      'plugins/ppt-master-mcp-service/**/*'
     ]))
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/plugins/**/*',
       '**/plugins/vision-router-service/**/*',
       '**/plugins/sci-modality-router-service/**/*',
+      '**/plugins/ppt-master-mcp-service/**/*',
       '**/packages/workers/model-router/vision-router-service/**/*'
     ]))
   })
@@ -176,7 +179,8 @@ describe('electron-builder Kun packaging', () => {
       'packages/workers/model-router/vision-router-service/package.json',
       'packages/workers/model-router/vision-router-service/src/index.ts',
       'plugins/vision-router-service/package.json',
-      'plugins/sci-modality-router-service/package.json'
+      'plugins/sci-modality-router-service/package.json',
+      'plugins/ppt-master-mcp-service/package.json'
     ]))
 
     const root = tempRoot()
@@ -253,7 +257,8 @@ describe('root package workspace contracts', () => {
     expect(rootPackage.workspaces).toEqual(expect.arrayContaining([
       'packages/workers/model-router',
       'plugins/vision-router-service',
-      'plugins/sci-modality-router-service'
+      'plugins/sci-modality-router-service',
+      'plugins/ppt-master-mcp-service'
     ]))
     expect(rootPackage.workspaces).not.toEqual(expect.arrayContaining([
       'packages/workers/model-router/vision-router-service'
@@ -263,7 +268,10 @@ describe('root package workspace contracts', () => {
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
       'vision-router:start': 'npm --workspace sciforge-vision-router-service run start',
       'vision-router:test': 'npm --workspace sciforge-vision-router-service run test',
-      'vision-router:typecheck': 'npm --workspace sciforge-vision-router-service run typecheck'
+      'vision-router:typecheck': 'npm --workspace sciforge-vision-router-service run typecheck',
+      'ppt-master:start': 'npm --workspace sciforge-ppt-master-mcp-service run start',
+      'ppt-master:test': 'npm --workspace sciforge-ppt-master-mcp-service run test',
+      'ppt-master:typecheck': 'npm --workspace sciforge-ppt-master-mcp-service run typecheck'
     })
   })
 })

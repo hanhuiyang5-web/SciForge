@@ -1,0 +1,30 @@
+{
+  "name": "sciforge-ppt-master-mcp-service",
+  "version": "0.1.0",
+  "description": "Standalone SciForge MCP service that adapts ppt-master into the scientific presentation workflow.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "sciforge-ppt-master-mcp": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/index.ts",
+    "layout-check": "node --import tsx src/research-ui-kit-layout-check-cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

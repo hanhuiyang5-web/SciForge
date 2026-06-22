@@ -416,8 +416,8 @@ export async function syncGuiManagedKunConfig(
           ? { enabled: mcp.enabled === false ? false : true }
           : {}),
         servers: {
-          ...importedMcpServers,
           ...objectValue(mcp.servers),
+          ...importedMcpServers,
           ...(options?.scheduleMcp
           ? {
               [GUI_SCHEDULE_MCP_SERVER_NAME]: buildGuiScheduleKunMcpServer(

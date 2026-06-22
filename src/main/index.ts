@@ -63,6 +63,7 @@ import {
 } from './claw-schedule-mcp-config'
 import { SCIENTIFIC_SKILLS_MCP_FLAG, type ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import { SCIENTIFIC_PLOTTING_MCP_FLAG, type ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
+import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
 import {
@@ -156,6 +157,14 @@ function getScientificSkillsMcpLaunchConfig(): ScientificSkillsMcpLaunchConfig {
 }
 
 function getScientificPlottingMcpLaunchConfig(): ScientificPlottingMcpLaunchConfig {
+  return {
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged
+  }
+}
+
+function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
@@ -1500,6 +1509,7 @@ app.whenReady().then(async () => {
     resolveLogDirectory,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
+    getPptMasterMcpLaunchConfig,
     logError
   })
 

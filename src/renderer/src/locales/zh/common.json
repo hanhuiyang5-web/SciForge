@@ -622,6 +622,8 @@
   "pluginScientificSkillsRootWorkspaceSkills": "工作区 skills",
   "pluginScientificSkillsRootGlobalAgents": "全局 .agents",
   "pluginScientificSkillsRootGlobalKun": "全局 .kun",
+  "pluginMcpPptMasterTitle": "ppt-master",
+  "pluginMcpPptMasterDesc": "将 SciForge 科研上下文、写作草稿、引用片段和 Model Router 证据整理成 ppt-master 演示项目。",
   "pluginSkillReviewTitle": "Code Review",
   "pluginSkillReviewDesc": "审查代码变更，优先发现缺陷、回归和缺失测试。",
   "pluginSkillFrontendTitle": "Frontend Polish",

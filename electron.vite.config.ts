@@ -11,7 +11,8 @@ export default defineConfig({
           index: resolve('src/main/index.ts'),
           'claw-schedule-mcp-node-entry': resolve('src/main/claw-schedule-mcp-node-entry.ts'),
           'scientific-skills-mcp-node-entry': resolve('src/main/scientific-skills-mcp-node-entry.ts'),
-          'scientific-plotting-mcp-node-entry': resolve('src/main/scientific-plotting-mcp-node-entry.ts')
+          'scientific-plotting-mcp-node-entry': resolve('src/main/scientific-plotting-mcp-node-entry.ts'),
+          'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts')
         }
       }
     }

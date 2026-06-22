@@ -92,6 +92,11 @@ import {
   relativeWorkspacePath,
   type ComposerFileContextEntry
 } from '../lib/composer-file-references'
+import {
+  ensurePptMasterMcpForChat,
+  isPptDeckRequest
+} from '../lib/ppt-master-chat'
+
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
 )
@@ -1522,7 +1527,8 @@ export function Workbench(): ReactElement {
       if (reference.modelRouterObject) {
         const content = [
           `Scientific workspace file: ${reference.relativePath}`,
-          'This file is attached as a structured model-router object reference. Let the model router inspect or translate it when supported.'
+          'This file is attached as a structured model-router object reference. Let the model router inspect or translate it when supported.',
+          'For presentation/PPT work, keep raw scientific modality files in the Model Router evidence flow and pass translated evidence, quotes, drafts, or traceable paths into ppt_master_sciforge_intake.'
         ].join('\n')
         entries.push({
           relativePath: reference.relativePath,
@@ -1611,6 +1617,50 @@ export function Workbench(): ReactElement {
           text: buildComposerFileContextPrompt(messageText, fileContext),
           ...(displayText ? { displayText } : {})
         }
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return null
+      }
+    }
+    const preparePptMasterChatMessage = async (
+      prepared: { text: string; displayText?: string }
+    ): Promise<{ text: string; displayText?: string } | null> => {
+      if (!isPptDeckRequest(prepared.text)) return prepared
+      if (
+        typeof window.dsGui?.getDeepseekConfigFile !== 'function' ||
+        typeof window.dsGui?.setDeepseekConfigFile !== 'function' ||
+        typeof window.dsGui?.buildPptMasterMcpConfig !== 'function'
+      ) {
+        setError('ppt-master MCP 配置接口不可用，请先在插件页安装 ppt-master。')
+        return null
+      }
+      const workspace = normalizeWorkspaceRoot(
+        threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot
+      )
+      const provider = getProvider()
+      const getToolDiagnostics = provider.getToolDiagnostics
+        ? () => provider.getToolDiagnostics!()
+        : undefined
+      try {
+        const result = await ensurePptMasterMcpForChat({
+          text: prepared.text,
+          workspaceRoot: workspace || undefined,
+          readConfig: window.dsGui.getDeepseekConfigFile,
+          writeConfig: window.dsGui.setDeepseekConfigFile,
+          buildConfig: window.dsGui.buildPptMasterMcpConfig,
+          ...(getToolDiagnostics ? { getToolDiagnostics } : {}),
+          waitTimeoutMs: 45_000,
+          pollIntervalMs: 1_000
+        })
+        if (result.status === 'unavailable') {
+          setError(`ppt-master MCP 启用失败：${result.message}`)
+          return null
+        }
+        if (result.status !== 'skipped' && !result.runtimeConnected) {
+          setError('ppt-master MCP 已写入配置，但当前运行时还没有连上；请稍后再发送一次。')
+          return null
+        }
+        return prepared
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error))
         return null
@@ -1736,11 +1786,13 @@ export function Workbench(): ReactElement {
     }
     const prepared = await prepareChatMessage()
     if (!prepared) return
+    const pptPrepared = await preparePptMasterChatMessage(prepared)
+    if (!pptPrepared) return
     setInput('')
     clearComposerAttachments()
     clearComposerFileReferences()
-    void sendMessage(prepared.text, mode === 'plan' ? 'plan' : 'agent', {
-      ...(prepared.displayText ? { displayText: prepared.displayText } : {}),
+    void sendMessage(pptPrepared.text, mode === 'plan' ? 'plan' : 'agent', {
+      ...(pptPrepared.displayText ? { displayText: pptPrepared.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(attachmentIds.length ? { attachmentIds, attachments } : {}),
       ...(modelRouterFileReferences.length ? { fileReferences: modelRouterFileReferences } : {})

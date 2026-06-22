@@ -61,6 +61,49 @@ describe('AgentLoop', () => {
     expect(request.contextInstructions?.join('\n')).not.toContain('shell commands appropriate for the host platform')
   })
 
+  it('lets the model classify presentation intent when ppt_master tools are advertised', async () => {
+    let observedRequest: ModelRequest | null = null
+    const pptTools = ['ppt_master_status', 'ppt_master_sciforge_intake', 'ppt_master_export_pptx'].map((name) =>
+      LocalToolHost.defineTool({
+        name,
+        description: name,
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false
+        },
+        policy: 'auto',
+        execute: async () => ({ output: { ok: true } })
+      })
+    )
+    const h = makeHarness(
+      {
+        provider: 'ppt-routing',
+        model: 'ppt-routing',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          observedRequest = request
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [...buildDefaultLocalTools(), ...pptTools] }
+    )
+    await bootstrapThread(h, { request: { prompt: '做一个ppt给我' } })
+
+    await h.loop.runTurn(h.threadId, h.turnId)
+
+    const request = observedRequest as ModelRequest | null
+    if (!request) throw new Error('expected model request')
+    const toolNames = request.tools.map((tool) => tool.name)
+    const instructions = request.contextInstructions?.join('\n') ?? ''
+    expect(toolNames).toContain('bash')
+    expect(toolNames).toContain('ppt_master_status')
+    expect(instructions).toContain('<ppt_master_intent_routing>')
+    expect(instructions).toContain('Classify the current user request yourself')
+    expect(instructions).toContain('start with `ppt_master_status`')
+    expect(instructions).toContain('Do not inspect, patch, or modify `~/.codex/skills/ppt-master`')
+    expect(instructions).toContain('Keep the exact deck `projectPath`')
+  })
+
   it('records elapsed seconds for active goals after a turn finishes', async () => {
     let nowMs = 1_000
     const h = makeHarness(
