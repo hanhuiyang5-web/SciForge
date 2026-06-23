@@ -55,6 +55,7 @@ import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { runClawScheduleMcpServerFromArgv } from './claw-schedule-mcp-server'
 import { runScientificSkillsMcpServerFromArgv } from './scientific-skills-mcp-server'
 import { runScientificPlottingMcpServerFromArgv } from './scientific-plotting-mcp-server'
+import { runSciforgeCanvasMcpServerFromArgv } from './sciforge-canvas-mcp-server'
 import {
   clawScheduleMcpSettingsChanged,
   resolveKunMcpJsonPath,
@@ -63,6 +64,7 @@ import {
 } from './claw-schedule-mcp-config'
 import { SCIENTIFIC_SKILLS_MCP_FLAG, type ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import { SCIENTIFIC_PLOTTING_MCP_FLAG, type ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
+import { SCIFORGE_CANVAS_MCP_FLAG, type SciforgeCanvasMcpLaunchConfig } from './sciforge-canvas-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
@@ -128,7 +130,12 @@ const runningClawScheduleMcpServer =
   process.argv.includes('--gui-schedule-mcp-server') || process.argv.includes('--claw-schedule-mcp-server')
 const runningScientificSkillsMcpServer = process.argv.includes(SCIENTIFIC_SKILLS_MCP_FLAG)
 const runningScientificPlottingMcpServer = process.argv.includes(SCIENTIFIC_PLOTTING_MCP_FLAG)
-const runningHeadlessMcpServer = runningClawScheduleMcpServer || runningScientificSkillsMcpServer || runningScientificPlottingMcpServer
+const runningSciforgeCanvasMcpServer = process.argv.includes(SCIFORGE_CANVAS_MCP_FLAG)
+const runningHeadlessMcpServer =
+  runningClawScheduleMcpServer ||
+  runningScientificSkillsMcpServer ||
+  runningScientificPlottingMcpServer ||
+  runningSciforgeCanvasMcpServer
 
 function resolveLogDirectory(): string {
   return join(app.getPath('userData'), 'logs')
@@ -1275,6 +1282,11 @@ async function waitForManagedRuntimeReadyBeforeStop(
 if (runningScientificPlottingMcpServer) {
   void runScientificPlottingMcpServerFromArgv(process.argv).catch((error) => {
     console.error('[scientific-plotting-mcp] server failed:', error)
+    process.exit(1)
+  })
+} else if (runningSciforgeCanvasMcpServer) {
+  void runSciforgeCanvasMcpServerFromArgv(process.argv).catch((error) => {
+    console.error('[sciforge-canvas-mcp] server failed:', error)
     process.exit(1)
   })
 } else if (runningScientificSkillsMcpServer) {

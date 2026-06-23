@@ -65,6 +65,52 @@ describe('ppt-master chat bootstrap', () => {
     expect(writeConfig).not.toHaveBeenCalled()
   })
 
+  it('refreshes ppt_master trusted roots for the active workspace', async () => {
+    const writeConfig = vi.fn(async () => undefined)
+    const result = await ensurePptMasterMcpForChat({
+      text: '帮我做个 pptx',
+      workspaceRoot: '/tmp/new-workspace',
+      readConfig: async () => ({
+        content: JSON.stringify({
+          servers: {
+            [PPT_MASTER_MCP_SERVER_ID]: {
+              command: 'old-npm',
+              trustScope: 'workspace',
+              trustedWorkspaceRoots: ['/tmp/old-workspace']
+            }
+          }
+        })
+      }),
+      writeConfig,
+      buildConfig: async (workspaceRoot) => ({
+        ok: true,
+        config: {
+          servers: {
+            [PPT_MASTER_MCP_SERVER_ID]: {
+              command: 'npm',
+              trustScope: 'workspace',
+              trustedWorkspaceRoots: [workspaceRoot]
+            }
+          }
+        }
+      }),
+      getToolDiagnostics: async () => ({
+        mcpServers: [{ id: PPT_MASTER_MCP_SERVER_ID, status: 'connected' }]
+      }),
+      waitTimeoutMs: 1,
+      pollIntervalMs: 1
+    })
+
+    expect(result).toEqual({ status: 'configured', runtimeConnected: true })
+    expect(writeConfig).toHaveBeenCalledTimes(1)
+    const writtenConfig = JSON.parse(String(writeConfig.mock.calls.at(0)?.at(0))) as Record<string, any>
+    expect(writtenConfig.servers.ppt_master.command).toBe('npm')
+    expect(writtenConfig.servers.ppt_master.trustedWorkspaceRoots).toEqual([
+      '/tmp/old-workspace',
+      '/tmp/new-workspace'
+    ])
+  })
+
   it('falls back when the dev app bridge does not expose the ppt-master config channel', async () => {
     const writeConfig = vi.fn(async () => undefined)
     const result = await ensurePptMasterMcpForChat({

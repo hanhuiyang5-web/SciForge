@@ -91,7 +91,13 @@ export function customMcpConfigFragment(id: string, raw: string, fallback: JsonR
   throw new Error('MCP JSON config must include a servers object or a single server object.')
 }
 
-export function mergeMcpJsonConfig(content: string, fragment: JsonRecord): { alreadyExists: boolean; text: string } {
+export type McpJsonMergeResult = {
+  alreadyExists: boolean
+  changed: boolean
+  text: string
+}
+
+export function mergeMcpJsonConfig(content: string, fragment: JsonRecord): McpJsonMergeResult {
   const current = parseMcpJsonConfig(content)
   const currentServers = mcpServersFromConfig(current)
   const fragmentServers = mcpServersFromConfig(fragment)
@@ -102,19 +108,57 @@ export function mergeMcpJsonConfig(content: string, fragment: JsonRecord): { alr
   const alreadyExists = fragmentServerIds.some((id) =>
     Object.prototype.hasOwnProperty.call(currentServers, id)
   )
-  if (alreadyExists) {
-    return { alreadyExists: true, text: `${JSON.stringify(current, null, 2)}\n` }
-  }
 
   const fragmentRest = { ...fragment }
   delete fragmentRest.servers
+  const mergedServers = { ...currentServers }
+  let changed = false
+
+  for (const [id, server] of Object.entries(fragmentServers)) {
+    const existing = currentServers[id]
+    if (!isJsonRecord(existing) || !isJsonRecord(server)) {
+      if (existing !== server) changed = true
+      mergedServers[id] = server
+      continue
+    }
+    const nextServer = mergeExistingMcpServer(existing, server)
+    if (JSON.stringify(nextServer) !== JSON.stringify(existing)) changed = true
+    mergedServers[id] = nextServer
+  }
+
   const next = {
     ...current,
     ...fragmentRest,
     servers: {
-      ...currentServers,
-      ...fragmentServers
+      ...mergedServers
     }
   }
-  return { alreadyExists: false, text: `${JSON.stringify(next, null, 2)}\n` }
+  return { alreadyExists, changed, text: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function mergeExistingMcpServer(existing: JsonRecord, incoming: JsonRecord): JsonRecord {
+  const existingRoots = stringArray(existing.trustedWorkspaceRoots)
+  const incomingRoots = stringArray(incoming.trustedWorkspaceRoots)
+  const trustedWorkspaceRoots = [...new Set([...existingRoots, ...incomingRoots])]
+  const next: JsonRecord = {
+    ...existing,
+    ...incoming
+  }
+  if (isJsonRecord(existing.env) || isJsonRecord(incoming.env)) {
+    next.env = {
+      ...(isJsonRecord(existing.env) ? existing.env : {}),
+      ...(isJsonRecord(incoming.env) ? incoming.env : {})
+    }
+  }
+  if (trustedWorkspaceRoots.length > 0) {
+    next.trustScope = 'workspace'
+    next.trustedWorkspaceRoots = trustedWorkspaceRoots
+  }
+  return next
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
 }

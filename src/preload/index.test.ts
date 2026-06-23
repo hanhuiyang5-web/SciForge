@@ -84,6 +84,18 @@ describe('preload agentRuntime bridge', () => {
     })
   })
 
+  it('exposes SciForge Canvas MCP config IPC', async () => {
+    const api = exposedApi as {
+      buildSciforgeCanvasMcpConfig(workspaceRoot?: string): Promise<unknown>
+    }
+
+    await api.buildSciforgeCanvasMcpConfig('/tmp/workspace')
+
+    expect(invoke).toHaveBeenCalledWith('mcp:sciforge-canvas-config', {
+      workspaceRoot: '/tmp/workspace'
+    })
+  })
+
   it('exposes ppt-master MCP config IPC', async () => {
     const api = exposedApi as {
       buildPptMasterMcpConfig(workspaceRoot?: string): Promise<unknown>
@@ -169,6 +181,44 @@ describe('preload agentRuntime bridge', () => {
         width: 0.7,
         height: 0.5
       }
+    })
+  })
+
+  it('exposes SciForge Canvas open/insert/export IPC', async () => {
+    const api = exposedApi as {
+      openSciforgeCanvas(request: unknown): Promise<unknown>
+      insertSciforgeCanvasArtifact(request: unknown): Promise<unknown>
+      importRecentSciforgeCanvasArtifacts(request: unknown): Promise<unknown>
+      exportSciforgeCanvasReviewPacket(request: unknown): Promise<unknown>
+    }
+
+    await api.openSciforgeCanvas({ workspaceRoot: '/tmp/workspace', canvasId: 'default' })
+    await api.insertSciforgeCanvasArtifact({
+      workspaceRoot: '/tmp/workspace',
+      artifactKind: 'scientific_plot',
+      outputPath: 'figures/output.png'
+    })
+    await api.importRecentSciforgeCanvasArtifacts({
+      workspaceRoot: '/tmp/workspace',
+      limit: 4
+    })
+    await api.exportSciforgeCanvasReviewPacket({ workspaceRoot: '/tmp/workspace' })
+
+    expect(invoke).toHaveBeenCalledWith('sciforge-canvas:open', {
+      workspaceRoot: '/tmp/workspace',
+      canvasId: 'default'
+    })
+    expect(invoke).toHaveBeenCalledWith('sciforge-canvas:insert-artifact', {
+      workspaceRoot: '/tmp/workspace',
+      artifactKind: 'scientific_plot',
+      outputPath: 'figures/output.png'
+    })
+    expect(invoke).toHaveBeenCalledWith('sciforge-canvas:import-recent-artifacts', {
+      workspaceRoot: '/tmp/workspace',
+      limit: 4
+    })
+    expect(invoke).toHaveBeenCalledWith('sciforge-canvas:export-review-packet', {
+      workspaceRoot: '/tmp/workspace'
     })
   })
 

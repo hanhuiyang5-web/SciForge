@@ -60,6 +60,8 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildScientificPlottingMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+  buildSciforgeCanvasMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:sciforge-canvas-config', { workspaceRoot }),
   buildPptMasterMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:ppt-master-config', { workspaceRoot }),
   getScientificSkillsStatus: (workspaceRoot) =>
@@ -70,6 +72,20 @@ const api = {
     ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
   prepareScientificPlottingReference: (request) =>
     ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
+  getSciforgeCanvasStatus: (workspaceRoot) =>
+    ipcRenderer.invoke('sciforge-canvas:status', { workspaceRoot }),
+  openSciforgeCanvas: (request) =>
+    ipcRenderer.invoke('sciforge-canvas:open', request),
+  saveSciforgeCanvas: (request) =>
+    ipcRenderer.invoke('sciforge-canvas:save', request),
+  saveSciforgeCanvasSelection: (request) =>
+    ipcRenderer.invoke('sciforge-canvas:save-selection', request),
+    insertSciforgeCanvasArtifact: (request) =>
+      ipcRenderer.invoke('sciforge-canvas:insert-artifact', request),
+    importRecentSciforgeCanvasArtifacts: (request) =>
+      ipcRenderer.invoke('sciforge-canvas:import-recent-artifacts', request),
+    exportSciforgeCanvasReviewPacket: (request) =>
+      ipcRenderer.invoke('sciforge-canvas:export-review-packet', request),
   extractFigureStyle: (request) =>
     ipcRenderer.invoke('figure-style:extract', request),
   evaluateFigureStyle: (request) =>

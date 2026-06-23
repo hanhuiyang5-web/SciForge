@@ -140,6 +140,7 @@ export function MessageTimeline({
     [hiddenTurnCount, turns]
   )
   const forkedFromTitle = activeThread?.forkedFromTitle?.trim() ?? ''
+  const timelineWorkspaceRoot = activeThread?.workspace?.trim() || workspaceRoot.trim()
   const forkBoundaryTurnCount =
     typeof activeThread?.forkedFromTurnCount === 'number'
       ? Math.max(0, activeThread.forkedFromTurnCount)
@@ -161,7 +162,7 @@ export function MessageTimeline({
           <MessageTimelineEmptyHero
             route={heroRoute}
             ready={runtimeConnection === 'ready'}
-            hasWorkspace={!!workspaceRoot}
+            hasWorkspace={!!timelineWorkspaceRoot}
             runtimeError={runtimeError}
             activeClawChannel={activeClawChannel}
             onPickWorkspace={() => void chooseWorkspace()}

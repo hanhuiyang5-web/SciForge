@@ -51,6 +51,26 @@ export type CommandResult = {
   timedOut: boolean;
 };
 
+type SplitNotesAutoRepair = {
+  attempted: boolean;
+  status: 'skipped' | 'already_aligned' | 'repaired_and_retried' | 'retry_failed';
+  reason?: string;
+  notesPath?: string;
+  backupPath?: string;
+  svgStems?: string[];
+  renamedHeadings?: Array<{
+    line: number;
+    from: string;
+    to: string;
+  }>;
+  firstExitCode?: number | null;
+  retryExitCode?: number | null;
+};
+
+export type SplitNotesResult = CommandResult & {
+  autoRepair?: SplitNotesAutoRepair;
+};
+
 export type CommandRunner = (
   command: string,
   args: string[],
@@ -427,10 +447,37 @@ export function createPptMasterService(options: PptMasterServiceOptions = {}) {
       };
     },
 
-    async splitNotes(input: { projectPath: string }) {
+    async splitNotes(input: { projectPath: string }): Promise<SplitNotesResult> {
       const projectPath = resolve(input.projectPath);
       await assertPptMasterProjectPath(projectPath, 'split notes');
-      return runScript('totalMdSplit', [projectPath], { timeoutMs: DEFAULT_EXPORT_TIMEOUT_MS });
+      const first = await runScript('totalMdSplit', [projectPath], { timeoutMs: DEFAULT_EXPORT_TIMEOUT_MS });
+      if (first.exitCode === 0) return first;
+
+      const repair = await repairTotalNotesForSvgOutput(
+        projectPath,
+        `${first.stdout}\n${first.stderr}`,
+        now
+      );
+      if (!repair.attempted || !repair.backupPath || repair.status === 'already_aligned') {
+        return {
+          ...first,
+          autoRepair: {
+            ...repair,
+            firstExitCode: first.exitCode
+          }
+        } satisfies SplitNotesResult;
+      }
+
+      const retry = await runScript('totalMdSplit', [projectPath], { timeoutMs: DEFAULT_EXPORT_TIMEOUT_MS });
+      return {
+        ...retry,
+        autoRepair: {
+          ...repair,
+          status: retry.exitCode === 0 ? 'repaired_and_retried' : 'retry_failed',
+          firstExitCode: first.exitCode,
+          retryExitCode: retry.exitCode
+        }
+      } satisfies SplitNotesResult;
     },
 
     async qualityCheck(input: { projectPath: string }) {
@@ -694,6 +741,144 @@ function assertWithin(parent: string, child: string, label: string): void {
 
 function assertDirectory(path: string, label: string): void {
   if (!existsSync(path)) throw new Error(`${label} does not exist: ${path}`);
+}
+
+async function repairTotalNotesForSvgOutput(
+  projectPath: string,
+  diagnostic: string,
+  now: () => Date
+): Promise<SplitNotesAutoRepair> {
+  if (!/(?:Missing notes|SVG files and notes do not match)/i.test(diagnostic)) {
+    return {
+      attempted: false,
+      status: 'skipped',
+      reason: 'split failure did not look like an SVG/notes title mismatch'
+    };
+  }
+
+  const notesPath = join(projectPath, 'notes', 'total.md');
+  const svgOutputDir = join(projectPath, 'svg_output');
+  if (!existsSync(notesPath)) {
+    return {
+      attempted: true,
+      status: 'skipped',
+      reason: `notes/total.md does not exist: ${notesPath}`,
+      notesPath
+    };
+  }
+  if (!existsSync(svgOutputDir)) {
+    return {
+      attempted: true,
+      status: 'skipped',
+      reason: `svg_output does not exist: ${svgOutputDir}`,
+      notesPath
+    };
+  }
+
+  const svgStems = (await readdir(svgOutputDir))
+    .filter((file) => file.toLowerCase().endsWith('.svg'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((file) => basename(file, extname(file)));
+  if (svgStems.length === 0) {
+    return {
+      attempted: true,
+      status: 'skipped',
+      reason: 'svg_output has no SVG files',
+      notesPath
+    };
+  }
+
+  const content = await readFile(notesPath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const newline = content.includes('\r\n') ? '\r\n' : '\n';
+  const selectedHeadings = selectSlideHeadings(lines, svgStems.length);
+  if (selectedHeadings.length !== svgStems.length) {
+    return {
+      attempted: true,
+      status: 'skipped',
+      reason: `could not identify ${svgStems.length} slide headings in notes/total.md`,
+      notesPath,
+      svgStems
+    };
+  }
+
+  const renamedHeadings: SplitNotesAutoRepair['renamedHeadings'] = [];
+  for (const [index, heading] of selectedHeadings.entries()) {
+    const target = svgStems[index] ?? heading.title;
+    if (heading.title === target) continue;
+    lines[heading.lineIndex] = `${'#'.repeat(heading.level)} ${target}`;
+    renamedHeadings.push({
+      line: heading.lineIndex + 1,
+      from: heading.title,
+      to: target
+    });
+  }
+
+  if (renamedHeadings.length === 0) {
+    return {
+      attempted: true,
+      status: 'already_aligned',
+      reason: 'slide headings already match svg_output stems',
+      notesPath,
+      svgStems,
+      renamedHeadings
+    };
+  }
+
+  const backupPath = join(projectPath, 'notes', `total.md.sciforge-bak-${formatStamp(now())}`);
+  await copyFile(notesPath, backupPath);
+  await writeFile(notesPath, `${lines.join(newline)}${content.endsWith('\n') ? '' : newline}`, 'utf8');
+
+  return {
+    attempted: true,
+    status: 'repaired_and_retried',
+    notesPath,
+    backupPath,
+    svgStems,
+    renamedHeadings
+  };
+}
+
+type MarkdownHeading = {
+  lineIndex: number;
+  level: number;
+  title: string;
+};
+
+function selectSlideHeadings(lines: string[], expectedCount: number): MarkdownHeading[] {
+  const headings: MarkdownHeading[] = [];
+  lines.forEach((line, lineIndex) => {
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (!match) return;
+    headings.push({
+      lineIndex,
+      level: match[1]?.length ?? 1,
+      title: match[2]?.trim() ?? ''
+    });
+  });
+
+  const byLevel = new Map<number, MarkdownHeading[]>();
+  for (const heading of headings) {
+    byLevel.set(heading.level, [...(byLevel.get(heading.level) ?? []), heading]);
+  }
+
+  for (const level of [2, 1, 3, 4, 5, 6]) {
+    const candidates = byLevel.get(level) ?? [];
+    if (candidates.length === expectedCount) return candidates;
+  }
+
+  const first = headings[0];
+  if (first?.level === 1) {
+    const afterDeckTitle = headings.slice(1);
+    if (afterDeckTitle.length === expectedCount) return afterDeckTitle;
+    const firstLevelAfterTitle = afterDeckTitle[0]?.level;
+    if (firstLevelAfterTitle) {
+      const sameLevel = afterDeckTitle.filter((heading) => heading.level === firstLevelAfterTitle);
+      if (sameLevel.length === expectedCount) return sameLevel;
+    }
+  }
+
+  return [];
 }
 
 async function assertPptMasterProjectPath(

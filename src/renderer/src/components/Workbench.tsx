@@ -96,6 +96,11 @@ import {
   ensurePptMasterMcpForChat,
   isPptDeckRequest
 } from '../lib/ppt-master-chat'
+import {
+  buildSciforgeArtifactFlowPrompt,
+  ensureSciforgeArtifactMcpsForChat,
+  shouldUseSciforgeArtifactFlow
+} from '../lib/sciforge-artifact-chat'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -1666,6 +1671,53 @@ export function Workbench(): ReactElement {
         return null
       }
     }
+    const prepareSciforgeArtifactChatMessage = async (
+      prepared: { text: string; displayText?: string }
+    ): Promise<{ text: string; displayText?: string } | null> => {
+      if (!shouldUseSciforgeArtifactFlow(prepared.text)) return prepared
+      if (
+        typeof window.dsGui?.getDeepseekConfigFile !== 'function' ||
+        typeof window.dsGui?.setDeepseekConfigFile !== 'function'
+      ) {
+        setError('SciForge artifact MCP 配置接口不可用，请先在插件页启用相关 MCP。')
+        return null
+      }
+      const workspace = normalizeWorkspaceRoot(
+        threads.find((thread) => thread.id === activeThreadId)?.workspace || workspaceRoot
+      )
+      const provider = getProvider()
+      const getToolDiagnostics = provider.getToolDiagnostics
+        ? () => provider.getToolDiagnostics!()
+        : undefined
+      try {
+        const result = await ensureSciforgeArtifactMcpsForChat({
+          text: prepared.text,
+          workspaceRoot: workspace || undefined,
+          readConfig: window.dsGui.getDeepseekConfigFile,
+          writeConfig: window.dsGui.setDeepseekConfigFile,
+          buildScientificPlottingConfig: window.dsGui.buildScientificPlottingMcpConfig,
+          buildSciforgeCanvasConfig: window.dsGui.buildSciforgeCanvasMcpConfig,
+          ...(getToolDiagnostics ? { getToolDiagnostics } : {}),
+          waitTimeoutMs: 45_000,
+          pollIntervalMs: 1_000
+        })
+        if (result.status === 'unavailable') {
+          setError(`SciForge artifact MCP 启用失败：${result.message}`)
+          return null
+        }
+        if (result.status !== 'skipped' && !result.runtimeConnected) {
+          setError('SciForge artifact MCP 已写入配置，但当前运行时还没有连上；请稍后再发送一次。')
+          return null
+        }
+        return {
+          ...prepared,
+          text: buildSciforgeArtifactFlowPrompt(prepared.text)
+        }
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return null
+      }
+    }
 
     if (activeSddDraft && rightPanelMode === 'sdd-ai') {
       void sendSddAssistantPrompt(v)
@@ -1788,11 +1840,13 @@ export function Workbench(): ReactElement {
     if (!prepared) return
     const pptPrepared = await preparePptMasterChatMessage(prepared)
     if (!pptPrepared) return
+    const artifactPrepared = await prepareSciforgeArtifactChatMessage(pptPrepared)
+    if (!artifactPrepared) return
     setInput('')
     clearComposerAttachments()
     clearComposerFileReferences()
-    void sendMessage(pptPrepared.text, mode === 'plan' ? 'plan' : 'agent', {
-      ...(pptPrepared.displayText ? { displayText: pptPrepared.displayText } : {}),
+    void sendMessage(artifactPrepared.text, mode === 'plan' ? 'plan' : 'agent', {
+      ...(artifactPrepared.displayText ? { displayText: artifactPrepared.displayText } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(attachmentIds.length ? { attachmentIds, attachments } : {}),
       ...(modelRouterFileReferences.length ? { fileReferences: modelRouterFileReferences } : {})
@@ -2013,7 +2067,7 @@ export function Workbench(): ReactElement {
               />
             ) : rightPanelMode === 'figure-style' ? (
               <FigureStylePanel
-                workspaceRoot={workspaceRoot}
+                workspaceRoot={activeSkillWorkspace}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
               />

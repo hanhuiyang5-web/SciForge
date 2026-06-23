@@ -92,6 +92,20 @@ import type {
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
 } from './scientific-plotting'
+import type {
+  SciforgeCanvasInsertArtifactRequest,
+  SciforgeCanvasInsertArtifactResult,
+  SciforgeCanvasImportRecentArtifactsRequest,
+  SciforgeCanvasImportRecentArtifactsResult,
+  SciforgeCanvasOpenRequest,
+  SciforgeCanvasOpenResult,
+  SciforgeCanvasReviewPacketRequest,
+  SciforgeCanvasReviewPacketResult,
+  SciforgeCanvasSaveRequest,
+  SciforgeCanvasSaveResult,
+  SciforgeCanvasSelectionSaveRequest,
+  SciforgeCanvasStatusResult
+} from './sciforge-canvas'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type PathOpenResult = { ok: boolean; message?: string }
@@ -197,6 +211,9 @@ export type ScientificSkillsMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
 export type ScientificPlottingMcpConfigResult =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; message: string }
+export type SciforgeCanvasMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
 export type PptMasterMcpConfigResult =
@@ -465,6 +482,7 @@ export type DsGuiApi = {
   openDeepseekConfigDir: () => Promise<PathOpenResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
+  buildSciforgeCanvasMcpConfig: (workspaceRoot?: string) => Promise<SciforgeCanvasMcpConfigResult>
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
   installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
@@ -472,6 +490,21 @@ export type DsGuiApi = {
   prepareScientificPlottingReference: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
+  getSciforgeCanvasStatus: (workspaceRoot?: string) => Promise<SciforgeCanvasStatusResult>
+  openSciforgeCanvas: (request: SciforgeCanvasOpenRequest) => Promise<SciforgeCanvasOpenResult>
+  saveSciforgeCanvas: (request: SciforgeCanvasSaveRequest) => Promise<SciforgeCanvasSaveResult>
+  saveSciforgeCanvasSelection: (
+    request: SciforgeCanvasSelectionSaveRequest
+  ) => Promise<SciforgeCanvasSaveResult>
+  insertSciforgeCanvasArtifact: (
+    request: SciforgeCanvasInsertArtifactRequest
+  ) => Promise<SciforgeCanvasInsertArtifactResult>
+  importRecentSciforgeCanvasArtifacts: (
+    request: SciforgeCanvasImportRecentArtifactsRequest
+  ) => Promise<SciforgeCanvasImportRecentArtifactsResult>
+  exportSciforgeCanvasReviewPacket: (
+    request: SciforgeCanvasReviewPacketRequest
+  ) => Promise<SciforgeCanvasReviewPacketResult>
   extractFigureStyle: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
   evaluateFigureStyle: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
   reviewFigureStyle: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>

@@ -150,6 +150,8 @@ function createApi(): DsGuiApi {
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildScientificPlottingMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-plotting-config', { workspaceRoot }),
+    buildSciforgeCanvasMcpConfig: (workspaceRoot) =>
+      invoke('mcp:sciforge-canvas-config', { workspaceRoot }),
     buildPptMasterMcpConfig: (workspaceRoot) =>
       invoke('mcp:ppt-master-config', { workspaceRoot }),
     getScientificSkillsStatus: (workspaceRoot) =>
@@ -160,6 +162,20 @@ function createApi(): DsGuiApi {
       invoke('scientific-plotting:status', { workspaceRoot }),
     prepareScientificPlottingReference: (request) =>
       invoke('scientific-plotting:prepare-reference', request),
+    getSciforgeCanvasStatus: (workspaceRoot) =>
+      invoke('sciforge-canvas:status', { workspaceRoot }),
+    openSciforgeCanvas: (request) =>
+      invoke('sciforge-canvas:open', request),
+    saveSciforgeCanvas: (request) =>
+      invoke('sciforge-canvas:save', request),
+    saveSciforgeCanvasSelection: (request) =>
+      invoke('sciforge-canvas:save-selection', request),
+    insertSciforgeCanvasArtifact: (request) =>
+      invoke('sciforge-canvas:insert-artifact', request),
+    importRecentSciforgeCanvasArtifacts: (request) =>
+      invoke('sciforge-canvas:import-recent-artifacts', request),
+    exportSciforgeCanvasReviewPacket: (request) =>
+      invoke('sciforge-canvas:export-review-packet', request),
     extractFigureStyle: (request) =>
       invoke('figure-style:extract', request),
     evaluateFigureStyle: (request) =>
