@@ -348,6 +348,21 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
     }
   },
   {
+    id: 'sciforge_canvas',
+    kind: 'mcp',
+    titleKey: 'pluginMcpSciforgeCanvasTitle',
+    descriptionKey: 'pluginMcpSciforgeCanvasDesc',
+    group: 'recommended',
+    mcpConfig: async (workspaceRoot) => {
+      if (typeof window.dsGui?.buildSciforgeCanvasMcpConfig !== 'function') {
+        throw new Error('SciForge Canvas MCP config is unavailable in this build.')
+      }
+      const result = await window.dsGui.buildSciforgeCanvasMcpConfig(workspaceRoot || undefined)
+      if (!result.ok) throw new Error(result.message)
+      return result.config
+    }
+  },
+  {
     id: 'ppt_master',
     kind: 'mcp',
     titleKey: 'pluginMcpPptMasterTitle',
@@ -725,6 +740,14 @@ export function PluginMarketplaceView(): ReactElement {
     const content = mcpLoaded ? mcpConfigText : await readMcpConfig()
     const merged = mergeMcpJsonConfig(content, config)
     if (merged.alreadyExists) {
+      if (merged.changed) {
+        const result = await window.dsGui.setDeepseekConfigFile(merged.text)
+        setMcpConfigText(merged.text)
+        setMcpLoaded(true)
+        markInstalled(storageKey('mcp', id))
+        setNotice({ tone: 'success', message: t('pluginMcpAdded', { path: result.path }) })
+        return
+      }
       markInstalled(storageKey('mcp', id))
       setNotice({ tone: 'info', message: t('pluginAlreadyAdded') })
       return

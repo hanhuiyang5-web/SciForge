@@ -23,7 +23,15 @@ import {
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
 
-export type RightPanelMode = 'todo' | 'changes' | 'browser' | 'file' | 'plan' | 'sdd-ai' | 'figure-style' | null
+export type RightPanelMode =
+  | 'todo'
+  | 'changes'
+  | 'browser'
+  | 'file'
+  | 'plan'
+  | 'sdd-ai'
+  | 'figure-style'
+  | null
 
 type Props = {
   rightPanelMode: RightPanelMode

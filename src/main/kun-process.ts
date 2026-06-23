@@ -10,6 +10,7 @@ import {
   isKunRuntimeInsecure,
   normalizeRuntimeGuardSettings,
   resolveKunRuntimeSettings,
+  resolveRuntimeModelRouterSettings,
   type RuntimeGuardSettingsV1,
   type KunRuntimeSettingsV1,
   type AppSettingsV1
@@ -247,7 +248,8 @@ async function startKunChildOnce(
   settings: AppSettingsV1,
   runtime: KunRuntimeSettingsV1
 ): Promise<void> {
-  if (!runtime.apiKey.trim()) {
+  const modelRouterRuntime = resolveRuntimeModelRouterSettings(settings)
+  if (!modelRouterRuntime.apiKey.trim()) {
     throw new Error('Model Router runtime API key is required before starting Kun.')
   }
   if (childLogCapture) {
@@ -295,7 +297,7 @@ async function startKunChildOnce(
       ...kunRuntimeEnv(process.env),
       ELECTRON_RUN_AS_NODE: '1',
       KUN_RUNTIME_TOKEN: runtime.runtimeToken,
-      KUN_MODEL_ROUTER_API_KEY: runtime.apiKey
+      KUN_MODEL_ROUTER_API_KEY: modelRouterRuntime.apiKey
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false

@@ -16,6 +16,7 @@ import {
   FileImage,
   FileText,
   FolderOpen,
+  Frame,
   Image as ImageIcon,
   Loader2,
   PanelRightClose,
@@ -28,6 +29,8 @@ import {
   UploadCloud
 } from 'lucide-react'
 import {
+  lazy,
+  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -36,6 +39,15 @@ import {
   type ReactElement
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  persistFigureStylePanelPage,
+  readStoredFigureStylePanelPage,
+  type FigureStylePanelPage
+} from './figure-style-panel-state'
+
+const SciforgeCanvasPanel = lazy(() =>
+  import('../sciforge-canvas/SciforgeCanvasPanel').then((module) => ({ default: module.SciforgeCanvasPanel }))
+)
 
 type Props = {
   workspaceRoot: string
@@ -163,6 +175,7 @@ export function FigureStylePanel({
   onCollapse
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const [activePage, setActivePage] = useState<FigureStylePanelPage>(() => readStoredFigureStylePanelPage())
   const [sourcePath, setSourcePath] = useState('')
   const [sourceType, setSourceType] = useState<'image' | 'pdf'>('image')
   const [figureId, setFigureId] = useState('')
@@ -195,6 +208,10 @@ export function FigureStylePanel({
     },
     []
   )
+
+  useEffect(() => {
+    persistFigureStylePanelPage(activePage)
+  }, [activePage])
 
   useEffect(() => {
     let cancelled = false
@@ -559,8 +576,36 @@ export function FigureStylePanel({
             </span>
           </div>
         </div>
+        <div className="px-4 pb-3">
+          <div className="grid grid-cols-2 gap-1 rounded-[8px] border border-ds-border-muted bg-ds-surface-subtle p-1 dark:bg-white/6">
+            {[
+              { page: 'style' as const, label: t('figureStyleTabStyle'), icon: SlidersHorizontal },
+              { page: 'canvas' as const, label: t('figureStyleTabCanvas'), icon: Frame }
+            ].map((item) => {
+              const active = activePage === item.page
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.page}
+                  type="button"
+                  onClick={() => setActivePage(item.page)}
+                  className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-2.5 py-1.5 text-[12.5px] font-semibold transition ${
+                    active
+                      ? 'bg-white text-ds-ink shadow-[0_1px_3px_rgba(15,23,42,0.08)] dark:bg-white/12 dark:text-white'
+                      : 'text-ds-muted hover:bg-white/62 hover:text-ds-ink dark:hover:bg-white/8'
+                  }`}
+                  aria-pressed={active}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.85} />
+                  <span className="min-w-0 truncate">{item.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
       </div>
 
+      {activePage === 'style' ? (
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="space-y-4">
           <section className="rounded-[8px] border border-ds-border-muted bg-ds-surface-subtle p-3 dark:bg-white/5">
@@ -972,6 +1017,23 @@ export function FigureStylePanel({
           )}
         </div>
       </div>
+      ) : (
+        <div className="min-h-0 flex-1">
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-ds-muted">
+                <Loader2 className="h-5 w-5 animate-spin" strokeWidth={2} />
+              </div>
+            }
+          >
+            <SciforgeCanvasPanel
+              workspaceRoot={workspaceRoot}
+              variant="embedded"
+              className="h-full max-h-full w-full"
+            />
+          </Suspense>
+        </div>
+      )}
     </aside>
   )
 }

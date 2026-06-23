@@ -786,6 +786,42 @@ describe('registerAppIpcHandlers', () => {
     })
   })
 
+  it('builds the SciForge Canvas MCP config fragment through IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions({
+      getSciforgeCanvasMcpLaunchConfig: () => ({
+        appPath: '/tmp/deepseek-gui-app',
+        execPath: '/tmp/electron',
+        isPackaged: false
+      })
+    }))
+
+    await expect(handlers.get('mcp:sciforge-canvas-config')?.({}, {
+      workspaceRoot: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      ok: true,
+      config: {
+        servers: {
+          sciforge_canvas: {
+            enabled: true,
+            transport: 'stdio',
+            command: '/tmp/electron',
+            args: [
+              '/tmp/deepseek-gui-app/out/main/sciforge-canvas-mcp-node-entry.js',
+              '--sciforge-canvas-mcp-server',
+              '--workspace-root',
+              '/tmp/workspace'
+            ],
+            env: { ELECTRON_RUN_AS_NODE: '1' },
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/tmp/workspace']
+          }
+        }
+      }
+    })
+  })
+
   it('returns scientific skills local status and curated plotting pack through IPC', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const workspace = mkdtempSync(join(tmpdir(), 'scientific-skills-ipc-'))
@@ -1158,6 +1194,45 @@ describe('registerAppIpcHandlers', () => {
         height: 1
       }
     })).rejects.toThrow('Invalid payload for scientific-plotting:prepare-reference')
+  })
+
+  it('routes SciForge Canvas recent artifact import through IPC with schema validation', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const importRecentSciforgeCanvasArtifacts = vi.fn(async () => ({
+      ok: true as const,
+      status: 'imported' as const,
+      canvasId: 'default',
+      canvasPath: '/tmp/workspace/.sciforge/canvases/default/canvas.json',
+      scanned: 2,
+      imported: 2,
+      skipped: 0,
+      artifacts: [],
+      inserted: [],
+      warnings: [],
+      dryRun: false
+    }))
+
+    registerAppIpcHandlers(registerOptions({ importRecentSciforgeCanvasArtifacts }))
+
+    await expect(handlers.get('sciforge-canvas:import-recent-artifacts')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      canvasId: 'default',
+      limit: 4
+    })).resolves.toMatchObject({
+      ok: true,
+      status: 'imported',
+      imported: 2
+    })
+    expect(importRecentSciforgeCanvasArtifacts).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/workspace',
+      canvasId: 'default',
+      limit: 4
+    })
+
+    await expect(handlers.get('sciforge-canvas:import-recent-artifacts')?.({}, {
+      workspaceRoot: '/tmp/workspace',
+      limit: 100
+    })).rejects.toThrow('Invalid payload for sciforge-canvas:import-recent-artifacts')
   })
 
   it('routes figure style similarity evaluation through IPC with schema validation', async () => {

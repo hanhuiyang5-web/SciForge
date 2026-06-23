@@ -25,6 +25,7 @@ describe('PluginMarketplaceView MCP config helpers', () => {
     const parsed = JSON.parse(merged.text) as Record<string, any>
 
     expect(merged.alreadyExists).toBe(false)
+    expect(merged.changed).toBe(true)
     expect(parsed.timeouts).toEqual({ read_timeout: 120 })
     expect(parsed.servers.gui_schedule).toEqual({ command: '/Applications/DeepSeek GUI.app' })
     expect(parsed.servers.playwright).toMatchObject({
@@ -44,7 +45,40 @@ describe('PluginMarketplaceView MCP config helpers', () => {
 
     expect(first.alreadyExists).toBe(false)
     expect(second.alreadyExists).toBe(true)
+    expect(second.changed).toBe(false)
     expect(JSON.parse(second.text).servers.context7).toMatchObject({ command: 'npx' })
+  })
+
+  it('refreshes trusted workspace roots when a managed MCP server already exists', () => {
+    const merged = mergeMcpJsonConfig(
+      JSON.stringify({
+        servers: {
+          sciforge_canvas: {
+            command: 'old-app',
+            args: ['old-entry', '--workspace-root', '/old/workspace'],
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/old/workspace']
+          }
+        }
+      }),
+      {
+        servers: {
+          sciforge_canvas: {
+            command: 'new-app',
+            args: ['new-entry', '--workspace-root', '/new/workspace'],
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/new/workspace']
+          }
+        }
+      }
+    )
+
+    const parsed = JSON.parse(merged.text) as Record<string, any>
+    expect(merged.alreadyExists).toBe(true)
+    expect(merged.changed).toBe(true)
+    expect(parsed.servers.sciforge_canvas.command).toBe('new-app')
+    expect(parsed.servers.sciforge_canvas.args).toEqual(['new-entry', '--workspace-root', '/new/workspace'])
+    expect(parsed.servers.sciforge_canvas.trustedWorkspaceRoots).toEqual(['/old/workspace', '/new/workspace'])
   })
 
   it('accepts custom JSON as either a single server or a Kun config fragment', () => {

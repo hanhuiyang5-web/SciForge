@@ -264,6 +264,60 @@ test('post-processing tools run ppt-master scripts one stage at a time', async (
   assert.deepEqual(calls[2]?.args.slice(-4), ['-t', 'fade', '--animation-trigger', 'after-previous']);
 });
 
+test('split notes repairs slide headings to match generated SVG stems before retrying', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ppt-master-mcp-split-repair-'));
+  const skillDir = await fakeSkillDir(root);
+  const projectPath = join(root, 'project');
+  await mkdir(join(projectPath, 'sources'), { recursive: true });
+  await mkdir(join(projectPath, 'notes'), { recursive: true });
+  await mkdir(join(projectPath, 'svg_output'), { recursive: true });
+  await writeFile(join(projectPath, 'svg_output', 'P1_封面.svg'), '<svg></svg>\n', 'utf8');
+  await writeFile(join(projectPath, 'svg_output', 'P2_Q1Q4_总览.svg'), '<svg></svg>\n', 'utf8');
+  await writeFile(join(projectPath, 'svg_output', 'P3_季度趋势分析.svg'), '<svg></svg>\n', 'utf8');
+  await writeFile(join(projectPath, 'notes', 'total.md'), [
+    '# 2024年度财务数据概览',
+    '',
+    '## 封面',
+    'cover notes',
+    '',
+    '## Q1-Q4 财务数据总览',
+    'overview notes',
+    '',
+    '## 季度趋势分析',
+    'trend notes',
+    ''
+  ].join('\n'), 'utf8');
+
+  const calls: CommandResult[] = [];
+  const service = createPptMasterService({
+    env: { PPT_MASTER_SKILL_DIR: skillDir, PPT_MASTER_PYTHON: 'python3' },
+    now: () => new Date('2026-06-22T10:00:00.000Z'),
+    runCommand: async (command, args, options) => {
+      const result = calls.length === 0
+        ? {
+            ...okCommand(command, args, options.cwd),
+            exitCode: 1,
+            stdout: 'Error: SVG files and notes do not match\n  Missing notes: P2_Q1Q4_总览\n'
+          }
+        : okCommand(command, args, options.cwd);
+      calls.push(result);
+      return result;
+    }
+  });
+
+  const result = await service.splitNotes({ projectPath });
+  const repairedNotes = await readFile(join(projectPath, 'notes', 'total.md'), 'utf8');
+
+  assert.equal(calls.length, 2);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.autoRepair?.status, 'repaired_and_retried');
+  assert.equal(result.autoRepair?.renamedHeadings?.length, 3);
+  assert.match(repairedNotes, /## P1_封面/);
+  assert.match(repairedNotes, /## P2_Q1Q4_总览/);
+  assert.match(repairedNotes, /## P3_季度趋势分析/);
+  assert.ok(result.autoRepair?.backupPath?.endsWith('total.md.sciforge-bak-20260622T100000Z'));
+});
+
 test('post-processing rejects workspace root when a nested deck project should be used', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ppt-master-mcp-wrong-project-'));
   const skillDir = await fakeSkillDir(root);

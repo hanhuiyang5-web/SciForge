@@ -67,7 +67,18 @@ export async function ensurePptMasterMcpForChat(
       await input.writeConfig(merged.text)
       wroteConfig = true
     }
-  } else if (input.getToolDiagnostics) {
+  } else {
+    const result = await buildPptMasterConfigWithFallback(input, current.content)
+    if (result.ok) {
+      const merged = mergeMcpJsonConfig(current.content, result.config)
+      if (merged.changed) {
+        await input.writeConfig(merged.text)
+        wroteConfig = true
+      }
+    }
+  }
+
+  if (alreadyConfigured && !wroteConfig && input.getToolDiagnostics) {
     if (diagnosticsHasConnectedPptMaster(await input.getToolDiagnostics())) {
       return { status: 'configured', runtimeConnected: true }
     }
@@ -79,7 +90,7 @@ export async function ensurePptMasterMcpForChat(
     : true
 
   return {
-    status: wroteConfig ? 'installed' : 'configured',
+    status: !alreadyConfigured && wroteConfig ? 'installed' : 'configured',
     runtimeConnected
   }
 }
