@@ -231,6 +231,7 @@ assert_contains "$SCRIPT_DIR/verify-a-https-test-edge.sh" 'timeout 15 openssl s_
 assert_contains "$SCRIPT_DIR/verify-a-https-test-edge.sh" '0:10002:440'
 assert_contains "$SCRIPT_DIR/verify-a-https-test-edge.sh" 'edge revision header does not match the approved commit'
 assert_contains "$SCRIPT_DIR/verify-a-https-test-edge.sh" 'The A-only console must remain unavailable'
+assert_contains "$SCRIPT_DIR/verify-a-https-test-edge.sh" "| awk 'NF { print }'"
 
 assert_contains "$SCRIPT_DIR/verify-a-https-test-edge-external.sh" "--noproxy '*'"
 assert_contains "$SCRIPT_DIR/verify-a-https-test-edge-external.sh" 'error?.code === "ENODATA"'

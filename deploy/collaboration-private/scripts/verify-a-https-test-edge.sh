@@ -84,14 +84,15 @@ port_bindings="$(docker container inspect --format '{{json .HostConfig.PortBindi
   || die "The HTTPS edge must publish only host TCP 443 to container 8443."
 
 mapfile -t edge_networks < <(docker container inspect --format \
-  '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$edge_container_id")
+  '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$edge_container_id" \
+  | awk 'NF { print }')
 (( ${#edge_networks[@]} == 1 )) || die "The HTTPS edge must join exactly one Docker network."
 [[ "${edge_networks[0]}" == "$A_HTTPS_TEST_EDGE_NETWORK" ]] \
   || die "The HTTPS edge joined an unauthorized Docker network."
 
 mapfile -t edge_mounts < <(docker container inspect --format \
   '{{range .Mounts}}{{println .Type "|" .Source "|" .Destination "|" .RW}}{{end}}' \
-  "$edge_container_id" | LC_ALL=C sort)
+  "$edge_container_id" | awk 'NF { print }' | LC_ALL=C sort)
 (( ${#edge_mounts[@]} == 4 )) || die "The HTTPS edge has an unexpected mount set."
 printf '%s\n' "${edge_mounts[@]}" | grep -Fxq \
   "bind | $A_HTTPS_TEST_EDGE_CADDYFILE | /etc/caddy/Caddyfile | false" \
