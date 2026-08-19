@@ -9,7 +9,9 @@ import { z } from 'zod'
 
 import {
   STATE_TRANSITIONS,
+  DEVICE_ENROLLMENT_SIGNING_DOMAIN,
   PORTABLE_RESOURCE_CARRIER_SCHEMA_VERSION,
+  TASK_CREATE_PROPOSAL_DIGEST_ALGORITHM,
   collaborationErrorSchema,
   createCollaborationError,
   inboxMessageSchema,
@@ -17,6 +19,10 @@ import {
   restRequestSchema,
   restResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+  TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR
+} from '../packages/collaboration-contracts/src/testing.ts'
 import {
   ARTIFACT_REFERENCE_KIND,
   CONTENT_CONTAINER_REFERENCE_KIND,
@@ -35,7 +41,7 @@ export const ARTIFACT_DIRECTORY = join(
 export const COMMIT_PLACEHOLDER = '__SCIFORGE_COLLABORATION_COMMIT__'
 const PROTOCOL_VERSION = '1.0'
 const JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema'
-const COLLABORATION_CONTRACTS_PACKAGE_VERSION = '0.1.0'
+const COLLABORATION_CONTRACTS_PACKAGE_VERSION = '0.2.0'
 const DOMAIN_SDK_PACKAGE_VERSION = '0.2.1'
 const CONTENT_SPACE_PACKAGE_VERSION = '1.0.0'
 const DATABASE_SCHEMA_VERSION = 6
@@ -622,6 +628,18 @@ function buildFixtures() {
   )
 
   return [
+    fixture('device-enrollment-signing-vector', 'algorithm-vector', [], {
+      helperExport: 'canonicalEnrollmentBytes',
+      factsTypeExport: 'EnrollmentSigningFacts',
+      ...DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+      verifies: true
+    }),
+    fixture('task-create-proposal-digest-vector', 'algorithm-vector', [], {
+      normalizeExport: 'normalizeTaskCreateProposal',
+      digestExport: 'computeTaskCreateProposalDigest',
+      ...TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR,
+      verifies: true
+    }),
     fixture('normal-task-offer', 'normal', [
       document('request', 'command', taskCreate),
       document('response', 'response', normalResponse),
@@ -777,6 +795,37 @@ export function generateContractArtifactFiles(commitInput) {
     actors: actorDefinitions,
     permissions: permissionRows,
     stateTransitions: STATE_TRANSITIONS
+  }))
+  files.set('algorithms.json', stringify({
+    artifactVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
+    contractCommit: commit,
+    deviceEnrollmentSigning: {
+      helperExport: 'canonicalEnrollmentBytes',
+      factsTypeExport: 'EnrollmentSigningFacts',
+      factsSchemaExport: 'enrollmentSigningFactsSchema',
+      domain: DEVICE_ENROLLMENT_SIGNING_DOMAIN,
+      fieldOrder: ['domain', 'enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'],
+      encoding: 'utf-8',
+      delimiter: 'LF',
+      trailingDelimiter: false,
+      signatureAlgorithm: 'Ed25519',
+      vectorFixture: 'fixtures/device-enrollment-signing-vector.json'
+    },
+    taskCreateProposalDigest: {
+      normalizeExport: 'normalizeTaskCreateProposal',
+      digestExport: 'computeTaskCreateProposalDigest',
+      inputSchemaExport: 'taskCreateProposalInputSchema',
+      algorithm: TASK_CREATE_PROPOSAL_DIGEST_ALGORITHM,
+      canonicalJson: {
+        objectKeys: 'lexicographic',
+        arrays: 'order-preserving',
+        omitUndefinedObjectProperties: true,
+        stringEncoding: 'json-utf-8'
+      },
+      digest: { algorithm: 'SHA-256', encoding: 'lowercase-hex' },
+      vectorFixture: 'fixtures/task-create-proposal-digest-vector.json'
+    }
   }))
   for (const value of buildFixtures()) {
     files.set(`fixtures/${value.id}.json`, stringify(injectCommit(value, commit)))

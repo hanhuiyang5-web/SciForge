@@ -88,6 +88,20 @@ Agent 注册、owner transfer 与 User lifecycle SHALL 在目标 User 行上串�
 - **AND** 过期上下文 SHALL 在消费 confirmation 或写入任何治理事实前被拒绝
 - **AND** 被拒绝请求 SHALL NOT 消费其引用的 confirmation。
 
+### Requirement: Device enrollment 签名合同对客户端安全且唯一
+
+`@sciforge/collaboration-contracts` SHALL 以非 Node、非 Server 依赖的公共导出提供
+`EnrollmentSigningFacts`、`canonicalEnrollmentBytes` 和固定 Ed25519 测试向量。签名 payload
+SHALL 由固定 domain、字段顺序、UTF-8 编码和 LF 分隔规则唯一决定。Desktop/C 客户端 SHALL
+直接消费该公共 helper，SHALL NOT 依赖 `collaboration-server`，也 SHALL NOT 复制签名算法。
+
+#### Scenario: Desktop 与 Cloud 验证相同 enrollment proof
+
+- **WHEN** Desktop 以公共 helper 对固定 `EnrollmentSigningFacts` 生成 canonical bytes 并签名
+- **THEN** Cloud SHALL 使用同一合同包 helper 验证完全相同的 bytes
+- **AND** 机器 fixture SHALL 固定 canonical payload、公钥和签名
+- **AND** 任一字段、顺序、分隔或编码漂移 SHALL 使合同测试失败。
+
 ### Requirement: Participant 明确组合手机与 primary Agent
 
 PoC SHALL 为每个 active 用户维护一个 `ParticipantProfile`，其中包含一个 primary human endpoint 和一个 primary Agent。缺少任一端点时 SHALL 显示 incomplete，系统 SHALL NOT 猜测或借用其他用户端点。

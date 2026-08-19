@@ -1,0 +1,34 @@
+{
+  "category": "algorithm-vector",
+  "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+  "contractStatus": "current",
+  "documents": [],
+  "expectations": {
+    "algorithm": "Ed25519",
+    "canonicalBase64Url": "U0NJRk9SR0UtREVWSUNFLUVOUk9MTE1FTlQtVjEKZW5yX1ZlY3RvcjAwMDAwMDEKQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOAp1c3JfVmVjdG9yMDAwMDAwMQppbnNfVmVjdG9yMDAwMDAwMQoyMDI2LTA4LTE5VDEyOjA1OjAwLjAwMFo",
+    "canonicalUtf8": "SCIFORGE-DEVICE-ENROLLMENT-V1\nenr_Vector0000001\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\nusr_Vector0000001\nins_Vector0000001\n2026-08-19T12:05:00.000Z",
+    "domain": "SCIFORGE-DEVICE-ENROLLMENT-V1",
+    "facts": {
+      "enrollmentId": "enr_Vector0000001",
+      "expiresAt": "2026-08-19T12:05:00.000Z",
+      "installationId": "ins_Vector0000001",
+      "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "userId": "usr_Vector0000001"
+    },
+    "factsTypeExport": "EnrollmentSigningFacts",
+    "helperExport": "canonicalEnrollmentBytes",
+    "publicKeyJwk": {
+      "alg": "EdDSA",
+      "crv": "Ed25519",
+      "kid": "device-enrollment-vector-01",
+      "kty": "OKP",
+      "use": "sig",
+      "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"
+    },
+    "signature": "MZGCHrdaZJaArrdyAOmbFIIthXnxXebx-618S4T__NuYbmkDs8GGjyYLEjBr7YKQf5TLwLTNvyZeX8PEkuqHDw",
+    "verifies": true
+  },
+  "fixtureVersion": 1,
+  "id": "device-enrollment-signing-vector",
+  "protocolVersion": "1.0"
+}

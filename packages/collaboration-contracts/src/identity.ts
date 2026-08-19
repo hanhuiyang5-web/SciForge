@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer'
 import { z } from 'zod'
 import {
   displayNameSchema,
@@ -12,6 +11,11 @@ import {
   timestampSchema,
   userIdSchema
 } from './core.js'
+import {
+  deviceEnrollmentIdSchema,
+  enrollmentNonceSchema,
+  isCanonicalBase64UrlBytes
+} from './identity-primitives.js'
 
 const opaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
 
@@ -23,22 +27,12 @@ function uniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length
 }
 
-function isBase64UrlBytes(value: string, expectedBytes: number | { min: number }): boolean {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) return false
-  try {
-    const decoded = Buffer.from(value, 'base64url')
-    if (decoded.toString('base64url') !== value) return false
-    return typeof expectedBytes === 'number' ? decoded.length === expectedBytes : decoded.length >= expectedBytes.min
-  } catch {
-    return false
-  }
-}
-
 export const oidcIdentityIdSchema = opaqueId('oid')
-export const deviceEnrollmentIdSchema = opaqueId('enr')
 export const deviceIdSchema = opaqueId('dev')
 export const zulipBindingRequestIdSchema = opaqueId('zbr')
 export const externalIdentityIdSchema = opaqueId('xid')
+
+export { deviceEnrollmentIdSchema, enrollmentNonceSchema }
 
 export type OidcIdentityId = z.infer<typeof oidcIdentityIdSchema>
 export type DeviceEnrollmentId = z.infer<typeof deviceEnrollmentIdSchema>
@@ -131,19 +125,14 @@ export const ed25519PublicJwkSchema = z.object({
   alg: z.literal('EdDSA'),
   use: z.literal('sig'),
   kid: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
-  x: z.string().min(1).max(128).refine((value) => isBase64UrlBytes(value, 32), {
+  x: z.string().min(1).max(128).refine((value) => isCanonicalBase64UrlBytes(value, 32), {
     message: 'Ed25519 public JWK x must be canonical base64url for exactly 32 bytes'
   })
 }).strict()
 export type Ed25519PublicJwk = z.infer<typeof ed25519PublicJwkSchema>
 
-export const enrollmentNonceSchema = z.string().min(43).max(512).refine(
-  (value) => isBase64UrlBytes(value, { min: 32 }),
-  { message: 'Device enrollment nonce must be canonical base64url for at least 32 bytes' }
-)
-
 export const ed25519SignatureSchema = z.string().min(86).max(128).refine(
-  (value) => isBase64UrlBytes(value, 64),
+  (value) => isCanonicalBase64UrlBytes(value, 64),
   { message: 'Ed25519 signature must be canonical base64url for exactly 64 bytes' }
 )
 

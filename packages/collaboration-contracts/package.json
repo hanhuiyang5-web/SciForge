@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/collaboration-contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./enrollment-signing": {
+      "types": "./dist/enrollment-signing.d.ts",
+      "import": "./dist/enrollment-signing.js"
+    },
+    "./task-proposal": {
+      "types": "./dist/task-proposal.d.ts",
+      "import": "./dist/task-proposal.js"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",

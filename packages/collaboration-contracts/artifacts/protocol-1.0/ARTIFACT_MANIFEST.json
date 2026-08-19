@@ -35,6 +35,16 @@
   "databaseSchemaVersion": 6,
   "files": [
     {
+      "bytes": 1267,
+      "path": "algorithms.json",
+      "sha256": "0f5946cae444aa61174d3305a7da1540e69b7833caf87226ea4ede1bdac683ac"
+    },
+    {
+      "bytes": 1450,
+      "path": "fixtures/device-enrollment-signing-vector.json",
+      "sha256": "9772770d4c99c602daa8ef50b465aef209b72187269fb0c599bc2521d935953b"
+    },
+    {
       "bytes": 1386,
       "path": "fixtures/duplicate-idempotent-replay.json",
       "sha256": "79e4bf9b7ba0b47f895619e5268d6e0d85bdc3f2c25ff3d1d9711e681988e1ec"
@@ -105,9 +115,14 @@
       "sha256": "d2920fd91f71f5aa37a08427de38b8fff8da43b32a0be0cfb621da1aa7a167ee"
     },
     {
+      "bytes": 4953,
+      "path": "fixtures/task-create-proposal-digest-vector.json",
+      "sha256": "8318f6050e99c5f872cdbcc87ae6cd4564e5a9452da7482f5d4dd6a454aba813"
+    },
+    {
       "bytes": 91328,
       "path": "schemas/commands.schema.json",
-      "sha256": "228ebe985a743858f98392143bc891d028f215006cba397d823f99008356602a"
+      "sha256": "a446f3c0ae2e4323efb8a6556e3cb3ae871f98fe2aabc715708e9fbe51ea4496"
     },
     {
       "bytes": 158919,
@@ -137,7 +152,7 @@
   ],
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "packages": {
-    "@sciforge/collaboration-contracts": "0.1.0",
+    "@sciforge/collaboration-contracts": "0.2.0",
     "@sciforge/domain-content-space": "1.0.0",
     "@sciforge/domain-sdk": "0.2.1"
   },

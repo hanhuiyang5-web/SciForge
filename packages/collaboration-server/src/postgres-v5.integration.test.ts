@@ -5,7 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 // @ts-expect-error The vendored dynamic Ed25519 fixture is intentionally plain ESM.
 import { createDeviceFixture } from '../../../test-fixtures/collaboration/unified-identity/device-fixture.mjs'
+// @ts-expect-error This test-only bridge re-exports E's exact public Content Space codec.
+import {
+  parsePortableArtifactReference,
+  toPortableArtifactReference
+} from '../../../test-fixtures/collaboration/e-content-space-portable.mjs'
 import { AuthenticationService, type UserActor } from './auth.js'
+import { toResourceRef } from './contracts.js'
 import { CollaborationServiceError } from './errors.js'
 import { IdentityService } from './identity-service.js'
 import {
@@ -374,6 +380,88 @@ describePostgresV5('real PostgreSQL v1 -> current-schema unified identity integr
       externalIdentityId: rebound.identity.externalIdentityId,
       zulipUserId
     }])
+  }, 60_000)
+
+  it('round-trips a maximum-boundary portable artifact through PostgreSQL and E codec validation', async () => {
+    const identityService = required(identities, 'Identity Service')
+    const collaborationService = required(collaboration, 'Collaboration Service')
+    const pool = required(databasePool, 'database pool')
+    const owner = await identityService.resolveOidcUser(verifiedIdentity('postgres-portable-owner'))
+    const installationId = 'ins_pg_portable_device_0001'
+    const enrollment = await identityService.createDeviceEnrollment(owner, {
+      installationId,
+      idempotencyKey: 'idem_pg_portable_enrollment_0001'
+    })
+    const fixture = createDeviceFixture({
+      enrollmentId: enrollment.enrollmentId,
+      nonce: enrollment.nonce,
+      userId: owner.userId,
+      installationId,
+      expiresAt: enrollment.expiresAt,
+      capabilitySummary: ['portable-resource-round-trip']
+    })
+    const device = await identityService.createDevice(owner, {
+      ...fixture.deviceRequest,
+      nonce: enrollment.nonce,
+      idempotencyKey: 'idem_pg_portable_device_0001'
+    })
+    const registered = await collaborationService.registerAgent(owner, {
+      deviceId: device.device.deviceId,
+      displayName: 'Portable PostgreSQL Coordinator',
+      nodeType: 'desktop',
+      capabilities: ['portable-resource-round-trip'],
+      idempotencyKey: 'idem_pg_portable_agent_0001'
+    })
+    const project = await collaborationService.createProject(owner, {
+      displayName: 'Portable PostgreSQL round trip',
+      goal: 'Persist one portable artifact and revalidate it with E public codec.',
+      memberUserIds: [],
+      coordinatorAgentId: registered.agent.agentId,
+      idempotencyKey: 'idem_pg_portable_project_0001'
+    })
+
+    const digest = 'd'.repeat(64)
+    const providerInstanceRef = `p${'a'.repeat(255)}`
+    const fileId = `f${'b'.repeat(255)}`
+    const immutableVersionId = `v${'c'.repeat(255)}`
+    const portableReference = toPortableArtifactReference({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
+    const created = await collaborationService.createResourceRef(owner, {
+      projectId: project.projectId,
+      provider: 'opencontent',
+      externalId: `x${'e'.repeat(511)}`,
+      kind: portableReference.kind,
+      name: 'n'.repeat(200),
+      portableReference,
+      version: '1'.repeat(200),
+      idempotencyKey: 'idem_pg_portable_resource_0001'
+    })
+
+    const fetched = toResourceRef(await collaborationService.getResourceRef(owner, created.resourceRefId))
+    expect(fetched.openUrl).toBeNull()
+    expect(fetched.portableReference).toEqual(portableReference)
+    expect(parsePortableArtifactReference(fetched.portableReference)).toEqual({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
+    expect(fetched.externalId).toHaveLength(512)
+    expect(fetched.name).toHaveLength(200)
+    expect(fetched.version).toHaveLength(200)
+
+    const persisted = await pool.query<{ open_url: unknown; portable_reference: unknown }>(
+      `SELECT open_url, portable_reference
+       FROM sciforge_collaboration.resource_refs
+       WHERE resource_ref_id=$1`,
+      [created.resourceRefId]
+    )
+    expect(persisted.rows).toHaveLength(1)
+    expect(persisted.rows[0]).toMatchObject({ open_url: null, portable_reference: portableReference })
   }, 60_000)
 })
 

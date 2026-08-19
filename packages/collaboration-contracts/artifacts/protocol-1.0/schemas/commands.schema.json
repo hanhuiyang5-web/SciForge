@@ -2111,6 +2111,11 @@
           "items": {
             "anyOf": [
               {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
                 "additionalProperties": false,
                 "properties": {
                   "criterionId": {
@@ -2128,11 +2133,6 @@
                   "text"
                 ],
                 "type": "object"
-              },
-              {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
               }
             ]
           },
@@ -2281,14 +2281,14 @@
         "protocolVersion",
         "requestId",
         "idempotencyKey",
-        "type",
         "projectId",
-        "expectedRevision",
         "assigneeAgentId",
         "title",
         "objective",
         "completionCriteria",
-        "dependencyTaskIds"
+        "dependencyTaskIds",
+        "type",
+        "expectedRevision"
       ],
       "type": "object"
     },

@@ -7,7 +7,9 @@ on:
       - "deploy/collaboration-private/**"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/content-space/src/contract.ts"
       - "packages/domain-sdk/**"
+      - "test-fixtures/collaboration/e-content-space-portable.mjs"
       - "scripts/collaboration-*.mjs"
       - "scripts/build-collaboration-server-bundle*.mjs"
       - "scripts/domain-packages.mjs"
@@ -22,7 +24,9 @@ on:
       - "deploy/collaboration-private/**"
       - "packages/collaboration-*/**"
       - "packages/domains/collaboration/**"
+      - "packages/domains/content-space/src/contract.ts"
       - "packages/domain-sdk/**"
+      - "test-fixtures/collaboration/e-content-space-portable.mjs"
       - "scripts/collaboration-*.mjs"
       - "scripts/build-collaboration-server-bundle*.mjs"
       - "scripts/domain-packages.mjs"
@@ -77,3 +81,39 @@ jobs:
 
       - name: Verify server package contents
         run: npm pack --workspace @sciforge/collaboration-server --dry-run
+
+  portable-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: sciforge-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build public collaboration contracts
+        run: npm --workspace @sciforge/collaboration-contracts run build
+
+      - name: Verify v1 to v6 migration and portable artifact round trip
+        env:
+          SCIFORGE_POSTGRES_V5_INTEGRATION: "1"
+          SCIFORGE_POSTGRES_V5_ADMIN_URL: postgresql://postgres:sciforge-ci-only@127.0.0.1:5432/postgres
+        run: npm --workspace @sciforge/collaboration-server test -- --run src/postgres-v5.integration.test.ts
