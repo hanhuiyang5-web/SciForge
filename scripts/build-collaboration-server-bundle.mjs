@@ -15,7 +15,7 @@ import {
   rm,
   writeFile
 } from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
+import { createReadStream, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1377,7 +1377,16 @@ export async function runCollaborationServerBundleCli({
   })
 }
 
-const invokedAsMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+export function pathsReferToSameFile(leftPath, rightPath) {
+  if (typeof leftPath !== 'string' || typeof rightPath !== 'string') return false
+  try {
+    return realpathSync(leftPath) === realpathSync(rightPath)
+  } catch {
+    return false
+  }
+}
+
+const invokedAsMain = pathsReferToSameFile(process.argv[1], fileURLToPath(import.meta.url))
 if (invokedAsMain) {
   try {
     const result = await runCollaborationServerBundleCli({

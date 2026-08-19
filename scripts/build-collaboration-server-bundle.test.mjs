@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
@@ -15,6 +15,7 @@ import {
   assertFullCommit,
   createImmutableSnapshotChildArguments,
   parseArguments,
+  pathsReferToSameFile,
   readNpmPackageArchiveFiles,
   runCollaborationServerBundleCli,
   validateImmutableSnapshotGuard,
@@ -447,6 +448,21 @@ test('immutable snapshot child arguments preserve every mutually exclusive relea
       '--output', '/absolute/release-output',
       flag
     ])
+  }
+})
+
+test('CLI main-module detection accepts a symlinked path to the same script', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-bundle-main-path-'))
+  const physicalPath = join(directory, 'physical.mjs')
+  const aliasPath = join(directory, 'alias.mjs')
+  try {
+    await writeFile(physicalPath, 'export {}\n')
+    await symlink(physicalPath, aliasPath)
+    assert.equal(pathsReferToSameFile(aliasPath, physicalPath), true)
+    assert.equal(pathsReferToSameFile(undefined, physicalPath), false)
+    assert.equal(pathsReferToSameFile(join(directory, 'missing.mjs'), physicalPath), false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
   }
 })
 
