@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
+import { serializePortableResourceReferenceCarrier } from '@sciforge/collaboration-contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 // @ts-expect-error The vendored dynamic Ed25519 fixture is intentionally plain ESM.
@@ -454,14 +455,23 @@ describePostgresV5('real PostgreSQL v1 -> current-schema unified identity integr
     expect(fetched.name).toHaveLength(200)
     expect(fetched.version).toHaveLength(200)
 
-    const persisted = await pool.query<{ open_url: unknown; portable_reference: unknown }>(
+    const persisted = await pool.query<{ open_url: unknown; portable_reference: string }>(
       `SELECT open_url, portable_reference
        FROM sciforge_collaboration.resource_refs
        WHERE resource_ref_id=$1`,
       [created.resourceRefId]
     )
     expect(persisted.rows).toHaveLength(1)
-    expect(persisted.rows[0]).toMatchObject({ open_url: null, portable_reference: portableReference })
+    expect(persisted.rows[0]).toMatchObject({
+      open_url: null,
+      portable_reference: serializePortableResourceReferenceCarrier(portableReference)
+    })
+    expect(parsePortableArtifactReference(JSON.parse(persisted.rows[0]!.portable_reference))).toEqual({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
   }, 60_000)
 })
 
