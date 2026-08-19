@@ -315,10 +315,16 @@ export function validateImmutableSnapshotGuard({
       throw new Error(`The immutable snapshot ${label} path is invalid.`)
     }
   }
-  if (guard.snapshotRepositoryRoot !== snapshotRepositoryRoot) {
+  if (
+    guard.snapshotRepositoryRoot !== snapshotRepositoryRoot &&
+    !pathsReferToSameFile(guard.snapshotRepositoryRoot, snapshotRepositoryRoot)
+  ) {
     throw new Error('The immutable snapshot guard belongs to another worktree.')
   }
-  if (guard.originalRepositoryRoot === snapshotRepositoryRoot) {
+  if (
+    guard.originalRepositoryRoot === snapshotRepositoryRoot ||
+    pathsReferToSameFile(guard.originalRepositoryRoot, snapshotRepositoryRoot)
+  ) {
     throw new Error('The immutable snapshot must not be the original worktree.')
   }
   if (
@@ -359,7 +365,8 @@ async function readImmutableSnapshotGuard({ argv, environment, repositoryRoot, r
     throw new Error('The immutable snapshot guard path is missing or invalid.')
   }
   const guardPath = resolve(guardPathValue)
-  if (guardPath !== join(dirname(snapshotRepositoryRoot), immutableSnapshotGuardFilename)) {
+  const expectedGuardPath = join(dirname(snapshotRepositoryRoot), immutableSnapshotGuardFilename)
+  if (guardPath !== expectedGuardPath && !pathsReferToSameFile(guardPath, expectedGuardPath)) {
     throw new Error('The immutable snapshot guard is not adjacent to its worktree.')
   }
   const [guardDetails, gitMarkerDetails, parentDetails] = await Promise.all([
@@ -410,11 +417,16 @@ async function readImmutableSnapshotGuard({ argv, environment, repositoryRoot, r
   ])
   const topLevelPath = topLevelResult.stdout.trim()
   const commonDirectoryPath = commonDirectoryResult.stdout.trim()
-  if (!isAbsolute(topLevelPath) || resolve(topLevelPath) !== snapshotRepositoryRoot) {
+  if (
+    !isAbsolute(topLevelPath) ||
+    (resolve(topLevelPath) !== snapshotRepositoryRoot &&
+      !pathsReferToSameFile(topLevelPath, snapshotRepositoryRoot))
+  ) {
     throw new Error('The immutable snapshot guard does not match the Git worktree root.')
   }
   if (!isAbsolute(commonDirectoryPath) ||
-      resolve(commonDirectoryPath) !== context.gitCommonDirectory) {
+      (resolve(commonDirectoryPath) !== context.gitCommonDirectory &&
+        !pathsReferToSameFile(commonDirectoryPath, context.gitCommonDirectory))) {
     throw new Error('The immutable snapshot is not linked to the approved Git repository.')
   }
   if (symbolicHeadResult.stdout.trim() !== 'HEAD') {
