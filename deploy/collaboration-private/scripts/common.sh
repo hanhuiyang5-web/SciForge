@@ -948,7 +948,7 @@ assert_a_https_test_edge_network_membership() {
     || die "The approved app identity is unavailable for edge network validation."
   mapfile -t app_networks < <(docker container inspect --format \
     '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
-    "$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID" | LC_ALL=C sort)
+    "$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID" | awk 'NF { print }' | LC_ALL=C sort)
   [[ "$(printf '%s\n' "${app_networks[@]}")" == \
       "$(printf '%s\n' "$A_HTTPS_TEST_EDGE_DATABASE_NETWORK" "$A_HTTPS_TEST_EDGE_NETWORK" | LC_ALL=C sort)" ]] \
     || die "The collaboration app must join exactly the database and private-edge networks."
