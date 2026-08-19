@@ -242,6 +242,13 @@ assert_contains "$SCRIPT_DIR/verify-a-https-test-edge-external.sh" 'no successfu
 udp_fixture_count="$(printf '%s\n' 'UNCONN 0 0 0.0.0.0:443 0.0.0.0:*' \
   | awk '$4 ~ /:443$/ { count += 1 } END { print count + 0 }')"
 [[ "$udp_fixture_count" == 1 ]] || die "UDP 443 listener fixture is not detected from ss local-address column."
+docker_endpoint_fixture="$(printf '%s\n\n' \
+  '57c9e32c8b90e75aca48cdf447a69e4f7246f40e04af04b814ecaef6b0b0ce4a' \
+  | awk 'NF { count += 1; value=$0 } END { print count ":" value }')"
+[[ "$docker_endpoint_fixture" == \
+    1:57c9e32c8b90e75aca48cdf447a69e4f7246f40e04af04b814ecaef6b0b0ce4a ]] \
+  || die "Docker network endpoint filtering does not ignore the template's trailing blank line."
+assert_contains "$SCRIPT_DIR/common.sh" '"$A_HTTPS_TEST_EDGE_NETWORK" | awk '\''NF { print }'\'''
 
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-test-edge" 'admin off'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-test-edge" 'auto_https disable_redirects'

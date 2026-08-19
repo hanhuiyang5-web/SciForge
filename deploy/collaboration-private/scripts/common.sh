@@ -925,7 +925,7 @@ assert_no_a_https_test_edge_container() {
   if docker network inspect "$A_HTTPS_TEST_EDGE_NETWORK" >/dev/null 2>&1; then
     mapfile -t endpoint_ids < <(docker network inspect --format \
       '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
-      "$A_HTTPS_TEST_EDGE_NETWORK")
+      "$A_HTTPS_TEST_EDGE_NETWORK" | awk 'NF { print }')
     if [[ -n "$expected_endpoint" ]]; then
       (( ${#endpoint_ids[@]} == 1 )) && [[ "${endpoint_ids[0]}" == "$expected_endpoint" ]] \
         || die "The private edge network contains an endpoint other than the current collaboration app."
@@ -955,7 +955,7 @@ assert_a_https_test_edge_network_membership() {
 
   mapfile -t endpoint_ids < <(docker network inspect --format \
     '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
-    "$A_HTTPS_TEST_EDGE_NETWORK" | LC_ALL=C sort)
+    "$A_HTTPS_TEST_EDGE_NETWORK" | awk 'NF { print }' | LC_ALL=C sort)
   expected_endpoints=("$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID")
   if [[ -n "$expected_edge_id" ]]; then
     [[ "$expected_edge_id" =~ ^[0-9a-f]{64}$ ]] || die "The edge identity is invalid."
