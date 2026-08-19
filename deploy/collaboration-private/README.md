@@ -134,7 +134,7 @@ test -z "$(find "$bundle_source" -mindepth 1 -maxdepth 1 ! -type f -print -quit)
 cp -- "$bundle_source"/* "$bundle_target/"
 (cd "$bundle_target" && shasum -a 256 -c SHA256SUMS)
 test -z "$(find "$package_root" -type l -print -quit)"
-tar -C "$package_root" -czf "$archive" deploy
+COPYFILE_DISABLE=1 tar -C "$package_root" -czf "$archive" deploy
 archive_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
 printf '%s  %s\n' "$archive_sha" "$(basename "$archive")" > "$sidecar"
 printf 'trusted_archive_sha=%s\narchive=%s\nsidecar=%s\n' \

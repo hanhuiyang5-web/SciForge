@@ -295,5 +295,6 @@ assert_contains "$DEPLOY_DIR/README.md" '精确返回 `503`'
 assert_contains "$DEPLOY_DIR/README.md" '未获验证的 app'
 assert_contains "$DEPLOY_DIR/README.md" 'verify-postgres-v5-integration.sh'
 assert_contains "$DEPLOY_DIR/README.md" 'CREATE/DROP DATABASE'
+assert_contains "$DEPLOY_DIR/README.md" 'COPYFILE_DISABLE=1 tar -C "$package_root" -czf "$archive" deploy'
 
 echo "Static deployment policy verification passed."
