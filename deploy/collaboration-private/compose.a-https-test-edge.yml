@@ -1,0 +1,102 @@
+name: sciforge-collaboration-a-https-test-edge
+
+services:
+  edge:
+    image: caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    user: "10002:10002"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        approval="/approval/approved-$${SCIFORGE_EDGE_COMMIT}"
+        cp /usr/bin/caddy /run/caddy-bin/caddy
+        chmod 0500 /run/caddy-bin/caddy
+        /run/caddy-bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+        caddy_pid="$$!"
+        trap 'kill -TERM "$$caddy_pid" 2>/dev/null || true; wait "$$caddy_pid" || true; exit 143' TERM INT
+        remaining=300
+        while kill -0 "$$caddy_pid" 2>/dev/null; do
+          if [ -f "$$approval" ]; then
+            wait "$$caddy_pid"
+            exit "$$?"
+          fi
+          if [ "$$remaining" -le 0 ]; then
+            kill -TERM "$$caddy_pid" 2>/dev/null || true
+            wait "$$caddy_pid" || true
+            exit 1
+          fi
+          remaining="$$((remaining - 1))"
+          sleep 1
+        done
+        wait "$$caddy_pid"
+    environment:
+      XDG_CONFIG_HOME: /config
+      XDG_DATA_HOME: /data
+      SCIFORGE_EDGE_COMMIT: ${SCIFORGE_A_HTTPS_TEST_EDGE_COMMIT:?set SCIFORGE_A_HTTPS_TEST_EDGE_COMMIT}
+    ports:
+      - target: 8443
+        published: 443
+        host_ip: 0.0.0.0
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./Caddyfile.a-https-test-edge
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR:?set SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR}/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR:?set SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR}/config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR:?set SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR}/approval
+        target: /approval
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - private-edge
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          awk 'BEGIN { found=0 } { split($2, local, ":"); if (toupper(local[2]) == "20FB" && $4 == "0A") found=1 } END { exit(found ? 0 : 1) }'
+          /proc/net/tcp /proc/net/tcp6
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
+      - /run/caddy-bin:rw,nosuid,nodev,exec,size=64m,uid=10002,gid=10002,mode=0700
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: ${SCIFORGE_COLLAB_LOG_MAX_SIZE:-10m}
+        max-file: ${SCIFORGE_COLLAB_LOG_MAX_FILES:-5}
+    cpus: ${SCIFORGE_COLLAB_EDGE_CPUS:-0.5}
+    mem_limit: ${SCIFORGE_COLLAB_EDGE_MEMORY:-256m}
+    pids_limit: ${SCIFORGE_COLLAB_EDGE_PIDS:-128}
+    stop_grace_period: 20s
+    labels:
+      org.opencontainers.image.revision: ${SCIFORGE_COLLAB_CONTRACT_COMMIT:?set SCIFORGE_COLLAB_CONTRACT_COMMIT}
+      cn.sciforge.edge.mode: public-https-core-only
+      cn.sciforge.edge.hostname: cloud-test.sciforge.cn
+
+networks:
+  private-edge:
+    external: true
+    name: sciforge-collaboration-private_private-edge

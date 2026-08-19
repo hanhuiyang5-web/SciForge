@@ -10,18 +10,26 @@ expected_commit="${1:-}"
 env_input="${2:-$PRIVATE_DEPLOY_DIR/.env}"
 [[ -n "$expected_commit" ]] || die "Usage: deploy.sh <approved-40-character-contract-commit> [env-file]"
 
-for command in docker sha256sum tar awk sort stat curl flock date mv rm; do
+for command in docker sha256sum tar awk sort stat curl flock date mv readlink rm ss install chmod; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 
-exec 8>/run/lock/sciforge-collaboration-private-deploy.lock
-if ! flock -n 8; then
-  die "Another core-only deployment is already running; retry after it completes."
-fi
+require_root
+acquire_collaboration_deploy_lock
 
 validate_release_bundle "$expected_commit"
 prepare_compose_environment "$expected_commit" "$env_input"
+validate_local_docker_endpoint
+assert_no_a_https_test_edge_container
+if [[ "$RELEASE_MANIFEST_MODE" == a-https-test-edge ]]; then
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_TEST_EDGE_ORIGIN" \
+      && -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false ]] \
+    || die "The A HTTPS test edge app requires its exact origin and an unconfigured fail-closed OIDC boundary."
+elif [[ -n "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" ]]; then
+  die "Only the explicit A HTTPS test edge release may enable a browser origin."
+fi
 
 # Quiet config validation expands secrets internally but never writes the
 # rendered configuration to stdout or a file.

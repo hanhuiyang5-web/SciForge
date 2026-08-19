@@ -12,17 +12,25 @@ confirmation="${3:-}"
 [[ -n "$expected_commit" && -n "$env_input" && "$confirmation" == --confirm-isolated-database-test ]] \
   || die "Usage: verify-postgres-v5-integration.sh <approved-40-character-contract-commit> <env-file> --confirm-isolated-database-test"
 
-for command in docker flock stat grep timeout mktemp chmod chown getent id curl \
-  sha256sum tar awk sort rm cat date mv; do
+for command in docker flock stat grep timeout mktemp chmod chown getent id curl readlink \
+  sha256sum tar awk sort rm cat date mv install; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 
-exec 8>/run/lock/sciforge-collaboration-private-deploy.lock
-if ! flock -n 8; then
-  die "Another collaboration deployment or PostgreSQL v5 integration run is active."
+require_root
+acquire_collaboration_deploy_lock
+integration_lock_path="$COLLABORATION_RUNTIME_DIR/postgres-v5-integration.lock"
+if [[ -e "$integration_lock_path" || -L "$integration_lock_path" ]]; then
+  [[ -f "$integration_lock_path" && ! -L "$integration_lock_path" \
+      && "$(stat -c '%u:%g' "$integration_lock_path")" == 0:0 ]] \
+    || die "The PostgreSQL v5 integration lock path is unsafe."
+  integration_lock_permissions="$(stat -c '%a' "$integration_lock_path")"
+  (( (8#$integration_lock_permissions & 022) == 0 )) \
+    || die "The PostgreSQL v5 integration lock is writable by group or other."
 fi
-exec 7>/run/lock/sciforge-collaboration-private-postgres-v5-integration.lock
+exec 7>"$integration_lock_path"
+chmod 0600 "$integration_lock_path"
 if ! flock -n 7; then
   die "Another PostgreSQL v5 integration run is active."
 fi

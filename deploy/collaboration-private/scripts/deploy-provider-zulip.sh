@@ -11,18 +11,22 @@ env_input="${2:-$PRIVATE_DEPLOY_DIR/.env}"
 [[ -n "$expected_commit" ]] \
   || die "Usage: deploy-provider-zulip.sh <approved-40-character-contract-commit> [env-file]"
 
-for command in docker sha256sum tar awk sort stat curl flock date mv rm; do
+for command in docker sha256sum tar awk sort stat curl flock date mv readlink rm ss install chmod; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 
-exec 8>/run/lock/sciforge-collaboration-private-deploy.lock
-if ! flock -n 8; then
-  die "Another collaboration deployment is already running; retry after it completes."
-fi
+require_root
+acquire_collaboration_deploy_lock
 
 validate_release_bundle "$expected_commit"
+[[ "$RELEASE_MANIFEST_MODE" != a-https-test-edge ]] \
+  || die "The A HTTPS test edge release is core-only and cannot enable a Provider overlay."
 prepare_compose_environment "$expected_commit" "$env_input"
+validate_local_docker_endpoint
+assert_no_a_https_test_edge_container
+[[ -z "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" ]] \
+  || die "The private Provider deployment must not enable a public browser origin."
 enable_zulip_provider_compose
 "${COMPOSE[@]}" config --quiet
 "${COMPOSE[@]}" build app

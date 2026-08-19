@@ -6,9 +6,29 @@ COMMON_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PRIVATE_DEPLOY_DIR="$(cd "$COMMON_SCRIPT_DIR/.." && pwd -P)"
 COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.yml"
 PROVIDER_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.provider-zulip.yml"
+A_HTTPS_TEST_EDGE_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-https-test-edge.yml"
+A_HTTPS_TEST_EDGE_CADDYFILE="$PRIVATE_DEPLOY_DIR/Caddyfile.a-https-test-edge"
 BUNDLE_DIR="$PRIVATE_DEPLOY_DIR/bundle"
 RELEASE_EXPECTED_SCHEMA_VERSION=""
 RELEASE_EXPECTED_TABLES=""
+RELEASE_MANIFEST_MODE=""
+RELEASE_MANIFEST_HOSTNAME=""
+RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY=""
+A_HTTPS_TEST_EDGE_HOSTNAME=cloud-test.sciforge.cn
+A_HTTPS_TEST_EDGE_ORIGIN=https://cloud-test.sciforge.cn
+A_HTTPS_TEST_EDGE_PUBLIC_IPV4=47.76.230.118
+A_HTTPS_TEST_EDGE_NETWORK=sciforge-collaboration-private_private-edge
+A_HTTPS_TEST_EDGE_DATABASE_NETWORK=sciforge-collaboration-private_database
+A_HTTPS_TEST_EDGE_PROJECT=sciforge-collaboration-a-https-test-edge
+A_HTTPS_TEST_EDGE_STATE_DIR=/srv/sciforge-collaboration/a-https-test-edge
+A_HTTPS_TEST_EDGE_IMAGE_DIGEST=sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a
+A_HTTPS_TEST_EDGE_IMAGE="caddy:2.11.4-alpine@$A_HTTPS_TEST_EDGE_IMAGE_DIGEST"
+A_HTTPS_TEST_EDGE_IMAGE_ID=""
+A_HTTPS_TEST_EDGE_APP_CONTAINER_ID=""
+PRIVATE_ROOT=/srv/sciforge-collaboration
+PRIVATE_ENV_DIR=/srv/sciforge-collaboration/secrets
+PRIVATE_ENV_FILE="$PRIVATE_ENV_DIR/collaboration.env"
+COLLABORATION_RUNTIME_DIR=/run/sciforge-collaboration-private
 
 die() {
   echo "ERROR: $*" >&2
@@ -17,6 +37,64 @@ die() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command is unavailable: $1"
+}
+
+require_root() {
+  [[ "$(id -u)" == 0 ]] || die "This deployment command must run as root."
+}
+
+validate_local_docker_endpoint() {
+  local active_context
+  local endpoint
+
+  [[ -z "${DOCKER_HOST:-}" ]] \
+    || die "DOCKER_HOST is forbidden; edge operations must use the local ECS Docker daemon."
+  [[ -S /var/run/docker.sock ]] \
+    || die "The local ECS Docker socket is unavailable."
+  active_context="$(docker context show)"
+  endpoint="$(docker context inspect --format '{{(index .Endpoints "docker").Host}}' "$active_context")"
+  [[ "$endpoint" == unix:///var/run/docker.sock ]] \
+    || die "The active Docker context is not the local ECS Unix socket."
+}
+
+acquire_collaboration_deploy_lock() {
+  local lock_path="$COLLABORATION_RUNTIME_DIR/deploy.lock"
+  local inherited_target=""
+  local permissions
+
+  require_root
+  [[ -d /run && ! -L /run && "$(readlink -f /run)" == /run \
+      && "$(stat -c '%u:%g' /run)" == 0:0 ]] \
+    || die "The runtime root must be the physical root-owned /run directory."
+  permissions="$(stat -c '%a' /run)"
+  (( (8#$permissions & 022) == 0 )) \
+    || die "The runtime root must not be writable by group or other."
+  [[ ! -L "$COLLABORATION_RUNTIME_DIR" ]] \
+    || die "The collaboration runtime directory must not be a symlink."
+  install -d -o root -g root -m 0700 "$COLLABORATION_RUNTIME_DIR"
+  [[ "$(readlink -f "$COLLABORATION_RUNTIME_DIR")" == "$COLLABORATION_RUNTIME_DIR" \
+      && "$(stat -c '%u:%g:%a' "$COLLABORATION_RUNTIME_DIR")" == 0:0:700 ]] \
+    || die "The collaboration runtime directory must be root:root mode 0700."
+
+  if [[ -e /proc/self/fd/8 ]]; then
+    inherited_target="$(readlink -f /proc/self/fd/8 2>/dev/null || true)"
+  fi
+  if [[ "$inherited_target" == "$lock_path" ]]; then
+    flock -n 8 || die "The inherited collaboration deployment lock is invalid."
+    return
+  fi
+  if [[ -e "$lock_path" || -L "$lock_path" ]]; then
+    [[ -f "$lock_path" && ! -L "$lock_path" \
+        && "$(stat -c '%u:%g' "$lock_path")" == 0:0 ]] \
+      || die "The collaboration deployment lock path is unsafe."
+    permissions="$(stat -c '%a' "$lock_path")"
+    (( (8#$permissions & 022) == 0 )) \
+      || die "The collaboration deployment lock is writable by group or other."
+  fi
+  exec 8>"$lock_path"
+  chmod 0600 "$lock_path"
+  flock -n 8 \
+    || die "Another collaboration deployment or verification is already running."
 }
 
 canonical_regular_file() {
@@ -45,10 +123,38 @@ canonical_directory() {
 
 validate_private_env_file() {
   local file="$1"
-  local permissions
-  permissions="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file")"
-  [[ "$permissions" =~ ^[0-7]{3,4}$ ]] || die "Could not determine env-file permissions."
-  (( (8#$permissions & 077) == 0 )) || die "Env file must be mode 0600 (no group/other access)."
+  local root_permissions
+
+  [[ "$file" == "$PRIVATE_ENV_FILE" ]] \
+    || die "Production env must be the fixed $PRIVATE_ENV_FILE file."
+  [[ -d "$PRIVATE_ROOT" && ! -L "$PRIVATE_ROOT" \
+      && "$(cd "$PRIVATE_ROOT" && pwd -P)" == "$PRIVATE_ROOT" \
+      && "$(stat -c '%u:%g' "$PRIVATE_ROOT")" == 0:0 ]] \
+    || die "Production root must be the physical root-owned $PRIVATE_ROOT directory."
+  root_permissions="$(stat -c '%a' "$PRIVATE_ROOT")"
+  (( (8#$root_permissions & 022) == 0 )) \
+    || die "Production root must not be writable by group or other."
+  [[ -d "$PRIVATE_ENV_DIR" && ! -L "$PRIVATE_ENV_DIR" \
+      && "$(cd "$PRIVATE_ENV_DIR" && pwd -P)" == "$PRIVATE_ENV_DIR" ]] \
+    || die "Production secrets directory must be the physical $PRIVATE_ENV_DIR directory."
+  [[ "$(stat -c '%u:%g:%a' "$PRIVATE_ENV_DIR")" == 0:0:700 ]] \
+    || die "Production secrets directory must be root:root mode 0700."
+  [[ -f "$file" && ! -L "$file" \
+      && "$(stat -c '%u:%g:%a' "$file")" == 0:0:600 ]] \
+    || die "Production env must be a root:root regular file with mode 0600."
+}
+
+fixed_compose_value() {
+  local file="$1"
+  local key="$2"
+  local expected="$3"
+  local value
+
+  value="$(dotenv_value "$file" "$key" optional)"
+  value="${value:-$expected}"
+  [[ "$value" == "$expected" ]] \
+    || die "$key must retain the fixed A ECS value $expected."
+  printf '%s' "$value"
 }
 
 dotenv_value() {
@@ -87,6 +193,76 @@ bundle_contract_commit() {
   commit="${commit_lines[0]%$'\r'}"
   validate_commit "$commit"
   printf '%s' "$commit"
+}
+
+validate_fixed_edge_asset() {
+  local path="$1"
+  local expected_digest="$2"
+  local executable="${3:-false}"
+  local permissions
+
+  [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] || die "The edge asset digest is malformed."
+  [[ -f "$path" && ! -L "$path" ]] || die "A fixed edge asset is missing or unsafe: $path"
+  [[ "$(stat -c '%u:%g' "$path")" == 0:0 ]] || die "Every fixed edge asset must be root-owned."
+  permissions="$(stat -c '%a' "$path")"
+  (( (8#$permissions & 022) == 0 )) || die "A fixed edge asset is writable by group/other."
+  if [[ "$executable" == true ]]; then
+    [[ -x "$path" ]] || die "A fixed edge script is not executable."
+  fi
+  [[ "$(sha256sum "$path" | awk '{print $1}')" == "$expected_digest" ]] \
+    || die "A fixed edge asset does not match the release manifest."
+}
+
+validate_fixed_edge_release_ancestors() {
+  local expected_commit="$1"
+  local expected_deploy_dir="/srv/sciforge-collaboration/releases/$expected_commit/deploy/collaboration-private"
+  local path
+  local permissions
+
+  [[ "$(readlink -f "$PRIVATE_DEPLOY_DIR")" == "$expected_deploy_dir" ]] \
+    || die "The HTTPS edge must run from the fixed root-owned release path."
+  for path in /srv/sciforge-collaboration \
+      /srv/sciforge-collaboration/releases \
+      "/srv/sciforge-collaboration/releases/$expected_commit" \
+      "/srv/sciforge-collaboration/releases/$expected_commit/deploy" \
+      "$expected_deploy_dir" "$expected_deploy_dir/scripts"; do
+    [[ -d "$path" && ! -L "$path" ]] \
+      || die "A fixed release ancestor is missing or is a symlink: $path"
+    [[ "$(stat -c '%u:%g' "$path")" == 0:0 ]] \
+      || die "Every fixed release ancestor must be root-owned."
+    permissions="$(stat -c '%a' "$path")"
+    (( (8#$permissions & 022) == 0 )) \
+      || die "A fixed release ancestor is writable by group/other."
+  done
+}
+
+validate_fixed_edge_release_path() {
+  local expected_commit="$1"
+  local entry
+  local permissions
+
+  validate_fixed_edge_release_ancestors "$expected_commit"
+  [[ -d "$PRIVATE_DEPLOY_DIR/postgres-init" && ! -L "$PRIVATE_DEPLOY_DIR/postgres-init" \
+      && "$(stat -c '%u:%g' "$PRIVATE_DEPLOY_DIR/postgres-init")" == 0:0 ]] \
+    || die "The fixed postgres-init directory must be root-owned and non-symlinked."
+  permissions="$(stat -c '%a' "$PRIVATE_DEPLOY_DIR/postgres-init")"
+  (( (8#$permissions & 022) == 0 )) \
+    || die "The fixed postgres-init directory is writable by group/other."
+  [[ -d "$BUNDLE_DIR" && ! -L "$BUNDLE_DIR" \
+      && "$(stat -c '%u:%g' "$BUNDLE_DIR")" == 0:0 ]] \
+    || die "The fixed bundle directory must be root-owned and non-symlinked."
+  permissions="$(stat -c '%a' "$BUNDLE_DIR")"
+  (( (8#$permissions & 022) == 0 )) \
+    || die "The fixed bundle directory is writable by group/other."
+  shopt -s nullglob dotglob
+  for entry in "$BUNDLE_DIR"/*; do
+    [[ -f "$entry" && ! -L "$entry" && "$(stat -c '%u:%g' "$entry")" == 0:0 ]] \
+      || die "Every fixed bundle entry must be a root-owned regular file."
+    permissions="$(stat -c '%a' "$entry")"
+    (( (8#$permissions & 022) == 0 )) \
+      || die "A fixed bundle entry is writable by group/other."
+  done
+  shopt -u nullglob dotglob
 }
 
 consume_postgres_v5_attestation() {
@@ -169,6 +345,26 @@ validate_release_bundle() {
   local manifest_release_mode
   local manifest_base_commit
   local manifest_deployment_boundary
+  local manifest_hostname
+  local manifest_edge_caddy_image
+  local manifest_edge_backup_script_sha256
+  local manifest_edge_backup_restore_verify_script_sha256
+  local manifest_edge_base_compose_sha256
+  local manifest_edge_base_deploy_script_sha256
+  local manifest_edge_base_verify_script_sha256
+  local manifest_edge_caddyfile_sha256
+  local manifest_edge_common_script_sha256
+  local manifest_edge_compose_sha256
+  local manifest_edge_deploy_script_sha256
+  local manifest_edge_disable_script_sha256
+  local manifest_edge_dockerignore_sha256
+  local manifest_edge_external_verify_script_sha256
+  local manifest_edge_postgres_init_script_sha256
+  local manifest_edge_postgres_restart_verify_script_sha256
+  local manifest_edge_postgres_v5_integration_script_sha256
+  local manifest_edge_postgres_v5_verify_script_sha256
+  local manifest_edge_runtime_dockerfile_sha256
+  local manifest_edge_verify_script_sha256
   local manifest_filename
   local manifest_filenames=()
   local bundle_entries=()
@@ -184,6 +380,7 @@ validate_release_bundle() {
   local filename
   local extra
   local line_count=0
+  local preliminary_release_mode
   declare -A allowed_files=()
   declare -A allowed_bundle_files=()
   declare -A manifest_seen_files=()
@@ -195,6 +392,10 @@ validate_release_bundle() {
     [[ -f "$BUNDLE_DIR/$required_file" && ! -L "$BUNDLE_DIR/$required_file" ]] \
       || die "Bundle is missing regular $required_file."
   done
+  preliminary_release_mode="$(awk -F'"' '$2 == "releaseMode" { print $4 }' "$manifest_file")"
+  if [[ "$preliminary_release_mode" == a-https-test-edge ]]; then
+    validate_fixed_edge_release_path "$expected_commit"
+  fi
   [[ "$(bundle_contract_commit)" == "$expected_commit" ]] \
     || die "Bundle CONTRACT_COMMIT does not match the approved commit."
 
@@ -224,6 +425,26 @@ validate_release_bundle() {
   manifest_release_mode="$(awk -F'"' '$2 == "releaseMode" { print $4 }' "$manifest_file")"
   manifest_base_commit="$(awk -F'"' '$2 == "baseCommit" { print $4 }' "$manifest_file")"
   manifest_deployment_boundary="$(awk -F'"' '$2 == "deploymentBoundary" { print $4 }' "$manifest_file")"
+  manifest_hostname="$(awk -F'"' '$2 == "hostname" { print $4 }' "$manifest_file")"
+  manifest_edge_caddy_image="$(awk -F'"' '$2 == "edgeCaddyImage" { print $4 }' "$manifest_file")"
+  manifest_edge_backup_script_sha256="$(awk -F'"' '$2 == "edgeBackupScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_backup_restore_verify_script_sha256="$(awk -F'"' '$2 == "edgeBackupRestoreVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_base_compose_sha256="$(awk -F'"' '$2 == "edgeBaseComposeSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_base_deploy_script_sha256="$(awk -F'"' '$2 == "edgeBaseDeployScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_base_verify_script_sha256="$(awk -F'"' '$2 == "edgeBaseVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_caddyfile_sha256="$(awk -F'"' '$2 == "edgeCaddyfileSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_common_script_sha256="$(awk -F'"' '$2 == "edgeCommonScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_compose_sha256="$(awk -F'"' '$2 == "edgeComposeSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_deploy_script_sha256="$(awk -F'"' '$2 == "edgeDeployScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_disable_script_sha256="$(awk -F'"' '$2 == "edgeDisableScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_dockerignore_sha256="$(awk -F'"' '$2 == "edgeDockerignoreSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_external_verify_script_sha256="$(awk -F'"' '$2 == "edgeExternalVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_postgres_init_script_sha256="$(awk -F'"' '$2 == "edgePostgresInitScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_postgres_restart_verify_script_sha256="$(awk -F'"' '$2 == "edgePostgresRestartVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_postgres_v5_integration_script_sha256="$(awk -F'"' '$2 == "edgePostgresV5IntegrationScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_postgres_v5_verify_script_sha256="$(awk -F'"' '$2 == "edgePostgresV5VerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_runtime_dockerfile_sha256="$(awk -F'"' '$2 == "edgeRuntimeDockerfileSha256" { print $4 }' "$manifest_file")"
+  manifest_edge_verify_script_sha256="$(awk -F'"' '$2 == "edgeVerifyScriptSha256" { print $4 }' "$manifest_file")"
   mapfile -t manifest_filenames < <(awk -F'"' '$2 == "filename" { print $4 }' "$manifest_file")
   [[ "$manifest_schema_version" == 1 \
       && "$manifest_artifact" == sciforge-collaboration-server-bundle \
@@ -231,18 +452,63 @@ validate_release_bundle() {
     || die "RELEASE_MANIFEST.json metadata does not match the approved release."
   case "$manifest_release_mode" in
     origin-gui)
-      [[ -z "$manifest_base_commit" && -z "$manifest_deployment_boundary" ]] \
+      [[ -z "$manifest_base_commit" && -z "$manifest_deployment_boundary" \
+          && -z "$manifest_hostname" ]] \
         || die "origin-gui manifest must not carry private-release metadata."
       ;;
     private-test)
       validate_commit "$manifest_base_commit"
-      [[ -z "$manifest_deployment_boundary" ]] \
+      [[ -z "$manifest_deployment_boundary" && -z "$manifest_hostname" ]] \
         || die "private-test manifest contains an unexpected deployment boundary."
       ;;
     team-private-acceptance)
       validate_commit "$manifest_base_commit"
-      [[ "$manifest_deployment_boundary" == loopback-ssh-tunnel-only ]] \
+      [[ "$manifest_deployment_boundary" == loopback-ssh-tunnel-only \
+          && -z "$manifest_hostname" ]] \
         || die "Team private acceptance must retain the loopback/SSH-tunnel boundary."
+      ;;
+    a-https-test-edge)
+      validate_commit "$manifest_base_commit"
+      [[ "$manifest_deployment_boundary" == public-https-core-only \
+          && "$manifest_hostname" == "$A_HTTPS_TEST_EDGE_HOSTNAME" \
+          && "$manifest_edge_caddy_image" == "$A_HTTPS_TEST_EDGE_IMAGE" ]] \
+        || die "A HTTPS test edge manifest must retain its exact core-only hostname boundary."
+      validate_fixed_edge_asset "$A_HTTPS_TEST_EDGE_CADDYFILE" \
+        "$manifest_edge_caddyfile_sha256"
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/common.sh" \
+        "$manifest_edge_common_script_sha256"
+      validate_fixed_edge_asset "$A_HTTPS_TEST_EDGE_COMPOSE_FILE" \
+        "$manifest_edge_compose_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/.dockerignore" \
+        "$manifest_edge_dockerignore_sha256"
+      validate_fixed_edge_asset "$COMPOSE_FILE" \
+        "$manifest_edge_base_compose_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/Dockerfile.runtime" \
+        "$manifest_edge_runtime_dockerfile_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/postgres-init/001-create-application-role.sh" \
+        "$manifest_edge_postgres_init_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/deploy.sh" \
+        "$manifest_edge_base_deploy_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify.sh" \
+        "$manifest_edge_base_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/backup.sh" \
+        "$manifest_edge_backup_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-backup-restore.sh" \
+        "$manifest_edge_backup_restore_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-postgres-restart.sh" \
+        "$manifest_edge_postgres_restart_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-postgres-v5-integration.sh" \
+        "$manifest_edge_postgres_v5_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/postgres-v5-integration.mjs" \
+        "$manifest_edge_postgres_v5_integration_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/deploy-a-https-test-edge.sh" \
+        "$manifest_edge_deploy_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/disable-a-https-test-edge.sh" \
+        "$manifest_edge_disable_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-a-https-test-edge-external.sh" \
+        "$manifest_edge_external_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-a-https-test-edge.sh" \
+        "$manifest_edge_verify_script_sha256" true
       ;;
     *) die "RELEASE_MANIFEST.json contains an unsupported release mode." ;;
   esac
@@ -297,7 +563,20 @@ validate_release_bundle() {
   done
   (cd "$BUNDLE_DIR" && sha256sum --check --strict --status SHA256SUMS) \
     || die "Release bundle checksum verification failed."
+  RELEASE_MANIFEST_MODE="$manifest_release_mode"
+  RELEASE_MANIFEST_HOSTNAME="$manifest_hostname"
+  RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY="$manifest_deployment_boundary"
   derive_release_schema_truth
+}
+
+validate_a_https_test_edge_bundle() {
+  local expected_commit="$1"
+
+  validate_release_bundle "$expected_commit"
+  [[ "$RELEASE_MANIFEST_MODE" == a-https-test-edge \
+      && "$RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY" == public-https-core-only \
+      && "$RELEASE_MANIFEST_HOSTNAME" == "$A_HTTPS_TEST_EDGE_HOSTNAME" ]] \
+    || die "The release bundle is not approved for the A HTTPS test edge."
 }
 
 derive_release_schema_truth() {
@@ -410,8 +689,25 @@ prepare_compose_environment() {
   local expected_commit="$1"
   local env_input="$2"
   local admin_db_value
+  local allowed_origins_value
   local app_db_value
+  local app_cpus
+  local app_memory
+  local app_pids
+  local compose_project_name
+  local edge_cpus
+  local edge_memory
+  local edge_pids
   local host_port
+  local log_max_files
+  local log_max_size
+  local oidc_allow_insecure_loopback
+  local oidc_audience
+  local oidc_authorized_parties
+  local oidc_issuer
+  local postgres_cpus
+  local postgres_memory
+  local postgres_pids
 
   validate_commit "$expected_commit"
   ENV_FILE="$(canonical_regular_file "$env_input")"
@@ -428,6 +724,28 @@ prepare_compose_environment() {
   host_port="${host_port:-8787}"
   [[ "$host_port" =~ ^[0-9]+$ ]] || die "SCIFORGE_COLLAB_HOST_PORT must be an integer."
   (( host_port >= 1024 && host_port <= 65535 )) || die "SCIFORGE_COLLAB_HOST_PORT must be between 1024 and 65535."
+  allowed_origins_value="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_ALLOWED_ORIGINS optional)"
+  compose_project_name="$(dotenv_value "$ENV_FILE" COMPOSE_PROJECT_NAME optional)"
+  [[ -z "$compose_project_name" ]] \
+    || die "COMPOSE_PROJECT_NAME is forbidden; deployment project names are fixed by the scripts."
+  oidc_issuer="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_OIDC_ISSUER optional)"
+  oidc_audience="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_OIDC_AUDIENCE optional)"
+  oidc_audience="${oidc_audience:-sciforge-cloud-api}"
+  oidc_authorized_parties="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES optional)"
+  oidc_authorized_parties="${oidc_authorized_parties:-sciforge-desktop,sciforge-web-mobile}"
+  oidc_allow_insecure_loopback="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK optional)"
+  oidc_allow_insecure_loopback="${oidc_allow_insecure_loopback:-false}"
+  postgres_cpus="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_CPUS 1.5)"
+  postgres_memory="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_MEMORY 2g)"
+  postgres_pids="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_PIDS 256)"
+  app_cpus="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_APP_CPUS 1.0)"
+  app_memory="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_APP_MEMORY 768m)"
+  app_pids="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_APP_PIDS 256)"
+  edge_cpus="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_EDGE_CPUS 0.5)"
+  edge_memory="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_EDGE_MEMORY 256m)"
+  edge_pids="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_EDGE_PIDS 128)"
+  log_max_size="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_LOG_MAX_SIZE 10m)"
+  log_max_files="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_LOG_MAX_FILES 5)"
 
   # Export the validated values so shell variables cannot override the selected
   # env file or the approved bundle revision during Compose interpolation.
@@ -437,7 +755,415 @@ prepare_compose_environment() {
   export SCIFORGE_COLLAB_DB_PASSWORD
   export SCIFORGE_COLLAB_HOST_PORT="$host_port"
   export SCIFORGE_COLLAB_CONTRACT_COMMIT="$expected_commit"
-  COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+  export SCIFORGE_COLLABORATION_ALLOWED_ORIGINS="$allowed_origins_value"
+  export SCIFORGE_COLLABORATION_OIDC_ISSUER="$oidc_issuer"
+  export SCIFORGE_COLLABORATION_OIDC_AUDIENCE="$oidc_audience"
+  export SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES="$oidc_authorized_parties"
+  export SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK="$oidc_allow_insecure_loopback"
+  export SCIFORGE_COLLAB_POSTGRES_CPUS="$postgres_cpus"
+  export SCIFORGE_COLLAB_POSTGRES_MEMORY="$postgres_memory"
+  export SCIFORGE_COLLAB_POSTGRES_PIDS="$postgres_pids"
+  export SCIFORGE_COLLAB_APP_CPUS="$app_cpus"
+  export SCIFORGE_COLLAB_APP_MEMORY="$app_memory"
+  export SCIFORGE_COLLAB_APP_PIDS="$app_pids"
+  export SCIFORGE_COLLAB_EDGE_CPUS="$edge_cpus"
+  export SCIFORGE_COLLAB_EDGE_MEMORY="$edge_memory"
+  export SCIFORGE_COLLAB_EDGE_PIDS="$edge_pids"
+  export SCIFORGE_COLLAB_LOG_MAX_SIZE="$log_max_size"
+  export SCIFORGE_COLLAB_LOG_MAX_FILES="$log_max_files"
+  COMPOSE=(docker compose --project-name sciforge-collaboration-private \
+    --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+}
+
+prepare_a_https_test_edge_environment() {
+  local expected_commit="$1"
+  local env_input="$2"
+  local configured_ipv4
+  local configured_state_dir
+
+  prepare_compose_environment "$expected_commit" "$env_input"
+  [[ "$SCIFORGE_COLLAB_HOST_PORT" == 8787 ]] \
+    || die "The A HTTPS test edge requires the app to remain on 127.0.0.1:8787."
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_TEST_EDGE_ORIGIN" ]] \
+    || die "The A HTTPS test edge requires the one exact cloud-test HTTPS origin."
+  [[ -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" ]] \
+    || die "The A HTTPS test edge must not configure an OIDC issuer."
+  [[ "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false ]] \
+    || die "The A HTTPS test edge must keep insecure loopback OIDC disabled."
+  configured_ipv4="$(dotenv_value "$ENV_FILE" SCIFORGE_A_HTTPS_TEST_EDGE_IPV4)"
+  [[ "$configured_ipv4" == "$A_HTTPS_TEST_EDGE_PUBLIC_IPV4" ]] \
+    || die "The A HTTPS test edge IPv4 must match the approved ECS address."
+  configured_state_dir="$(dotenv_value "$ENV_FILE" SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR)"
+  [[ "$configured_state_dir" == "$A_HTTPS_TEST_EDGE_STATE_DIR" ]] \
+    || die "The A HTTPS test edge state path must remain outside the fixed release directory."
+  [[ -f "$A_HTTPS_TEST_EDGE_COMPOSE_FILE" && ! -L "$A_HTTPS_TEST_EDGE_COMPOSE_FILE" ]] \
+    || die "The A HTTPS test edge Compose file is missing or unsafe."
+  [[ -f "$A_HTTPS_TEST_EDGE_CADDYFILE" && ! -L "$A_HTTPS_TEST_EDGE_CADDYFILE" ]] \
+    || die "The A HTTPS test edge Caddyfile is missing or unsafe."
+
+  export SCIFORGE_A_HTTPS_TEST_EDGE_COMMIT="$expected_commit"
+  export SCIFORGE_A_HTTPS_TEST_EDGE_HOSTNAME="$A_HTTPS_TEST_EDGE_HOSTNAME"
+  export SCIFORGE_A_HTTPS_TEST_EDGE_IMAGE="$A_HTTPS_TEST_EDGE_IMAGE"
+  export SCIFORGE_A_HTTPS_TEST_EDGE_NETWORK="$A_HTTPS_TEST_EDGE_NETWORK"
+  export SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR="$A_HTTPS_TEST_EDGE_STATE_DIR"
+  EDGE_COMPOSE=(docker compose --project-name sciforge-collaboration-a-https-test-edge \
+    --env-file "$ENV_FILE" -f "$A_HTTPS_TEST_EDGE_COMPOSE_FILE")
+}
+
+validate_a_https_test_edge_host() {
+  local resolved_ipv4=()
+  local database_network_properties
+  local network_internal
+  local network_properties
+
+  require_root
+  if getent passwd 10002 >/dev/null; then
+    die "Host UID 10002 must remain unassigned for the isolated edge runtime."
+  fi
+  if getent group 10002 >/dev/null; then
+    die "Host GID 10002 must remain unassigned for the isolated edge runtime."
+  fi
+  mapfile -t resolved_ipv4 < <(
+    getent ahostsv4 "$A_HTTPS_TEST_EDGE_HOSTNAME" | awk 'NF { print $1 }' | LC_ALL=C sort -u
+  )
+  (( ${#resolved_ipv4[@]} == 1 )) \
+    || die "The A HTTPS test hostname must resolve to exactly one IPv4 address."
+  [[ "${resolved_ipv4[0]}" == "$A_HTTPS_TEST_EDGE_PUBLIC_IPV4" ]] \
+    || die "The A HTTPS test hostname does not resolve to the approved ECS address."
+  network_internal="$(docker network inspect --format '{{.Internal}}' "$A_HTTPS_TEST_EDGE_NETWORK")" \
+    || die "The approved application edge network does not exist."
+  [[ "$network_internal" == false ]] \
+    || die "The application edge network must support the dedicated ingress container."
+  network_properties="$(docker network inspect --format \
+    '{{.Driver}}|{{.Scope}}|{{index .Labels "com.docker.compose.project"}}' \
+    "$A_HTTPS_TEST_EDGE_NETWORK")"
+  [[ "$network_properties" == bridge\|local\|sciforge-collaboration-private ]] \
+    || die "The private edge network is not the fixed local collaboration bridge."
+  database_network_properties="$(docker network inspect --format \
+    '{{.Internal}}|{{.Driver}}|{{.Scope}}|{{index .Labels "com.docker.compose.project"}}' \
+    "$A_HTTPS_TEST_EDGE_DATABASE_NETWORK")"
+  [[ "$database_network_properties" == true\|bridge\|local\|sciforge-collaboration-private ]] \
+    || die "The database network is not the fixed internal collaboration bridge."
+  validate_a_https_test_edge_state_dirs
+}
+
+validate_a_https_test_edge_state_dirs() {
+  local path
+
+  [[ "$(readlink -f /srv/sciforge-collaboration)" == /srv/sciforge-collaboration ]] \
+    || die "The collaboration service root must be a physical directory."
+  for path in "$A_HTTPS_TEST_EDGE_STATE_DIR" \
+      "$A_HTTPS_TEST_EDGE_STATE_DIR/data" "$A_HTTPS_TEST_EDGE_STATE_DIR/config" \
+      "$A_HTTPS_TEST_EDGE_STATE_DIR/approval"; do
+    [[ -d "$path" && ! -L "$path" ]] \
+      || die "The persistent edge state directory is missing or is a symlink: $path"
+  done
+  [[ "$(readlink -f "$A_HTTPS_TEST_EDGE_STATE_DIR")" == "$A_HTTPS_TEST_EDGE_STATE_DIR" \
+      && "$(readlink -f "$A_HTTPS_TEST_EDGE_STATE_DIR/data")" == "$A_HTTPS_TEST_EDGE_STATE_DIR/data" \
+      && "$(readlink -f "$A_HTTPS_TEST_EDGE_STATE_DIR/config")" == "$A_HTTPS_TEST_EDGE_STATE_DIR/config" \
+      && "$(readlink -f "$A_HTTPS_TEST_EDGE_STATE_DIR/approval")" == "$A_HTTPS_TEST_EDGE_STATE_DIR/approval" ]] \
+    || die "The persistent edge state escaped its fixed physical path."
+  [[ "$(stat -c '%u:%g:%a' "$A_HTTPS_TEST_EDGE_STATE_DIR")" == 0:0:750 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_TEST_EDGE_STATE_DIR/data")" == 10002:10002:700 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_TEST_EDGE_STATE_DIR/config")" == 10002:10002:700 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_TEST_EDGE_STATE_DIR/approval")" == 0:10002:750 ]] \
+    || die "The persistent edge state directories have unsafe ownership or permissions."
+}
+
+prepare_a_https_test_edge_state_dirs() {
+  local path
+
+  if getent passwd 10002 >/dev/null; then
+    die "Host UID 10002 must remain unassigned before preparing isolated edge state."
+  fi
+  if getent group 10002 >/dev/null; then
+    die "Host GID 10002 must remain unassigned before preparing isolated edge state."
+  fi
+  [[ "$(readlink -f /srv/sciforge-collaboration)" == /srv/sciforge-collaboration ]] \
+    || die "The collaboration service root must be a physical directory."
+  for path in "$A_HTTPS_TEST_EDGE_STATE_DIR" \
+      "$A_HTTPS_TEST_EDGE_STATE_DIR/data" "$A_HTTPS_TEST_EDGE_STATE_DIR/config" \
+      "$A_HTTPS_TEST_EDGE_STATE_DIR/approval"; do
+    [[ ! -L "$path" ]] || die "Refusing a symlinked persistent edge state path: $path"
+  done
+  install -d -o root -g root -m 0750 "$A_HTTPS_TEST_EDGE_STATE_DIR"
+  install -d -o 10002 -g 10002 -m 0700 \
+    "$A_HTTPS_TEST_EDGE_STATE_DIR/data" "$A_HTTPS_TEST_EDGE_STATE_DIR/config"
+  install -d -o root -g 10002 -m 0750 "$A_HTTPS_TEST_EDGE_STATE_DIR/approval"
+  validate_a_https_test_edge_state_dirs
+}
+
+assert_no_a_https_test_edge_container() {
+  local all_container_ids=()
+  local app_ids=()
+  local endpoint_ids=()
+  local edge_ids=()
+  local expected_endpoint=""
+  local id
+  local port_bindings
+
+  mapfile -t edge_ids < <(docker container ls -a --no-trunc -q \
+    --filter "label=com.docker.compose.project=$A_HTTPS_TEST_EDGE_PROJECT")
+  (( ${#edge_ids[@]} == 0 )) \
+    || die "An HTTPS edge container still exists. Disable and remove the exact edge before changing the app or Provider mode."
+  [[ "$(ss -H -ltn | awk '$4 ~ /:443$/ { count += 1 } END { print count + 0 }')" == 0 \
+      && "$(ss -H -lun | awk '$4 ~ /:443$/ { count += 1 } END { print count + 0 }')" == 0 ]] \
+    || die "A host TCP/UDP 443 listener exists; the app cannot be changed behind an active public edge."
+  mapfile -t all_container_ids < <(docker container ls -a --no-trunc -q)
+  for id in "${all_container_ids[@]}"; do
+    port_bindings="$(docker container inspect --format '{{json .HostConfig.PortBindings}}' "$id")"
+    [[ "$port_bindings" != *'"HostPort":"443"'* ]] \
+      || die "A Docker container still publishes host port 443; disable the public edge before changing the app."
+  done
+  mapfile -t app_ids < <(docker container ls --no-trunc -q \
+    --filter label=com.docker.compose.project=sciforge-collaboration-private \
+    --filter label=com.docker.compose.service=app)
+  (( ${#app_ids[@]} <= 1 )) || die "The collaboration project has multiple app containers."
+  if (( ${#app_ids[@]} == 1 )); then
+    expected_endpoint="${app_ids[0]}"
+  fi
+  if docker network inspect "$A_HTTPS_TEST_EDGE_NETWORK" >/dev/null 2>&1; then
+    mapfile -t endpoint_ids < <(docker network inspect --format \
+      '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
+      "$A_HTTPS_TEST_EDGE_NETWORK")
+    if [[ -n "$expected_endpoint" ]]; then
+      (( ${#endpoint_ids[@]} == 1 )) && [[ "${endpoint_ids[0]}" == "$expected_endpoint" ]] \
+        || die "The private edge network contains an endpoint other than the current collaboration app."
+    else
+      (( ${#endpoint_ids[@]} == 0 )) \
+        || die "The private edge network contains an endpoint without a current collaboration app."
+    fi
+  fi
+}
+
+assert_a_https_test_edge_network_membership() {
+  local expected_edge_id="${1:-}"
+  local endpoint_ids=()
+  local app_networks=()
+  local expected_endpoints=()
+  local app_aliases
+  local edge_aliases=""
+
+  [[ "$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]] \
+    || die "The approved app identity is unavailable for edge network validation."
+  mapfile -t app_networks < <(docker container inspect --format \
+    '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+    "$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID" | LC_ALL=C sort)
+  [[ "$(printf '%s\n' "${app_networks[@]}")" == \
+      "$(printf '%s\n' "$A_HTTPS_TEST_EDGE_DATABASE_NETWORK" "$A_HTTPS_TEST_EDGE_NETWORK" | LC_ALL=C sort)" ]] \
+    || die "The collaboration app must join exactly the database and private-edge networks."
+
+  mapfile -t endpoint_ids < <(docker network inspect --format \
+    '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
+    "$A_HTTPS_TEST_EDGE_NETWORK" | LC_ALL=C sort)
+  expected_endpoints=("$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID")
+  if [[ -n "$expected_edge_id" ]]; then
+    [[ "$expected_edge_id" =~ ^[0-9a-f]{64}$ ]] || die "The edge identity is invalid."
+    expected_endpoints+=("$expected_edge_id")
+  fi
+  [[ "$(printf '%s\n' "${endpoint_ids[@]}")" == \
+      "$(printf '%s\n' "${expected_endpoints[@]}" | LC_ALL=C sort)" ]] \
+    || die "The private edge network contains an unapproved endpoint."
+
+  app_aliases="$(docker container inspect --format \
+    "{{range (index .NetworkSettings.Networks \"$A_HTTPS_TEST_EDGE_NETWORK\").Aliases}}{{println .}}{{end}}" \
+    "$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID")"
+  [[ "$(grep -Fxc app <<< "$app_aliases")" == 1 ]] \
+    || die "Exactly the approved app must own the private-edge 'app' alias."
+  if [[ -n "$expected_edge_id" ]]; then
+    edge_aliases="$(docker container inspect --format \
+      "{{range (index .NetworkSettings.Networks \"$A_HTTPS_TEST_EDGE_NETWORK\").Aliases}}{{println .}}{{end}}" \
+      "$expected_edge_id")"
+    ! grep -Fxq app <<< "$edge_aliases" \
+      || die "The edge container must not own the upstream 'app' alias."
+  fi
+}
+
+inspect_a_https_test_edge_image() {
+  local mode="${1:-pull}"
+  local image_id
+  local image_platform
+  local repo_digests
+  local caddy_version
+
+  [[ "$mode" == pull || "$mode" == local ]] || die "Unknown edge image inspection mode."
+  if [[ "$mode" == pull ]]; then
+    docker pull --platform linux/amd64 "$A_HTTPS_TEST_EDGE_IMAGE" >/dev/null
+  fi
+  image_id="$(docker image inspect --format '{{.Id}}' "$A_HTTPS_TEST_EDGE_IMAGE")" \
+    || die "The fixed Caddy image is unavailable."
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "The fixed Caddy image has an invalid image ID."
+  image_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image_id")"
+  [[ "$image_platform" == linux/amd64 ]] \
+    || die "The fixed Caddy image must be linux/amd64."
+  repo_digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id")"
+  grep -Fxq "caddy@$A_HTTPS_TEST_EDGE_IMAGE_DIGEST" <<< "$repo_digests" \
+    || die "The local Caddy image does not retain the approved registry digest."
+  caddy_version="$(docker run --rm --network none --entrypoint caddy "$image_id" version)"
+  [[ "$caddy_version" == v2.11.4* ]] || die "The fixed edge binary is not Caddy v2.11.4."
+  A_HTTPS_TEST_EDGE_IMAGE_ID="$image_id"
+}
+
+a_https_test_edge_app_snapshot() {
+  local container_id="${1:-$A_HTTPS_TEST_EDGE_APP_CONTAINER_ID}"
+  local image_id
+  local pid
+  local restarts
+  local started_at
+
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || die "Cannot snapshot an unknown app container."
+  image_id="$(docker container inspect --format '{{.Image}}' "$container_id")"
+  pid="$(docker container inspect --format '{{.State.Pid}}' "$container_id")"
+  restarts="$(docker container inspect --format '{{.RestartCount}}' "$container_id")"
+  started_at="$(docker container inspect --format '{{.State.StartedAt}}' "$container_id")"
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ && "$pid" =~ ^[1-9][0-9]*$ \
+      && "$restarts" =~ ^[0-9]+$ && "$started_at" == *T*Z ]] \
+    || die "The app container snapshot is invalid."
+  printf '%s|%s|%s|%s|%s' "$container_id" "$image_id" "$pid" "$restarts" "$started_at"
+}
+
+assert_a_https_test_edge_backend_port_boundaries() {
+  local all_container_ids=()
+  local bindings
+  local container_id
+  local host_ip
+  local host_port
+  local published_port
+  local tcp_listeners
+
+  tcp_listeners="$(ss -H -ltn)"
+  [[ "$(awk '$4 ~ /:80$/ || $4 ~ /:5432$/ { count += 1 } END { print count + 0 }' \
+      <<< "$tcp_listeners")" == 0 ]] \
+    || die "HTTP or PostgreSQL must not have a host TCP listener."
+  [[ "$(awk '$4 ~ /:8080$/ && $4 != "127.0.0.1:8080" && $4 != "[::1]:8080" { count += 1 } END { print count + 0 }' \
+      <<< "$tcp_listeners")" == 0 ]] \
+    || die "The Keycloak test port must not listen outside host loopback."
+  [[ "$(awk '$4 ~ /:8787$/ && $4 != "127.0.0.1:8787" && $4 != "[::1]:8787" { count += 1 } END { print count + 0 }' \
+      <<< "$tcp_listeners")" == 0 ]] \
+    || die "The collaboration backend port must not listen outside host loopback."
+
+  mapfile -t all_container_ids < <(docker container ls -a --no-trunc -q)
+  for container_id in "${all_container_ids[@]}"; do
+    bindings="$(docker container inspect --format \
+      '{{range $port, $items := .HostConfig.PortBindings}}{{range $items}}{{printf "%s|%s|%s\n" $port .HostIp .HostPort}}{{end}}{{end}}' \
+      "$container_id")"
+    while IFS='|' read -r published_port host_ip host_port; do
+      [[ -n "$host_port" ]] || continue
+      case "$host_port" in
+        80|5432)
+          die "A Docker container publishes forbidden host TCP port $host_port."
+          ;;
+        8080|8787)
+          [[ "$host_ip" == 127.0.0.1 ]] \
+            || die "Docker host port $host_port must be bound only to 127.0.0.1."
+          ;;
+      esac
+    done <<< "$bindings"
+  done
+}
+
+validate_a_https_test_edge_core_app() {
+  local expected_commit="$1"
+  local app_container_id
+  local app_environment
+  local app_image_id
+  local app_mode
+  local app_networks
+  local app_revision
+  local app_state
+  local catalog_body
+  local container_revision
+  local origin_count
+  local origin_value
+  local oidc_count
+  local oidc_value
+  local postgres_endpoint
+  local provider_env_count
+  local provider_mount_count
+  local published_endpoint
+  local running_services
+
+  running_services="$("${COMPOSE[@]}" ps --status running --services)"
+  grep -qx postgres <<< "$running_services" || die "PostgreSQL is not running."
+  grep -qx app <<< "$running_services" || die "The collaboration app is not running."
+  app_container_id="$("${COMPOSE[@]}" ps -q app)"
+  [[ "$app_container_id" =~ ^[0-9a-f]{64}$ ]] || die "Could not identify the collaboration app."
+  app_state="$(docker container inspect --format \
+    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$app_container_id")"
+  [[ "$app_state" == running\|healthy ]] || die "The collaboration app is not healthy."
+  app_revision="$(docker container inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$app_container_id")"
+  [[ "$app_revision" == "$expected_commit" ]] || die "The running app revision is not approved."
+  app_mode="$(docker container inspect --format \
+    '{{index .Config.Labels "cn.sciforge.deployment.mode"}}' "$app_container_id")"
+  [[ "$app_mode" == core-only-private ]] || die "The public test edge requires core-only mode."
+  [[ "$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' \
+    "$app_container_id")" == sciforge-collaboration-private ]] \
+    || die "The collaboration app belongs to an unexpected Compose project."
+  app_image_id="$(docker container inspect --format '{{.Image}}' "$app_container_id")"
+  [[ "$app_image_id" == "$(docker image inspect --format '{{.Id}}' \
+    "sciforge-collaboration-runtime:$expected_commit")" ]] \
+    || die "The running app does not use the approved image ID."
+  container_revision="$(docker exec "$app_container_id" sh -c \
+    'tr -d "\r\n" < /app/CONTRACT_COMMIT')"
+  [[ "$container_revision" == "$expected_commit" ]] \
+    || die "The app container commit proof is invalid."
+  published_endpoint="$("${COMPOSE[@]}" port app 8787)"
+  [[ "$published_endpoint" == 127.0.0.1:8787 ]] \
+    || die "The app must remain published only on 127.0.0.1:8787."
+  postgres_endpoint="$("${COMPOSE[@]}" port postgres 5432 2>/dev/null || true)"
+  [[ -z "$postgres_endpoint" ]] || die "PostgreSQL must not publish a host port."
+  assert_a_https_test_edge_backend_port_boundaries
+
+  app_environment="$(docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    "$app_container_id")"
+  origin_count="$(printf '%s\n' "$app_environment" | awk -F= \
+    '$1 == "SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" { count += 1 } END { print count + 0 }')"
+  origin_value="$(printf '%s\n' "$app_environment" | awk -F= \
+    '$1 == "SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" { print substr($0, index($0, "=") + 1) }')"
+  [[ "$origin_count" == 1 && "$origin_value" == "$A_HTTPS_TEST_EDGE_ORIGIN" ]] \
+    || die "The app does not have the exact cloud-test origin allowlist."
+  oidc_count="$(printf '%s\n' "$app_environment" | awk -F= \
+    '$1 == "SCIFORGE_COLLABORATION_OIDC_ISSUER" { count += 1 } END { print count + 0 }')"
+  oidc_value="$(printf '%s\n' "$app_environment" | awk -F= \
+    '$1 == "SCIFORGE_COLLABORATION_OIDC_ISSUER" { print substr($0, index($0, "=") + 1) }')"
+  [[ "$oidc_count" == 1 && -z "$oidc_value" ]] \
+    || die "The A HTTPS test edge must not expose a configured OIDC issuer."
+  provider_env_count="$(printf '%s\n' "$app_environment" | awk -F= '
+    $1 == "SCIFORGE_COLLABORATION_PROVIDER_CONFIG_FILE" ||
+    $1 == "SCIFORGE_COLLABORATION_SECRET_DIRECTORY" { count += 1 }
+    END { print count + 0 }
+  ')"
+  [[ "$provider_env_count" == 0 ]] || die "Provider environment is forbidden on this core-only edge."
+  provider_mount_count="$(docker container inspect --format \
+    '{{range .Mounts}}{{println .Destination}}{{end}}' "$app_container_id" | awk '
+      $0 == "/run/sciforge-provider" || index($0, "/run/sciforge-provider/") == 1 { count += 1 }
+      END { print count + 0 }
+    ')"
+  [[ "$provider_mount_count" == 0 ]] || die "Provider mounts are forbidden on this core-only edge."
+  app_networks="$(docker container inspect --format \
+    '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$app_container_id")"
+  grep -Fxq "$A_HTTPS_TEST_EDGE_NETWORK" <<< "$app_networks" \
+    || die "The app is not attached to the approved private edge network."
+
+  catalog_body="$(curl --disable --noproxy '*' --proto '=http' \
+    --fail --silent --show-error --max-time 5 \
+    --header 'content-type: application/json' \
+    --data '{"protocolVersion":"1.0","requestId":"req_ahttpsedgecatalog0001","type":"endpoint.catalog.get"}' \
+    http://127.0.0.1:8787/v1/commands)"
+  printf '%s' "$catalog_body" | docker exec -i "$app_container_id" node -e '
+    let input = ""
+    process.stdin.setEncoding("utf8")
+    process.stdin.on("data", (chunk) => { input += chunk })
+    process.stdin.on("end", () => {
+      try {
+        const body = JSON.parse(input)
+        if (body?.type !== "endpoint.catalog" || !Array.isArray(body.providers) || body.providers.length !== 0) process.exit(1)
+      } catch { process.exit(1) }
+    })
+  ' || die "The core-only provider catalog is not exactly empty."
+  A_HTTPS_TEST_EDGE_APP_CONTAINER_ID="$app_container_id"
 }
 
 enable_zulip_provider_compose() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
   copyFile,
@@ -17,7 +17,7 @@ import {
 } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 
@@ -32,6 +32,80 @@ const contractArtifactManifestFilename = 'ARTIFACT_MANIFEST.json'
 const contractCommitPlaceholder = '__SCIFORGE_COLLABORATION_COMMIT__'
 const maximumUnpackedArchiveBytes = 128 * 1024 * 1024
 const tarBlockBytes = 512
+const immutableSnapshotGuardFilename = '.sciforge-collaboration-bundle-snapshot-guard.json'
+export const IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT = Object.freeze({
+  path: 'SCIFORGE_COLLABORATION_BUNDLE_INTERNAL_GUARD_PATH',
+  token: 'SCIFORGE_COLLABORATION_BUNDLE_INTERNAL_GUARD_TOKEN'
+})
+const aHttpsTestEdgeImage = 'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a'
+const aHttpsTestEdgeAssets = Object.freeze({
+  edgeDockerignoreSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/.dockerignore'
+  }),
+  edgeBaseComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.yml'
+  }),
+  edgeRuntimeDockerfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Dockerfile.runtime'
+  }),
+  edgePostgresInitScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/postgres-init/001-create-application-role.sh'
+  }),
+  edgeBaseDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy.sh'
+  }),
+  edgeBaseVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify.sh'
+  }),
+  edgeBackupScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/backup.sh'
+  }),
+  edgeBackupRestoreVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-backup-restore.sh'
+  }),
+  edgePostgresRestartVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-postgres-restart.sh'
+  }),
+  edgePostgresV5VerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh'
+  }),
+  edgePostgresV5IntegrationScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/postgres-v5-integration.mjs'
+  }),
+  edgeCaddyfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-test-edge'
+  }),
+  edgeCommonScriptSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/scripts/common.sh'
+  }),
+  edgeComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-https-test-edge.yml'
+  }),
+  edgeDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy-a-https-test-edge.sh'
+  }),
+  edgeDisableScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/disable-a-https-test-edge.sh'
+  }),
+  edgeExternalVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge-external.sh'
+  }),
+  edgeVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge.sh'
+  })
+})
 
 export const COLLABORATION_RELEASE_PACKAGES = Object.freeze([
   Object.freeze({
@@ -66,13 +140,19 @@ function usage() {
     '  --output <directory>    Bundle destination (must be absent or empty).',
     '  --private-test-release  TEST-ONLY: allow a clean HEAD descended from origin/gui.',
     '  --team-private-acceptance  TEAM-ONLY: clean descendant for loopback/tunnel acceptance.',
+    '  --a-https-test-edge      A-ONLY: clean descendant for cloud-test HTTPS/WSS edge.',
     '  -h, --help              Show this help.',
     ''
   ].join('\n')
 }
 
 export function parseArguments(argv) {
-  const result = { help: false, privateTestRelease: false, teamPrivateAcceptance: false }
+  const result = {
+    aHttpsTestEdge: false,
+    help: false,
+    privateTestRelease: false,
+    teamPrivateAcceptance: false
+  }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--help' || argument === '-h') {
@@ -93,6 +173,13 @@ export function parseArguments(argv) {
       result.teamPrivateAcceptance = true
       continue
     }
+    if (argument === '--a-https-test-edge') {
+      if (result.aHttpsTestEdge) {
+        throw new Error('--a-https-test-edge may only be provided once.')
+      }
+      result.aHttpsTestEdge = true
+      continue
+    }
     if (argument !== '--commit' && argument !== '--output') {
       throw new Error(`Unknown argument: ${argument}`)
     }
@@ -105,8 +192,13 @@ export function parseArguments(argv) {
     if (result[property]) throw new Error(`${argument} may only be provided once.`)
     result[property] = value
   }
-  if (result.privateTestRelease && result.teamPrivateAcceptance) {
-    throw new Error('Private release modes are mutually exclusive.')
+  const selectedSpecialModes = [
+    result.privateTestRelease,
+    result.teamPrivateAcceptance,
+    result.aHttpsTestEdge
+  ].filter(Boolean).length
+  if (selectedSpecialModes > 1) {
+    throw new Error('Private and A HTTPS test edge release modes are mutually exclusive.')
   }
   return result
 }
@@ -116,6 +208,219 @@ export function assertFullCommit(commit) {
     throw new Error('The release commit must be a complete 40-character Git SHA.')
   }
   return commit.toLowerCase()
+}
+
+async function readRepositoryHead(repositoryRoot, runCommand) {
+  const headResult = await runCommand({
+    command: gitCommand,
+    args: ['rev-parse', '--verify', 'HEAD^{commit}'],
+    cwd: repositoryRoot
+  })
+  return assertFullCommit(headResult.stdout.trim())
+}
+
+function repositoryRelativePath(repositoryRoot, path) {
+  const relativePath = relative(repositoryRoot, path)
+  if (
+    relativePath.length === 0 ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    return undefined
+  }
+  return relativePath.split(sep).join('/')
+}
+
+async function assertCleanWorktree(repositoryRoot, runCommand, ignoredPaths = []) {
+  const statusArguments = ['status', '--porcelain=v1', '--untracked-files=all']
+  const ignoredRepositoryPaths = ignoredPaths
+    .map((path) => repositoryRelativePath(repositoryRoot, path))
+    .filter((path) => path !== undefined)
+  if (ignoredRepositoryPaths.length > 0) {
+    statusArguments.push(
+      '--',
+      '.',
+      ...ignoredRepositoryPaths.map((path) => `:(top,literal,exclude)${path}`)
+    )
+  }
+  const statusResult = await runCommand({
+    command: gitCommand,
+    args: statusArguments,
+    cwd: repositoryRoot
+  })
+  if (statusResult.stdout.trim().length > 0) {
+    throw new Error('The collaboration release must be built from a clean worktree.')
+  }
+}
+
+export function createImmutableSnapshotChildArguments(arguments_, approvedCommit, outputDirectory) {
+  const childArguments = ['--commit', approvedCommit, '--output', outputDirectory]
+  if (arguments_.privateTestRelease) childArguments.push('--private-test-release')
+  if (arguments_.teamPrivateAcceptance) childArguments.push('--team-private-acceptance')
+  if (arguments_.aHttpsTestEdge) childArguments.push('--a-https-test-edge')
+  return Object.freeze(childArguments)
+}
+
+function equalGuardTokens(left, right) {
+  if (
+    typeof left !== 'string' ||
+    typeof right !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(left) ||
+    !/^[0-9a-f]{64}$/u.test(right)
+  ) {
+    return false
+  }
+  return timingSafeEqual(Buffer.from(left, 'ascii'), Buffer.from(right, 'ascii'))
+}
+
+export function validateImmutableSnapshotGuard({
+  argv,
+  environment,
+  guard,
+  repositoryRoot
+}) {
+  const guardPath = environment?.[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]
+  const guardToken = environment?.[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]
+  if (typeof guardPath !== 'string' || !isAbsolute(guardPath) || resolve(guardPath) !== guardPath) {
+    throw new Error('The immutable snapshot guard path is missing or invalid.')
+  }
+  if (!guard || typeof guard !== 'object' || Array.isArray(guard)) {
+    throw new Error('The immutable snapshot guard is invalid.')
+  }
+  const expectedFields = [
+    'approvedCommit',
+    'childArguments',
+    'gitCommonDirectory',
+    'originalRepositoryRoot',
+    'outputDirectory',
+    'schemaVersion',
+    'snapshotRepositoryRoot',
+    'token'
+  ]
+  if (JSON.stringify(Object.keys(guard).sort()) !== JSON.stringify(expectedFields)) {
+    throw new Error('The immutable snapshot guard has an unexpected field set.')
+  }
+  if (guard.schemaVersion !== 1 || !equalGuardTokens(guardToken, guard.token)) {
+    throw new Error('The immutable snapshot guard token is invalid.')
+  }
+  const snapshotRepositoryRoot = resolve(repositoryRoot)
+  for (const [label, path] of [
+    ['snapshot repository', guard.snapshotRepositoryRoot],
+    ['original repository', guard.originalRepositoryRoot],
+    ['Git common directory', guard.gitCommonDirectory],
+    ['bundle output', guard.outputDirectory]
+  ]) {
+    if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path) {
+      throw new Error(`The immutable snapshot ${label} path is invalid.`)
+    }
+  }
+  if (guard.snapshotRepositoryRoot !== snapshotRepositoryRoot) {
+    throw new Error('The immutable snapshot guard belongs to another worktree.')
+  }
+  if (guard.originalRepositoryRoot === snapshotRepositoryRoot) {
+    throw new Error('The immutable snapshot must not be the original worktree.')
+  }
+  if (
+    guard.outputDirectory === snapshotRepositoryRoot ||
+    repositoryRelativePath(snapshotRepositoryRoot, guard.outputDirectory) !== undefined
+  ) {
+    throw new Error('The immutable snapshot output must remain outside the snapshot worktree.')
+  }
+  if (!Array.isArray(argv) || !Array.isArray(guard.childArguments) ||
+      JSON.stringify(argv) !== JSON.stringify(guard.childArguments)) {
+    throw new Error('The immutable snapshot arguments do not match the guarded invocation.')
+  }
+  const arguments_ = parseArguments(argv)
+  const approvedCommit = assertFullCommit(guard.approvedCommit)
+  if (
+    arguments_.help ||
+    arguments_.commit !== approvedCommit ||
+    arguments_.outputDirectory !== guard.outputDirectory ||
+    resolve(guard.originalRepositoryRoot, arguments_.outputDirectory) !== guard.outputDirectory
+  ) {
+    throw new Error('The immutable snapshot invocation does not match its guarded release.')
+  }
+  return Object.freeze({
+    approvedCommit,
+    arguments_,
+    gitCommonDirectory: guard.gitCommonDirectory,
+    guardPath,
+    originalRepositoryRoot: guard.originalRepositoryRoot,
+    outputDirectory: guard.outputDirectory,
+    snapshotRepositoryRoot
+  })
+}
+
+async function readImmutableSnapshotGuard({ argv, environment, repositoryRoot, runCommand }) {
+  const snapshotRepositoryRoot = resolve(repositoryRoot)
+  const guardPathValue = environment?.[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]
+  if (typeof guardPathValue !== 'string' || !isAbsolute(guardPathValue)) {
+    throw new Error('The immutable snapshot guard path is missing or invalid.')
+  }
+  const guardPath = resolve(guardPathValue)
+  if (guardPath !== join(dirname(snapshotRepositoryRoot), immutableSnapshotGuardFilename)) {
+    throw new Error('The immutable snapshot guard is not adjacent to its worktree.')
+  }
+  const [guardDetails, gitMarkerDetails, parentDetails] = await Promise.all([
+    lstat(guardPath),
+    lstat(join(snapshotRepositoryRoot, '.git')),
+    lstat(dirname(snapshotRepositoryRoot))
+  ])
+  if (
+    !guardDetails.isFile() ||
+    guardDetails.isSymbolicLink() ||
+    (guardDetails.mode & 0o7777) !== 0o600
+  ) {
+    throw new Error('The immutable snapshot guard file is unsafe.')
+  }
+  if (!gitMarkerDetails.isFile() || gitMarkerDetails.isSymbolicLink()) {
+    throw new Error('The immutable snapshot must be a detached linked Git worktree.')
+  }
+  if (
+    !parentDetails.isDirectory() ||
+    parentDetails.isSymbolicLink() ||
+    (parentDetails.mode & 0o7777) !== 0o700
+  ) {
+    throw new Error('The immutable snapshot parent directory is unsafe.')
+  }
+  const guard = parseJson(await readFile(guardPath), 'Immutable snapshot guard')
+  const context = validateImmutableSnapshotGuard({
+    argv,
+    environment,
+    guard,
+    repositoryRoot: snapshotRepositoryRoot
+  })
+  const [topLevelResult, commonDirectoryResult, symbolicHeadResult] = await Promise.all([
+    runCommand({
+      command: gitCommand,
+      args: ['rev-parse', '--path-format=absolute', '--show-toplevel'],
+      cwd: snapshotRepositoryRoot
+    }),
+    runCommand({
+      command: gitCommand,
+      args: ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+      cwd: snapshotRepositoryRoot
+    }),
+    runCommand({
+      command: gitCommand,
+      args: ['rev-parse', '--symbolic-full-name', 'HEAD'],
+      cwd: snapshotRepositoryRoot
+    })
+  ])
+  const topLevelPath = topLevelResult.stdout.trim()
+  const commonDirectoryPath = commonDirectoryResult.stdout.trim()
+  if (!isAbsolute(topLevelPath) || resolve(topLevelPath) !== snapshotRepositoryRoot) {
+    throw new Error('The immutable snapshot guard does not match the Git worktree root.')
+  }
+  if (!isAbsolute(commonDirectoryPath) ||
+      resolve(commonDirectoryPath) !== context.gitCommonDirectory) {
+    throw new Error('The immutable snapshot is not linked to the approved Git repository.')
+  }
+  if (symbolicHeadResult.stdout.trim() !== 'HEAD') {
+    throw new Error('The immutable snapshot Git worktree is not detached.')
+  }
+  return context
 }
 
 function normalizePackPath(path) {
@@ -468,16 +773,18 @@ async function stageCollaborationContractsPackage({
   return packageDirectory
 }
 
-async function defaultRunCommand({ command, args, cwd }) {
+async function defaultRunCommand({ command, args, cwd, environment, inheritOutput = false }) {
   return await new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd,
       env: {
         ...process.env,
-        NPM_CONFIG_CACHE: process.env.NPM_CONFIG_CACHE || join(tmpdir(), 'sciforge-a-npm-cache')
+        ...environment,
+        NPM_CONFIG_CACHE: environment?.NPM_CONFIG_CACHE ||
+          process.env.NPM_CONFIG_CACHE || join(tmpdir(), 'sciforge-a-npm-cache')
       },
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: inheritOutput ? ['ignore', 'inherit', 'inherit'] : ['ignore', 'pipe', 'pipe']
     })
     const stdout = []
     const stderr = []
@@ -491,8 +798,8 @@ async function defaultRunCommand({ command, args, cwd }) {
       }
       target.push(chunk)
     }
-    child.stdout.on('data', capture(stdout))
-    child.stderr.on('data', capture(stderr))
+    child.stdout?.on('data', capture(stdout))
+    child.stderr?.on('data', capture(stderr))
     child.once('error', (error) => rejectPromise(new Error(`Unable to run ${command}: ${error.message}`)))
     child.once('close', (code, signal) => {
       if (capturedBytes > maximumCapturedBytes) {
@@ -587,6 +894,7 @@ async function assertBundleFileSet(stagingDirectory, expectedFilenames) {
 }
 
 export async function buildCollaborationServerBundle({
+  aHttpsTestEdge = false,
   commit,
   generateContractArtifactFiles = defaultGenerateContractArtifactFiles,
   log = () => {},
@@ -596,41 +904,36 @@ export async function buildCollaborationServerBundle({
   repositoryRoot = defaultRepositoryRoot,
   runCommand = defaultRunCommand
 } = {}) {
+  if (typeof aHttpsTestEdge !== 'boolean') {
+    throw new Error('aHttpsTestEdge must be an explicit boolean.')
+  }
   if (typeof privateTestRelease !== 'boolean') {
     throw new Error('privateTestRelease must be an explicit boolean.')
   }
   if (typeof teamPrivateAcceptance !== 'boolean') {
     throw new Error('teamPrivateAcceptance must be an explicit boolean.')
   }
-  if (privateTestRelease && teamPrivateAcceptance) {
-    throw new Error('Private release modes are mutually exclusive.')
+  const selectedSpecialModes = [
+    privateTestRelease,
+    teamPrivateAcceptance,
+    aHttpsTestEdge
+  ].filter(Boolean).length
+  if (selectedSpecialModes > 1) {
+    throw new Error('Private and A HTTPS test edge release modes are mutually exclusive.')
   }
   if (typeof generateContractArtifactFiles !== 'function') {
     throw new Error('generateContractArtifactFiles must be a function.')
   }
-  const privateFeatureRelease = privateTestRelease || teamPrivateAcceptance
+  const featureRelease = privateTestRelease || teamPrivateAcceptance || aHttpsTestEdge
   const root = resolve(repositoryRoot)
-  const headResult = await runCommand({
-    command: gitCommand,
-    args: ['rev-parse', '--verify', 'HEAD^{commit}'],
-    cwd: root
-  })
-  const head = assertFullCommit(headResult.stdout.trim())
+  const head = await readRepositoryHead(root, runCommand)
   const approvedCommit = assertFullCommit(commit ?? head)
   if (approvedCommit !== head) {
     throw new Error('The approved release commit must equal the currently checked out HEAD.')
   }
-
-  const statusResult = await runCommand({
-    command: gitCommand,
-    args: ['status', '--porcelain=v1', '--untracked-files=all'],
-    cwd: root
-  })
-  if (statusResult.stdout.trim().length > 0) {
-    throw new Error('The collaboration release must be built from a clean worktree.')
-  }
+  await assertCleanWorktree(root, runCommand)
   let baseCommit
-  if (privateFeatureRelease) {
+  if (featureRelease) {
     const baseResult = await runCommand({
       command: gitCommand,
       args: ['rev-parse', '--verify', 'origin/gui^{commit}'],
@@ -645,7 +948,11 @@ export async function buildCollaborationServerBundle({
       })
     } catch (error) {
       throw new Error(
-        `${teamPrivateAcceptance ? 'Team private acceptance' : 'Private test release'} HEAD must descend from the current origin/gui commit.`,
+        `${aHttpsTestEdge
+          ? 'A HTTPS test edge release'
+          : teamPrivateAcceptance
+            ? 'Team private acceptance'
+            : 'Private test release'} HEAD must descend from the current origin/gui commit.`,
         { cause: error }
       )
     }
@@ -668,7 +975,10 @@ export async function buildCollaborationServerBundle({
   let published = false
 
   try {
-    if (teamPrivateAcceptance) {
+    if (aHttpsTestEdge) {
+      log('*** A-ONLY HTTPS TEST EDGE: cloud-test.sciforge.cn core-only boundary; not a product login or Provider deployment. ***')
+      log(`Verified clean A HTTPS edge commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
+    } else if (teamPrivateAcceptance) {
       log('*** TEAM-PRIVATE ACCEPTANCE: loopback + SSH tunnel only; never publish as production. ***')
       log(`Verified clean team acceptance commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
     } else if (privateTestRelease) {
@@ -792,17 +1102,53 @@ export async function buildCollaborationServerBundle({
         sha256: await sha256File(join(stagingDirectory, packed.filename))
       })
     }
+    const edgeProfile = {}
+    if (aHttpsTestEdge) {
+      for (const [field, { expectedMode, relativePath }] of Object.entries(aHttpsTestEdgeAssets)) {
+        const absolutePath = join(root, relativePath)
+        let details
+        try {
+          details = await lstat(absolutePath)
+        } catch (error) {
+          if (error?.code === 'ENOENT') {
+            throw new Error(`A HTTPS test edge asset is missing: ${relativePath}`, { cause: error })
+          }
+          throw error
+        }
+        if (!details.isFile() || details.isSymbolicLink() || (details.mode & 0o022) !== 0) {
+          throw new Error(`A HTTPS test edge asset is unsafe: ${relativePath}`)
+        }
+        const actualMode = details.mode & 0o7777
+        if (expectedMode !== undefined && actualMode !== expectedMode) {
+          throw new Error(
+            `A HTTPS test edge script must have mode ${expectedMode.toString(8)}: ${relativePath}`
+          )
+        }
+        edgeProfile[field] = await sha256File(absolutePath)
+      }
+    }
     const manifest = {
       schemaVersion: 1,
       artifact: 'sciforge-collaboration-server-bundle',
       contractCommit: approvedCommit,
       releaseMode: teamPrivateAcceptance
         ? 'team-private-acceptance'
-        : privateTestRelease
-          ? 'private-test'
-          : 'origin-gui',
-      ...(privateFeatureRelease ? { baseCommit } : {}),
-      ...(teamPrivateAcceptance ? { deploymentBoundary: 'loopback-ssh-tunnel-only' } : {}),
+        : aHttpsTestEdge
+          ? 'a-https-test-edge'
+          : privateTestRelease
+            ? 'private-test'
+            : 'origin-gui',
+      ...(featureRelease ? { baseCommit } : {}),
+      ...(teamPrivateAcceptance
+        ? { deploymentBoundary: 'loopback-ssh-tunnel-only' }
+        : aHttpsTestEdge
+          ? {
+              deploymentBoundary: 'public-https-core-only',
+              hostname: 'cloud-test.sciforge.cn',
+              edgeCaddyImage: aHttpsTestEdgeImage,
+              ...edgeProfile
+            }
+          : {}),
       packageManager: {
         name: 'npm',
         lockfileVersion: lock.lockfileVersion
@@ -828,6 +1174,12 @@ export async function buildCollaborationServerBundle({
     })
     await assertBundleFileSet(stagingDirectory, [...checksumFilenames, 'SHA256SUMS'])
 
+    const publishingHead = await readRepositoryHead(root, runCommand)
+    if (publishingHead !== approvedCommit) {
+      throw new Error('The collaboration release HEAD changed while the bundle was being built.')
+    }
+    await assertCleanWorktree(root, runCommand, [stagingDirectory])
+
     if (destinationState === 'empty') await rmdir(destination)
     try {
       await rename(stagingDirectory, destination)
@@ -836,11 +1188,13 @@ export async function buildCollaborationServerBundle({
       throw error
     }
     published = true
-    log(teamPrivateAcceptance
-      ? `Created TEAM-PRIVATE acceptance collaboration bundle at ${destination}.`
-      : privateTestRelease
-        ? `Created TEST-ONLY private collaboration bundle at ${destination}.`
-        : `Created immutable collaboration release bundle at ${destination}.`)
+    log(aHttpsTestEdge
+      ? `Created A-ONLY HTTPS test edge collaboration bundle at ${destination}.`
+      : teamPrivateAcceptance
+        ? `Created TEAM-PRIVATE acceptance collaboration bundle at ${destination}.`
+        : privateTestRelease
+          ? `Created TEST-ONLY private collaboration bundle at ${destination}.`
+          : `Created immutable collaboration release bundle at ${destination}.`)
     return Object.freeze({
       commit: approvedCommit,
       manifest,
@@ -851,20 +1205,186 @@ export async function buildCollaborationServerBundle({
   }
 }
 
+export async function buildCollaborationServerBundleFromImmutableSnapshot({
+  arguments_,
+  createGuardToken = () => randomBytes(32).toString('hex'),
+  log = () => {},
+  repositoryRoot = defaultRepositoryRoot,
+  runCommand = defaultRunCommand
+} = {}) {
+  if (!arguments_ || typeof arguments_ !== 'object' || arguments_.help) {
+    throw new Error('Immutable snapshot release arguments are missing or invalid.')
+  }
+  const originalRepositoryRoot = resolve(repositoryRoot)
+  const head = await readRepositoryHead(originalRepositoryRoot, runCommand)
+  const approvedCommit = assertFullCommit(arguments_.commit ?? head)
+  if (approvedCommit !== head) {
+    throw new Error('The approved release commit must equal the currently checked out HEAD.')
+  }
+  await assertCleanWorktree(originalRepositoryRoot, runCommand)
+
+  const commonDirectoryResult = await runCommand({
+    command: gitCommand,
+    args: ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    cwd: originalRepositoryRoot
+  })
+  const gitCommonDirectoryPath = commonDirectoryResult.stdout.trim()
+  if (!isAbsolute(gitCommonDirectoryPath)) {
+    throw new Error('Git did not return an absolute common directory for the release repository.')
+  }
+  const gitCommonDirectory = resolve(gitCommonDirectoryPath)
+
+  const outputDirectory = resolve(
+    originalRepositoryRoot,
+    arguments_.outputDirectory ??
+      join('dist', `collaboration-server-bundle-${approvedCommit.slice(0, 12)}`)
+  )
+  const childArguments = createImmutableSnapshotChildArguments(
+    arguments_,
+    approvedCommit,
+    outputDirectory
+  )
+  const guardToken = createGuardToken()
+  if (typeof guardToken !== 'string' || !/^[0-9a-f]{64}$/u.test(guardToken)) {
+    throw new Error('The immutable snapshot guard generator returned an invalid token.')
+  }
+
+  const temporaryDirectory = await mkdtemp(
+    join(tmpdir(), 'sciforge-collaboration-bundle-worktree-')
+  )
+  const snapshotRepositoryRoot = join(temporaryDirectory, 'source')
+  const guardPath = join(temporaryDirectory, immutableSnapshotGuardFilename)
+  let worktreeAdded = false
+  try {
+    const temporaryDetails = await lstat(temporaryDirectory)
+    if (
+      !temporaryDetails.isDirectory() ||
+      temporaryDetails.isSymbolicLink() ||
+      (temporaryDetails.mode & 0o7777) !== 0o700
+    ) {
+      throw new Error('The immutable snapshot parent directory is unsafe.')
+    }
+
+    log(`Creating detached immutable release snapshot for ${approvedCommit}.`)
+    await runCommand({
+      command: gitCommand,
+      args: ['worktree', 'add', '--detach', snapshotRepositoryRoot, approvedCommit],
+      cwd: originalRepositoryRoot
+    })
+    worktreeAdded = true
+
+    const guard = {
+      schemaVersion: 1,
+      approvedCommit,
+      childArguments: [...childArguments],
+      gitCommonDirectory,
+      originalRepositoryRoot,
+      outputDirectory,
+      snapshotRepositoryRoot,
+      token: guardToken
+    }
+    await writeFile(guardPath, `${JSON.stringify(guard, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600
+    })
+
+    log('Installing locked release dependencies inside the immutable snapshot.')
+    await runCommand({
+      command: npmCommand,
+      args: ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+      cwd: snapshotRepositoryRoot,
+      inheritOutput: true
+    })
+
+    log('Building the collaboration release from the immutable snapshot.')
+    await runCommand({
+      command: process.execPath,
+      args: [
+        join(snapshotRepositoryRoot, 'scripts', basename(fileURLToPath(import.meta.url))),
+        ...childArguments
+      ],
+      cwd: snapshotRepositoryRoot,
+      environment: {
+        [IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]: guardPath,
+        [IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]: guardToken
+      },
+      inheritOutput: true
+    })
+    return Object.freeze({ approvedCommit, outputDirectory })
+  } finally {
+    try {
+      if (worktreeAdded) {
+        await runCommand({
+          command: gitCommand,
+          args: ['worktree', 'remove', '--force', snapshotRepositoryRoot],
+          cwd: originalRepositoryRoot
+        })
+      }
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true })
+    }
+  }
+}
+
+function immutableSnapshotGuardWasRequested(environment) {
+  return Object.values(IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT).some((name) => (
+    Object.hasOwn(environment ?? {}, name)
+  ))
+}
+
+export async function runCollaborationServerBundleCli({
+  argv = process.argv.slice(2),
+  createGuardToken,
+  environment = process.env,
+  log = () => {},
+  repositoryRoot = defaultRepositoryRoot,
+  runCommand = defaultRunCommand
+} = {}) {
+  const arguments_ = parseArguments(argv)
+  if (arguments_.help) return Object.freeze({ help: true })
+
+  if (immutableSnapshotGuardWasRequested(environment)) {
+    const context = await readImmutableSnapshotGuard({
+      argv,
+      environment,
+      repositoryRoot,
+      runCommand
+    })
+    await rm(context.guardPath)
+    if (environment === process.env) {
+      delete process.env[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]
+      delete process.env[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]
+    }
+    return await buildCollaborationServerBundle({
+      aHttpsTestEdge: context.arguments_.aHttpsTestEdge,
+      commit: context.approvedCommit,
+      log,
+      outputDirectory: context.outputDirectory,
+      privateTestRelease: context.arguments_.privateTestRelease,
+      repositoryRoot: context.snapshotRepositoryRoot,
+      runCommand,
+      teamPrivateAcceptance: context.arguments_.teamPrivateAcceptance
+    })
+  }
+
+  return await buildCollaborationServerBundleFromImmutableSnapshot({
+    arguments_,
+    createGuardToken,
+    log,
+    repositoryRoot,
+    runCommand
+  })
+}
+
 const invokedAsMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (invokedAsMain) {
   try {
-    const arguments_ = parseArguments(process.argv.slice(2))
-    if (arguments_.help) {
+    const result = await runCollaborationServerBundleCli({
+      log: (message) => process.stdout.write(`[collaboration-bundle] ${message}\n`)
+    })
+    if (result.help) {
       process.stdout.write(usage())
-    } else {
-      await buildCollaborationServerBundle({
-        commit: arguments_.commit,
-        log: (message) => process.stdout.write(`[collaboration-bundle] ${message}\n`),
-        outputDirectory: arguments_.outputDirectory,
-        privateTestRelease: arguments_.privateTestRelease,
-        teamPrivateAcceptance: arguments_.teamPrivateAcceptance
-      })
     }
   } catch (error) {
     process.stderr.write(`[collaboration-bundle] ${error instanceof Error ? error.message : 'Build failed.'}\n`)

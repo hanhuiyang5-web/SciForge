@@ -10,7 +10,7 @@ expected_commit="${1:-}"
 env_input="${2:-$PRIVATE_DEPLOY_DIR/.env}"
 [[ -n "$expected_commit" ]] || die "Usage: verify.sh <approved-40-character-contract-commit> [env-file]"
 
-for command in docker curl grep stat sha256sum tar awk sort; do
+for command in docker curl grep readlink stat sha256sum tar awk sort; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."

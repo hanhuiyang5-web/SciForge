@@ -11,7 +11,7 @@ env_input="${2:-$PRIVATE_DEPLOY_DIR/.env}"
 [[ -n "$dump_input" ]] \
   || die "Usage: verify-backup-restore.sh <backup.dump> [env-file]"
 
-for command in docker sha256sum stat awk od tr grep tar sort; do
+for command in docker sha256sum readlink stat awk od tr grep tar sort; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."

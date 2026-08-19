@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
@@ -8,11 +8,16 @@ import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
 
 import {
+  buildCollaborationServerBundleFromImmutableSnapshot,
   buildCollaborationServerBundle,
   COLLABORATION_RELEASE_PACKAGES,
+  IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT,
   assertFullCommit,
+  createImmutableSnapshotChildArguments,
   parseArguments,
   readNpmPackageArchiveFiles,
+  runCollaborationServerBundleCli,
+  validateImmutableSnapshotGuard,
   validateContractArtifactFiles,
   validatePackManifest
 } from './build-collaboration-server-bundle.mjs'
@@ -20,6 +25,74 @@ import {
 const approvedCommit = '063155e8d378693bfeba5a926e12b74eeafb3cf8'
 const privateTestCommit = 'a63155e8d378693bfeba5a926e12b74eeafb3cf8'
 const sourceRepositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const edgeAssetFixtures = Object.freeze({
+  edgeDockerignoreSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/.dockerignore'
+  }),
+  edgeBaseComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.yml'
+  }),
+  edgeRuntimeDockerfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Dockerfile.runtime'
+  }),
+  edgePostgresInitScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/postgres-init/001-create-application-role.sh'
+  }),
+  edgeBaseDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy.sh'
+  }),
+  edgeBaseVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify.sh'
+  }),
+  edgeBackupScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/backup.sh'
+  }),
+  edgeBackupRestoreVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-backup-restore.sh'
+  }),
+  edgePostgresRestartVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-postgres-restart.sh'
+  }),
+  edgePostgresV5VerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh'
+  }),
+  edgePostgresV5IntegrationScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/postgres-v5-integration.mjs'
+  }),
+  edgeCaddyfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-test-edge'
+  }),
+  edgeCommonScriptSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/scripts/common.sh'
+  }),
+  edgeComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-https-test-edge.yml'
+  }),
+  edgeDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy-a-https-test-edge.sh'
+  }),
+  edgeDisableScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/disable-a-https-test-edge.sh'
+  }),
+  edgeExternalVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge-external.sh'
+  }),
+  edgeVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge.sh'
+  })
+})
 
 function validFilesFor(packageName) {
   if (packageName === '@sciforge/collaboration-contracts') {
@@ -157,28 +230,46 @@ async function createRepository() {
       )
     }
   }
+  for (const { expectedMode, relativePath } of Object.values(edgeAssetFixtures)) {
+    const path = join(root, relativePath)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, `fixture:${relativePath}\n`)
+    if (expectedMode !== undefined) await chmod(path, expectedMode)
+  }
   return root
 }
 
 function createCommandHarness({
   dirty = false,
+  dirtyAfterInitialCheck = false,
   failPacking,
   headCommit = approvedCommit,
   isAncestor = () => true,
+  lateHeadCommit,
   originGuiCommit = approvedCommit,
   tamperContractArchive
 } = {}) {
   const calls = []
+  let headCheckCount = 0
+  let statusCheckCount = 0
   const runCommand = async ({ command, args, cwd }) => {
     calls.push({ command: basename(command), args: [...args], cwd })
     if (basename(command).startsWith('git')) {
       if (args[0] === 'rev-parse' && args[2] === 'HEAD^{commit}') {
-        return { stdout: `${headCommit}\n`, stderr: '' }
+        headCheckCount += 1
+        const currentHead = headCheckCount > 1 && lateHeadCommit !== undefined
+          ? lateHeadCommit
+          : headCommit
+        return { stdout: `${currentHead}\n`, stderr: '' }
       }
       if (args[0] === 'rev-parse' && args[2] === 'origin/gui^{commit}') {
         return { stdout: `${originGuiCommit}\n`, stderr: '' }
       }
-      if (args[0] === 'status') return { stdout: dirty ? '?? local-secret.env\n' : '', stderr: '' }
+      if (args[0] === 'status') {
+        statusCheckCount += 1
+        const isDirty = dirty || (dirtyAfterInitialCheck && statusCheckCount > 1)
+        return { stdout: isDirty ? '?? local-secret.env\n' : '', stderr: '' }
+      }
       if (args[0] === 'merge-base') {
         if (!isAncestor(args[2], args[3])) throw new Error('simulated non-ancestor')
         return { stdout: '', stderr: '' }
@@ -275,6 +366,7 @@ test('CLI requires a complete immutable commit argument', () => {
     '--commit', approvedCommit,
     '--output', 'release'
   ]), {
+    aHttpsTestEdge: false,
     help: false,
     commit: approvedCommit,
     outputDirectory: 'release',
@@ -282,14 +374,22 @@ test('CLI requires a complete immutable commit argument', () => {
     teamPrivateAcceptance: false
   })
   assert.deepEqual(parseArguments(['--private-test-release']), {
+    aHttpsTestEdge: false,
     help: false,
     privateTestRelease: true,
     teamPrivateAcceptance: false
   })
   assert.deepEqual(parseArguments(['--team-private-acceptance']), {
+    aHttpsTestEdge: false,
     help: false,
     privateTestRelease: false,
     teamPrivateAcceptance: true
+  })
+  assert.deepEqual(parseArguments(['--a-https-test-edge']), {
+    aHttpsTestEdge: true,
+    help: false,
+    privateTestRelease: false,
+    teamPrivateAcceptance: false
   })
   assert.throws(() => parseArguments([
     '--private-test-release', '--private-test-release'
@@ -298,10 +398,181 @@ test('CLI requires a complete immutable commit argument', () => {
     '--team-private-acceptance', '--team-private-acceptance'
   ]), /only be provided once/u)
   assert.throws(() => parseArguments([
+    '--a-https-test-edge', '--a-https-test-edge'
+  ]), /only be provided once/u)
+  assert.throws(() => parseArguments([
     '--private-test-release', '--team-private-acceptance'
+  ]), /mutually exclusive/u)
+  assert.throws(() => parseArguments([
+    '--private-test-release', '--a-https-test-edge'
+  ]), /mutually exclusive/u)
+  assert.throws(() => parseArguments([
+    '--team-private-acceptance', '--a-https-test-edge'
   ]), /mutually exclusive/u)
   assert.throws(() => parseArguments(['--output']), /Missing value/u)
   assert.throws(() => parseArguments(['--unknown']), /Unknown argument/u)
+})
+
+test('CLI help avoids snapshot work and a partial internal guard fails closed', async () => {
+  const unexpectedCommand = async () => {
+    throw new Error('No command should run for CLI help or an invalid guard.')
+  }
+  assert.deepEqual(await runCollaborationServerBundleCli({
+    argv: ['--help'],
+    environment: {},
+    runCommand: unexpectedCommand
+  }), { help: true })
+  await assert.rejects(runCollaborationServerBundleCli({
+    argv: ['--commit', approvedCommit],
+    environment: {
+      [IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]: 'a'.repeat(64)
+    },
+    runCommand: unexpectedCommand
+  }), /guard path is missing or invalid/u)
+})
+
+test('immutable snapshot child arguments preserve every mutually exclusive release mode', () => {
+  for (const flag of [
+    '--private-test-release',
+    '--team-private-acceptance',
+    '--a-https-test-edge'
+  ]) {
+    const arguments_ = parseArguments([flag])
+    assert.deepEqual(createImmutableSnapshotChildArguments(
+      arguments_,
+      approvedCommit,
+      '/absolute/release-output'
+    ), [
+      '--commit', approvedCommit,
+      '--output', '/absolute/release-output',
+      flag
+    ])
+  }
+})
+
+test('CLI builds from a guarded detached snapshot and preserves the selected release mode', async () => {
+  const repositoryRoot = await createRepository()
+  const guardToken = 'a'.repeat(64)
+  const calls = []
+  let guardPath
+  let guardedContext
+  const runCommand = async ({ command, args, cwd, environment, inheritOutput }) => {
+    calls.push({ command: basename(command), args: [...args], cwd, environment, inheritOutput })
+    if (basename(command).startsWith('git')) {
+      if (args[0] === 'rev-parse' && args.includes('HEAD^{commit}')) {
+        return { stdout: `${approvedCommit}\n`, stderr: '' }
+      }
+      if (args[0] === 'status') return { stdout: '', stderr: '' }
+      if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) {
+        return { stdout: `${join(repositoryRoot, '.git')}\n`, stderr: '' }
+      }
+      if (args[0] === 'worktree') return { stdout: '', stderr: '' }
+    }
+    if (basename(command).startsWith('npm') && args[0] === 'ci') {
+      return { stdout: '', stderr: '' }
+    }
+    if (command === process.execPath) {
+      guardPath = environment[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]
+      const guard = JSON.parse(await readFile(guardPath, 'utf8'))
+      guardedContext = validateImmutableSnapshotGuard({
+        argv: args.slice(1),
+        environment,
+        guard,
+        repositoryRoot: cwd
+      })
+      assert.throws(() => validateImmutableSnapshotGuard({
+        argv: args.slice(1),
+        environment: {
+          ...environment,
+          [IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]: 'b'.repeat(64)
+        },
+        guard,
+        repositoryRoot: cwd
+      }), /guard token is invalid/u)
+      return { stdout: '', stderr: '' }
+    }
+    throw new Error(`Unexpected immutable snapshot command: ${command} ${args.join(' ')}`)
+  }
+  try {
+    const result = await buildCollaborationServerBundleFromImmutableSnapshot({
+      arguments_: parseArguments([
+        '--commit', approvedCommit,
+        '--output', 'immutable-cli-output',
+        '--a-https-test-edge'
+      ]),
+      createGuardToken: () => guardToken,
+      repositoryRoot,
+      runCommand
+    })
+    const expectedOutput = join(repositoryRoot, 'immutable-cli-output')
+    assert.equal(result.approvedCommit, approvedCommit)
+    assert.equal(result.outputDirectory, expectedOutput)
+    assert.equal(guardedContext.approvedCommit, approvedCommit)
+    assert.equal(guardedContext.arguments_.aHttpsTestEdge, true)
+    assert.equal(guardedContext.outputDirectory, expectedOutput)
+    assert.deepEqual(calls.map(({ command, args }) => `${command}:${args[0]}`), [
+      'git:rev-parse',
+      'git:status',
+      'git:rev-parse',
+      'git:worktree',
+      `${basename(process.platform === 'win32' ? 'npm.cmd' : 'npm')}:ci`,
+      `${basename(process.execPath)}:${calls[5].args[0]}`,
+      'git:worktree'
+    ])
+    assert.deepEqual(calls[3].args.slice(0, 3), ['worktree', 'add', '--detach'])
+    assert.equal(calls[3].args.at(-1), approvedCommit)
+    assert.deepEqual(calls[4].args, ['ci', '--ignore-scripts', '--no-audit', '--no-fund'])
+    assert.equal(calls[4].inheritOutput, true)
+    assert.deepEqual(calls[5].args.slice(1), [
+      '--commit', approvedCommit,
+      '--output', expectedOutput,
+      '--a-https-test-edge'
+    ])
+    assert.equal(calls[5].inheritOutput, true)
+    assert.deepEqual(calls[6].args.slice(0, 3), ['worktree', 'remove', '--force'])
+    await assert.rejects(readFile(guardPath), /ENOENT/u)
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true })
+  }
+})
+
+test('CLI removes its detached snapshot when the guarded child build fails', async () => {
+  const repositoryRoot = await createRepository()
+  let guardPath
+  let removedSnapshot = false
+  const runCommand = async ({ command, args, environment }) => {
+    if (basename(command).startsWith('git')) {
+      if (args[0] === 'rev-parse' && args.includes('HEAD^{commit}')) {
+        return { stdout: `${approvedCommit}\n`, stderr: '' }
+      }
+      if (args[0] === 'status') return { stdout: '', stderr: '' }
+      if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) {
+        return { stdout: `${join(repositoryRoot, '.git')}\n`, stderr: '' }
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') removedSnapshot = true
+      if (args[0] === 'worktree') return { stdout: '', stderr: '' }
+    }
+    if (basename(command).startsWith('npm') && args[0] === 'ci') {
+      return { stdout: '', stderr: '' }
+    }
+    if (command === process.execPath) {
+      guardPath = environment[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.path]
+      throw new Error('simulated guarded child failure')
+    }
+    throw new Error(`Unexpected immutable snapshot command: ${command} ${args.join(' ')}`)
+  }
+  try {
+    await assert.rejects(buildCollaborationServerBundleFromImmutableSnapshot({
+      arguments_: parseArguments(['--commit', approvedCommit]),
+      createGuardToken: () => 'c'.repeat(64),
+      repositoryRoot,
+      runCommand
+    }), /simulated guarded child failure/u)
+    assert.equal(removedSnapshot, true)
+    await assert.rejects(readFile(guardPath), /ENOENT/u)
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true })
+  }
 })
 
 test('server archive accepts examples but rejects source, real env, secret, and log paths', () => {
@@ -468,6 +739,9 @@ test('builder emits only immutable release files and pins all official packages'
     assert.equal(manifest.contractCommit, approvedCommit)
     assert.equal(manifest.releaseMode, 'origin-gui')
     assert.equal(Object.hasOwn(manifest, 'baseCommit'), false)
+    for (const field of ['edgeCaddyImage', ...Object.keys(edgeAssetFixtures)]) {
+      assert.equal(Object.hasOwn(manifest, field), false)
+    }
     assert.equal(manifest.packages.length, 3)
     for (const packageEntry of manifest.packages) {
       assert.equal(packageEntry.version, '0.1.0')
@@ -512,6 +786,10 @@ test('builder emits only immutable release files and pins all official packages'
     const installCalls = harness.calls.filter(({ args }) => args[0] === 'install')
     assert.equal(installCalls.length, 1)
     assert.equal(installCalls[0].args.filter((argument) => argument === 'install').length, 1)
+    const statusCalls = harness.calls.filter(({ args }) => args[0] === 'status')
+    assert.equal(statusCalls.length, 2)
+    assert.equal(statusCalls[0].args.includes('--'), false)
+    assert.match(statusCalls[1].args.at(-1), /^:\(top,literal,exclude\)/u)
   } finally {
     await rm(repositoryRoot, { recursive: true, force: true })
   }
@@ -622,6 +900,76 @@ test('team private acceptance is explicit and records commit, base, mode, and tu
   }
 })
 
+test('A HTTPS test edge is explicit and freezes the public core-only hostname boundary', async () => {
+  const repositoryRoot = await createRepository()
+  const outputDirectory = join(repositoryRoot, 'a-https-test-edge')
+  const messages = []
+  const harness = createCommandHarness({
+    headCommit: privateTestCommit,
+    isAncestor: (ancestor, descendant) => (
+      ancestor === approvedCommit && descendant === privateTestCommit
+    ),
+    originGuiCommit: approvedCommit
+  })
+  try {
+    const result = await buildCollaborationServerBundle({
+      ...testBundleDependencies,
+      aHttpsTestEdge: true,
+      commit: privateTestCommit,
+      log: (message) => messages.push(message),
+      outputDirectory,
+      repositoryRoot,
+      runCommand: harness.runCommand
+    })
+    assert.equal(result.commit, privateTestCommit)
+    const manifest = JSON.parse(await readFile(join(outputDirectory, 'RELEASE_MANIFEST.json'), 'utf8'))
+    assert.equal(manifest.contractCommit, privateTestCommit)
+    assert.equal(manifest.baseCommit, approvedCommit)
+    assert.equal(manifest.releaseMode, 'a-https-test-edge')
+    assert.equal(manifest.deploymentBoundary, 'public-https-core-only')
+    assert.equal(manifest.hostname, 'cloud-test.sciforge.cn')
+    assert.equal(manifest.edgeCaddyImage,
+      'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a')
+    assert.equal(Object.keys(edgeAssetFixtures).length, 18)
+    for (const [field, { relativePath }] of Object.entries(edgeAssetFixtures)) {
+      const expectedDigest = createHash('sha256')
+        .update(await readFile(join(repositoryRoot, relativePath)))
+        .digest('hex')
+      assert.equal(manifest[field], expectedDigest)
+    }
+    assert.match(messages.join('\n'), /A-ONLY HTTPS TEST EDGE/u)
+    assert.match(messages.join('\n'), /not a product login or Provider deployment/u)
+    assert.deepEqual(harness.calls.find(({ args }) => args[0] === 'merge-base')?.args, [
+      'merge-base', '--is-ancestor', approvedCommit, privateTestCommit
+    ])
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true })
+  }
+})
+
+test('A HTTPS test edge accepts non-executable common.sh but requires deployment entrypoints at 0755', async () => {
+  const executableAssets = Object.values(edgeAssetFixtures).filter(({ expectedMode }) => (
+    expectedMode !== undefined
+  ))
+  assert.equal(executableAssets.length, 12)
+  for (const { relativePath } of executableAssets) {
+    const repositoryRoot = await createRepository()
+    try {
+      await chmod(join(repositoryRoot, relativePath), 0o750)
+      await assert.rejects(buildCollaborationServerBundle({
+        ...testBundleDependencies,
+        aHttpsTestEdge: true,
+        commit: approvedCommit,
+        outputDirectory: join(repositoryRoot, `unsafe-${basename(relativePath)}`),
+        repositoryRoot,
+        runCommand: createCommandHarness().runCommand
+      }), /must have mode 755/u)
+    } finally {
+      await rm(repositoryRoot, { recursive: true, force: true })
+    }
+  }
+})
+
 test('production and private test releases reject the opposite or missing ancestry', async () => {
   const repositoryRoot = await createRepository()
   try {
@@ -669,6 +1017,11 @@ test('production and private test releases reject the opposite or missing ancest
     }), /must equal the currently checked out HEAD/u)
 
     await assert.rejects(buildCollaborationServerBundle({
+      aHttpsTestEdge: 'true',
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /must be an explicit boolean/u)
+    await assert.rejects(buildCollaborationServerBundle({
       privateTestRelease: 'true',
       repositoryRoot,
       runCommand: createCommandHarness().runCommand
@@ -680,6 +1033,18 @@ test('production and private test releases reject the opposite or missing ancest
     }), /must be an explicit boolean/u)
     await assert.rejects(buildCollaborationServerBundle({
       privateTestRelease: true,
+      teamPrivateAcceptance: true,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /mutually exclusive/u)
+    await assert.rejects(buildCollaborationServerBundle({
+      aHttpsTestEdge: true,
+      privateTestRelease: true,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /mutually exclusive/u)
+    await assert.rejects(buildCollaborationServerBundle({
+      aHttpsTestEdge: true,
       teamPrivateAcceptance: true,
       repositoryRoot,
       runCommand: createCommandHarness().runCommand
@@ -734,5 +1099,45 @@ test('builder refuses dirty or non-empty targets and cleans failed staging direc
     await assert.rejects(readFile(join(failedOutput, 'RELEASE_MANIFEST.json')), /ENOENT/u)
   } finally {
     await rm(repositoryRoot, { recursive: true, force: true })
+  }
+})
+
+test('builder aborts publication when HEAD or worktree state changes during the build', async () => {
+  for (const { expectedError, harnessOptions, outputName } of [
+    {
+      expectedError: /HEAD changed while the bundle was being built/u,
+      harnessOptions: { lateHeadCommit: privateTestCommit },
+      outputName: 'changed-head'
+    },
+    {
+      expectedError: /clean worktree/u,
+      harnessOptions: { dirtyAfterInitialCheck: true },
+      outputName: 'changed-worktree'
+    }
+  ]) {
+    const repositoryRoot = await createRepository()
+    const outputDirectory = join(repositoryRoot, outputName)
+    const harness = createCommandHarness(harnessOptions)
+    try {
+      await assert.rejects(buildCollaborationServerBundle({
+        ...testBundleDependencies,
+        commit: approvedCommit,
+        outputDirectory,
+        repositoryRoot,
+        runCommand: harness.runCommand
+      }), expectedError)
+      assert.equal(harness.calls.filter(({ args }) => (
+        args[0] === 'rev-parse' && args[2] === 'HEAD^{commit}'
+      )).length, 2)
+      assert.deepEqual(
+        (await readdir(repositoryRoot)).filter((entry) => (
+          entry.startsWith('.collaboration-bundle-tmp-')
+        )),
+        []
+      )
+      await assert.rejects(readFile(join(outputDirectory, 'RELEASE_MANIFEST.json')), /ENOENT/u)
+    } finally {
+      await rm(repositoryRoot, { recursive: true, force: true })
+    }
   }
 })

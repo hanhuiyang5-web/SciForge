@@ -36,7 +36,7 @@ done
 [[ -n "$expected_commit" && -n "$env_input" && "$confirmation_seen" == true ]] \
   || die "Usage: verify-postgres-restart.sh <approved-40-character-contract-commit> <env-file> --confirm-postgres-restart [--core-only|--provider-zulip]"
 
-for command in docker curl grep stat sha256sum tar awk sort date mktemp chmod rm sleep; do
+for command in docker curl grep readlink stat sha256sum tar awk sort date mktemp chmod rm sleep; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
