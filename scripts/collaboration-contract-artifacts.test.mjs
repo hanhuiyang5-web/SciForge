@@ -5,13 +5,19 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import {
+  canonicalEnrollmentBytes,
   collaborationErrorSchema,
+  computeTaskCreateProposalDigest,
   inboxMessageSchema,
   portableResourceReferenceCarrierSchema,
   restEntitySchema,
   restRequestSchema,
   restResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+  TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR
+} from '../packages/collaboration-contracts/src/testing.ts'
 import {
   ARTIFACT_DIRECTORY,
   COMMIT_PLACEHOLDER,
@@ -45,7 +51,7 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   assert.equal(manifest.acceptance.businessEndToEnd.status, 'not-open')
   assert.equal(manifest.acceptance.identityProvider.status, 'not-selected')
   assert.equal(manifest.acceptance.formalProductTransport.status, 'not-selected')
-  assert.equal(manifest.packages['@sciforge/collaboration-contracts'], '0.1.0')
+  assert.equal(manifest.packages['@sciforge/collaboration-contracts'], '0.2.0')
   assert.equal(manifest.packages['@sciforge/domain-sdk'], '0.2.1')
   assert.equal(manifest.packages['@sciforge/domain-content-space'], '1.0.0')
   assert.equal(manifest.databaseSchemaVersion, 6)
@@ -62,6 +68,14 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
     'content-space.artifact-reference'
   ])
   assert.equal(manifest.portableResourceCarrier.openUrlRequired, false)
+  const algorithms = JSON.parse(files.get('algorithms.json'))
+  assert.equal(algorithms.deviceEnrollmentSigning.helperExport, 'canonicalEnrollmentBytes')
+  assert.equal(algorithms.deviceEnrollmentSigning.domain, 'SCIFORGE-DEVICE-ENROLLMENT-V1')
+  assert.deepEqual(algorithms.deviceEnrollmentSigning.fieldOrder,
+    ['domain', 'enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'])
+  assert.equal(algorithms.taskCreateProposalDigest.normalizeExport, 'normalizeTaskCreateProposal')
+  assert.equal(algorithms.taskCreateProposalDigest.digestExport, 'computeTaskCreateProposalDigest')
+  assert.equal(algorithms.taskCreateProposalDigest.algorithm, 'sha256-canonical-json-v1')
   assert.equal(manifest.files.length, files.size - 1)
   for (const entry of manifest.files) {
     const content = files.get(entry.path)
@@ -233,6 +247,7 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
     'idempotency-conflict',
     'execution-conflict',
     'confirmation-conflict',
+    'algorithm-vector',
     'portable-round-trip',
     'portable-rejection'
   ]))
@@ -252,6 +267,19 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
   assert.deepEqual(outOfOrder.expectations.serverCursorAtGap, { ackedSequence: 11, nextSequence: 12 })
   assert.equal(fixtures.find((fixture) => fixture.category === 'execution-conflict').contractStatus, 'current')
   assert.equal(fixtures.find((fixture) => fixture.category === 'confirmation-conflict').contractStatus, 'current')
+  const enrollmentVector = fixtures.find((fixture) => fixture.id === 'device-enrollment-signing-vector')
+  assert.deepEqual(enrollmentVector.expectations.facts, DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR.facts)
+  assert.equal(
+    Buffer.from(canonicalEnrollmentBytes(enrollmentVector.expectations.facts)).toString('base64url'),
+    enrollmentVector.expectations.canonicalBase64Url
+  )
+  assert.equal(enrollmentVector.expectations.signature, DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR.signature)
+  const proposalVector = fixtures.find((fixture) => fixture.id === 'task-create-proposal-digest-vector')
+  assert.deepEqual(proposalVector.expectations.proposal, TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR.proposal)
+  assert.equal(
+    computeTaskCreateProposalDigest(proposalVector.expectations.proposal),
+    proposalVector.expectations.digest
+  )
   const portableRoundTrips = fixtures.filter((fixture) => fixture.category === 'portable-round-trip')
   assert.equal(portableRoundTrips.length, 6)
   for (const fixture of portableRoundTrips) {

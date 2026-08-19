@@ -131,3 +131,13 @@
 - [x] 11.11 **A-MVP-011**：实现 ResourceRef `available/unavailable/revoked`（兼容既有 `invalidated` 终态）、安全 HTTPS 元数据、Task execution 绑定/read fencing 与失效资源拒绝测试；A 不上传正文或完整日志。
 - [x] 11.12 **A-MVP-012**：自动部署校验区分 health、PostgreSQL readiness、core-only 空 catalog 和 provider-enabled 独立诊断；文档与门禁禁止用 core-only ready 冒充 pairing/E2E 已开放。
 - [ ] 11.13 **真实联合 E2E（非 A-MVP-001～012 自动 conformance）**：待团队确认 Provider/Zulip/最新版 SciForge 具体方案后，由真实模块完成身份、Project、execution、Human、Resource 和结果往返；API fake/harness 不能冒充该证据。
+
+## 12. R0.1 Cloud 合同与 schema v6 发布跟进
+
+> 本节仅属于 A 的合同、Cloud Server、PostgreSQL、机器制品和 team-private 部署；不修改 B Runner、C identity 实现、Desktop UI 或 E Content Space。
+
+- [x] 12.1 在 `@sciforge/collaboration-contracts@0.2.0` 发布 client-safe `EnrollmentSigningFacts`、`canonicalEnrollmentBytes` 与固定 Ed25519 签名向量，Server 改为消费该公共 helper；合同 100/100 与 Server 聚焦 38/38 测试已验证。
+- [x] 12.2 发布 `normalizeTaskCreateProposal`、`computeTaskCreateProposalDigest` 和完整 Task proposal 固定向量，Server 与 B 的合同入口共享同一 helper；Server 全量测试已验证确认匹配与消费路径。
+- [ ] 12.3 生成包含公共算法说明和两个固定向量的机器制品，并通过 freshness、严格 schema、tarball 与 SHA-256 门禁。
+- [ ] 12.4 在隔离真实 PostgreSQL 上执行 portable artifact `resource.create → resource.get → E parser` 往返，覆盖 `openUrl=null`、digest 和最大边界。
+- [ ] 12.5 从最终 commit 独立生成 `team-private-acceptance` bundle，部署 loopback-only Cloud，迁移并实证 schema versions `1..6`、`healthz/readyz`、运行 commit/image 与脱敏 OIDC 配置；不得复用或改名 contract-consumption-only Release。

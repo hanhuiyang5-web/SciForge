@@ -1,20 +1,18 @@
 import { createPublicKey, randomBytes, verify } from 'node:crypto'
 
 import type { Ed25519PublicJwk } from '@sciforge/collaboration-contracts'
+import {
+  canonicalEnrollmentBytes,
+  type EnrollmentSigningFacts
+} from '@sciforge/collaboration-contracts/enrollment-signing'
 
 import { digestSecret } from './crypto.js'
 import { fail } from './errors.js'
 
-export type EnrollmentSigningFacts = Readonly<{
-  enrollmentId: string
-  nonce: string
-  userId: string
-  installationId: string
-  expiresAt: string
-}>
-
-const DEVICE_ENROLLMENT_DOMAIN = 'SCIFORGE-DEVICE-ENROLLMENT-V1'
 const BASE32_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+export { canonicalEnrollmentBytes }
+export type { EnrollmentSigningFacts }
 
 export function issueEnrollmentNonce(): string {
   return randomBytes(32).toString('base64url')
@@ -42,29 +40,18 @@ export function issueBindingCode(): string {
   return `SF-${encoded.slice(0, 8)}-${encoded.slice(8)}`
 }
 
-export function canonicalEnrollmentBytes(input: EnrollmentSigningFacts): Buffer {
-  const values = [
-    DEVICE_ENROLLMENT_DOMAIN,
-    input.enrollmentId,
-    input.nonce,
-    input.userId,
-    input.installationId,
-    input.expiresAt
-  ]
-  for (const value of values) {
-    if (!value || value.includes('\n') || value.includes('\r')) {
-      fail('validation_failed', 'Enrollment signing fields must be non-empty strings without line breaks.')
-    }
-  }
-  return Buffer.from(values.join('\n'), 'utf8')
-}
-
 export function verifyDeviceEnrollmentProof(input: Readonly<{
   facts: EnrollmentSigningFacts
   publicKeyJwk: Ed25519PublicJwk
   signature: string
 }>): void {
   const signature = decodeCanonicalBase64Url(input.signature, 64, 'Device signature')
+  let canonicalPayload: Uint8Array
+  try {
+    canonicalPayload = canonicalEnrollmentBytes(input.facts)
+  } catch {
+    return fail('validation_failed', 'The Device enrollment signing facts are invalid.')
+  }
   let publicKey: ReturnType<typeof createPublicKey>
   try {
     publicKey = createPublicKey({ key: input.publicKeyJwk, format: 'jwk' })
@@ -72,7 +59,7 @@ export function verifyDeviceEnrollmentProof(input: Readonly<{
     return fail('validation_failed', 'The Device public key is not a valid Ed25519 public JWK.')
   }
   if (publicKey.asymmetricKeyType !== 'ed25519' ||
-      !verify(null, canonicalEnrollmentBytes(input.facts), publicKey, signature)) {
+      !verify(null, canonicalPayload, publicKey, signature)) {
     fail('validation_failed', 'The Device enrollment proof is invalid.')
   }
 }

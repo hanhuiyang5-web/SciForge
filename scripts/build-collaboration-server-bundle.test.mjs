@@ -21,6 +21,10 @@ const approvedCommit = '063155e8d378693bfeba5a926e12b74eeafb3cf8'
 const privateTestCommit = 'a63155e8d378693bfeba5a926e12b74eeafb3cf8'
 const sourceRepositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
+function fixturePackageVersion(packageName) {
+  return packageName === '@sciforge/collaboration-contracts' ? '0.2.0' : '0.1.0'
+}
+
 function validFilesFor(packageName) {
   if (packageName === '@sciforge/domain-sdk') {
     return [
@@ -143,7 +147,7 @@ async function readOrCreatePackFile(packageDirectory, relativePath, packageName)
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
     if (relativePath === 'package.json') {
-      return Buffer.from(stringifyJson({ name: packageName, version: '0.1.0' }))
+      return Buffer.from(stringifyJson({ name: packageName, version: fixturePackageVersion(packageName) }))
     }
     return Buffer.from(`fixture:${packageName}:${relativePath}`)
   }
@@ -156,7 +160,7 @@ async function createRepository() {
     await mkdir(directory, { recursive: true })
     await writeFile(join(directory, 'package.json'), `${JSON.stringify({
       name: specification.name,
-      version: '0.1.0',
+      version: fixturePackageVersion(specification.name),
       ...(specification.name === '@sciforge/domain-sdk'
         ? { dependencies: { zod: '^4.4.3' } }
         : {})
@@ -247,7 +251,8 @@ function createCommandHarness({
       }
       if (failPacking === packageName) throw new Error('simulated pack failure')
       const destination = args[args.indexOf('--pack-destination') + 1]
-      const filename = `${packageName.replace('@sciforge/', 'sciforge-')}-0.1.0.tgz`
+      const version = fixturePackageVersion(packageName)
+      const filename = `${packageName.replace('@sciforge/', 'sciforge-')}-${version}.tgz`
       const relativePaths = validFilesFor(packageName)
       const archiveEntries = new Map()
       for (const relativePath of relativePaths) {
@@ -272,7 +277,7 @@ function createCommandHarness({
         stderr: '',
         stdout: JSON.stringify([{
           name: packageName,
-          version: '0.1.0',
+          version,
           filename,
           files: relativePaths.map((path) => ({ path }))
         }])
@@ -496,7 +501,7 @@ test('builder emits only immutable release files and pins all official packages'
       'SHA256SUMS',
       'package-lock.json',
       'package.json',
-      'sciforge-collaboration-contracts-0.1.0.tgz',
+      'sciforge-collaboration-contracts-0.2.0.tgz',
       'sciforge-collaboration-provider-zulip-0.1.0.tgz',
       'sciforge-collaboration-server-0.1.0.tgz',
       'sciforge-domain-sdk-0.1.0.tgz'
@@ -515,12 +520,12 @@ test('builder emits only immutable release files and pins all official packages'
     assert.equal(Object.hasOwn(manifest, 'baseCommit'), false)
     assert.equal(manifest.packages.length, 4)
     for (const packageEntry of manifest.packages) {
-      assert.equal(packageEntry.version, '0.1.0')
+      assert.equal(packageEntry.version, fixturePackageVersion(packageEntry.name))
       const archive = await readFile(join(outputDirectory, packageEntry.filename))
       assert.equal(packageEntry.sha256, createHash('sha256').update(archive).digest('hex'))
     }
 
-    const contractsArchive = join(outputDirectory, 'sciforge-collaboration-contracts-0.1.0.tgz')
+    const contractsArchive = join(outputDirectory, 'sciforge-collaboration-contracts-0.2.0.tgz')
     const packedContractFiles = await readNpmPackageArchiveFiles(contractsArchive)
     const packedArtifactFiles = new Map([...packedContractFiles]
       .filter(([path]) => path.startsWith('artifacts/protocol-1.0/'))

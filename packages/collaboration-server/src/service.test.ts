@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { computeTaskCreateProposalDigest } from '@sciforge/collaboration-contracts/task-proposal'
+
 import {
   fakeAgentActor,
   FakeCollaborationRepository,
@@ -2634,10 +2636,10 @@ describe('CollaborationService canonical transactions', () => {
       .find((message) => message.messageType === 'project.started')
     if (!projectStarted) throw new Error('Expected Project start message')
     const completionCriteria = ['The immutable proposal is executed exactly once']
-    const proposalDigest = stableDigest({
+    const proposalDigest = computeTaskCreateProposalDigest({
       projectId: project.projectId, assigneeAgentId: workerAgent.agent.agentId,
       title: 'Confirmed Task proposal', objective: 'Execute exactly the proposal approved by the Project owner.',
-      completionCriteria: completionCriteria.map((text) => ({ text })), dependencyTaskIds: [],
+      completionCriteria, dependencyTaskIds: [],
       requiredCapabilities: { capabilityIds: [], vpnAccessIds: [], slurmClusterIds: [], requiredResourceRefIds: [] },
       resourceRefIds: [], authorizationRequirements: []
     })

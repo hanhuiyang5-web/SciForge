@@ -24,7 +24,7 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "0.1.0",
+    "@sciforge/collaboration-contracts": "0.2.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

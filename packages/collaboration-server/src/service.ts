@@ -3,6 +3,10 @@ import {
   resourceRefCreateMetadataSchema,
   type ResourceRefCreateMetadata
 } from '@sciforge/collaboration-contracts'
+import {
+  computeTaskCreateProposalDigest,
+  normalizeTaskCreateProposal
+} from '@sciforge/collaboration-contracts/task-proposal'
 
 import { actorInboxRecipient, authorize, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
 import { digestSecret, issueSecret, newId, safeAuditMetadata, stableDigest } from './crypto.js'
@@ -1310,26 +1314,53 @@ export class CollaborationService {
     confirmationId?: string
     idempotencyKey: string
   }): Promise<StoredTask> {
-    assertText(input.title, 'title', 1, 200)
+    // Preserve the existing Cloud execution bound even though the public wire
+    // schema accepts the protocol-wide non-empty text maximum.
     assertText(input.objective, 'objective', 1, 20_000)
-    const criterionInputs = normalizeTaskCriteria(input.completionCriteria)
-    const dependencies = uniqueTexts(input.dependencyTaskIds, 1_000, 100)
-    const requiredCapabilities = input.requiredCapabilities ?? emptyWorkerRequirement()
-    const resourceRefIds = uniqueTexts(input.resourceRefIds ?? [], 1_000, 128)
-    const authorizationRequirements = normalizeAuthorizationRequirements(input.authorizationRequirements ?? [])
-    return this.commit(actor, 'task.create', input.idempotencyKey, { ...input, completionCriteria: criterionInputs,
-      dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds, authorizationRequirements }, async (tx, at) => {
-      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+    const proposalInput = {
+      projectId: input.projectId,
+      assigneeAgentId: input.assigneeAgentId,
+      title: input.title,
+      objective: input.objective,
+      completionCriteria: input.completionCriteria,
+      dependencyTaskIds: input.dependencyTaskIds,
+      requiredCapabilities: input.requiredCapabilities,
+      resourceRefIds: input.resourceRefIds,
+      authorizationRequirements: input.authorizationRequirements
+    }
+    let proposal: ReturnType<typeof normalizeTaskCreateProposal>
+    try {
+      proposal = normalizeTaskCreateProposal(proposalInput)
+    } catch {
+      fail('validation_failed', 'Task proposal fields do not satisfy the public normalization contract.')
+    }
+    const criterionInputs = proposal.completionCriteria.map((criterion) => ({ ...criterion }))
+    const dependencies = [...proposal.dependencyTaskIds]
+    const requiredCapabilities = {
+      ...proposal.requiredCapabilities,
+      ...(proposal.requiredCapabilities.osFamilies
+        ? { osFamilies: [...proposal.requiredCapabilities.osFamilies] }
+        : {}),
+      capabilityIds: [...proposal.requiredCapabilities.capabilityIds],
+      vpnAccessIds: [...proposal.requiredCapabilities.vpnAccessIds],
+      slurmClusterIds: [...proposal.requiredCapabilities.slurmClusterIds],
+      requiredResourceRefIds: [...proposal.requiredCapabilities.requiredResourceRefIds]
+    }
+    const resourceRefIds = [...proposal.resourceRefIds]
+    const authorizationRequirements = proposal.authorizationRequirements.map((requirement) => ({ ...requirement }))
+    for (const requirement of authorizationRequirements) validateProjectSummary(requirement.description)
+    return this.commit(actor, 'task.create', input.idempotencyKey, { ...input, ...proposal,
+      completionCriteria: criterionInputs, dependencyTaskIds: dependencies,
+      requiredCapabilities, resourceRefIds, authorizationRequirements }, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(proposal.projectId), 'Project')
       if (project.status !== 'active') fail('invalid_state_transition', 'Tasks may only be created for an active Project.')
       const lockedAgents = await lockAgentsForUpdate(tx, [
-        input.assigneeAgentId,
+        proposal.assigneeAgentId,
         ...(actor.kind === 'agent_device' ? [actor.agentId] : [])
       ])
-      const assignee = required(lockedAgents.get(input.assigneeAgentId) ?? null, 'Assignee Agent')
+      const assignee = required(lockedAgents.get(proposal.assigneeAgentId) ?? null, 'Assignee Agent')
       const actorMember = await tx.getProjectMember(project.projectId, actor.userId)
-      const proposalDigest = stableDigest({ projectId: input.projectId, assigneeAgentId: input.assigneeAgentId,
-        title: input.title, objective: input.objective, completionCriteria: criterionInputs,
-        dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds, authorizationRequirements })
+      const proposalDigest = computeTaskCreateProposalDigest(proposalInput)
       if (actor.kind === 'user') {
         authorize({ actor, operation: 'task_create', projectRole: actorMember?.role })
       } else {
@@ -1377,7 +1408,8 @@ export class CollaborationService {
       }
       const task: StoredTask = { taskId, projectId: project.projectId, executionId: newId('exe'),
         assigneeAgentId: assignee.agentId, assigneeUserId: assignee.ownerUserId,
-        createdByAgentId: project.coordinatorAgentId, title: input.title, objective: input.objective, completionCriteria: criteria,
+        createdByAgentId: project.coordinatorAgentId, title: proposal.title, objective: proposal.objective,
+        completionCriteria: criteria,
         dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds, authorizationRequirements,
         status: 'offered', retryCount: 0, maxRetries: project.budgets.maxTaskRetries,
         coordinationRound: project.coordinationRound, revision: 1, createdAt: at, updatedAt: at }
@@ -2531,60 +2563,6 @@ function uniqueTexts(values: string[], maximumItems: number, maximumLength: numb
   if (!Array.isArray(values) || values.length > maximumItems) fail('validation_failed', `At most ${maximumItems} values are allowed.`)
   const output = [...new Set(values)]
   for (const value of output) assertText(value, 'list item', 1, maximumLength)
-  return output
-}
-
-function normalizeTaskCriteria(
-  values: Array<string | { criterionId: string; text: string }>
-): Array<{ criterionId?: string; text: string }> {
-  if (!Array.isArray(values) || values.length < 1 || values.length > 100) {
-    fail('validation_failed', 'A Task requires between 1 and 100 acceptance criteria.')
-  }
-  const output = values.map((value) => {
-    if (typeof value === 'string') {
-      assertText(value, 'completion criterion', 1, 2_000)
-      return { text: value.trim() }
-    }
-    if (!value || typeof value !== 'object' ||
-        typeof value.criterionId !== 'string' || !/^cri_[A-Za-z0-9]{12,64}$/u.test(value.criterionId)) {
-      fail('validation_failed', 'Structured acceptance criteria require a valid criterionId.')
-    }
-    assertText(value.text, 'completion criterion', 1, 2_000)
-    return { criterionId: value.criterionId, text: value.text.trim() }
-  })
-  const explicitIds = output.flatMap((criterion) => criterion.criterionId ? [criterion.criterionId] : [])
-  if (new Set(explicitIds).size !== explicitIds.length) {
-    fail('validation_failed', 'Task acceptance criterion IDs must be unique.')
-  }
-  return output
-}
-
-function emptyWorkerRequirement(): StoredWorkerRequirement {
-  return { capabilityIds: [], vpnAccessIds: [], slurmClusterIds: [], requiredResourceRefIds: [] }
-}
-
-function normalizeAuthorizationRequirements(
-  values: StoredAuthorizationRequirement[]
-): StoredAuthorizationRequirement[] {
-  if (!Array.isArray(values) || values.length > 100) {
-    fail('validation_failed', 'At most 100 authorization requirements are allowed.')
-  }
-  const output = values.map((requirement) => {
-    if (!/^auth_[A-Za-z0-9]{12,64}$/u.test(requirement.id) ||
-        !['resource_access', 'data_egress', 'file_upload', 'local_action'].includes(requirement.kind)) {
-      fail('validation_failed', 'Authorization requirements require stable IDs and supported kinds.')
-    }
-    if (requirement.targetRefId !== undefined &&
-        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(requirement.targetRefId)) {
-      fail('validation_failed', 'Authorization target references must be bounded opaque IDs.')
-    }
-    assertText(requirement.description, 'authorization requirement description', 1, 500)
-    validateProjectSummary(requirement.description)
-    return { ...requirement, description: requirement.description.trim() }
-  })
-  if (new Set(output.map((requirement) => requirement.id)).size !== output.length) {
-    fail('validation_failed', 'Authorization requirement IDs must be unique.')
-  }
   return output
 }
 

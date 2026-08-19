@@ -16,7 +16,7 @@ describe('identity cryptography', () => {
   it('matches the dynamic fixture canonical payload and verifies Ed25519 possession', () => {
     const fixture = createDeviceFixture()
     const facts = fixture.enrollment
-    expect(canonicalEnrollmentBytes(facts)).toEqual(fixture.canonicalPayload)
+    expect(Buffer.from(canonicalEnrollmentBytes(facts))).toEqual(fixture.canonicalPayload)
     expect(() => verifyDeviceEnrollmentProof({
       facts,
       publicKeyJwk: fixture.deviceRequest.publicKeyJwk,
@@ -58,6 +58,11 @@ describe('identity cryptography', () => {
   it('refuses line breaks in every canonical signing field', () => {
     const fixture = createDeviceFixture()
     expect(() => canonicalEnrollmentBytes({ ...fixture.enrollment, installationId: 'bad\ninstallation' }))
-      .toThrowError(CollaborationServiceError)
+      .toThrow()
+    expect(() => verifyDeviceEnrollmentProof({
+      facts: { ...fixture.enrollment, installationId: 'bad\ninstallation' },
+      publicKeyJwk: fixture.deviceRequest.publicKeyJwk,
+      signature: fixture.deviceRequest.signature
+    })).toThrowError(CollaborationServiceError)
   })
 })

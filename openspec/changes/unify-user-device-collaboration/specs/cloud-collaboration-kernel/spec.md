@@ -47,6 +47,35 @@ Project SHALL 记录 member user IDs、唯一 active Coordinator Agent 和 revis
 - **THEN** 云端 SHALL 原子消费确认并创建正式 Task
 - **AND** 同一确认 SHALL NOT 被另一动作复用。
 
+### Requirement: Task proposal digest 使用唯一公共算法合同
+
+`@sciforge/collaboration-contracts` SHALL 提供 `normalizeTaskCreateProposal` 和
+`computeTaskCreateProposalDigest`，覆盖 `task.create` 中由 Owner 确认的全部业务字段。Cloud
+Server 与 B Coordinator SHALL 调用该公共 helper，SHALL NOT 各自维护独立 canonical JSON 或
+hash 实现。合同包 SHALL 发布完整 Task proposal、规范化结果、canonical JSON 与 SHA-256 digest
+固定向量，并在机器制品中标明算法和 helper 导出。
+
+#### Scenario: B 建议与 Cloud 确认使用相同 digest
+
+- **WHEN** B 与 Cloud 对同一完整 Task proposal 调用公共 helper
+- **THEN** 两侧 SHALL 得到相同的小写十六进制 SHA-256 digest
+- **AND** Cloud SHALL 只消费与该 digest 匹配的 immutable confirmation
+- **AND** 字段遗漏、规范化或 canonical JSON 漂移 SHALL 被固定向量门禁拒绝。
+
+### Requirement: Portable Resource carrier 经过真实 PostgreSQL 保真验证
+
+Cloud 的发布门禁 SHALL 在隔离的真实 PostgreSQL 上执行 `resource.create`、持久化、
+`resource.get`，随后使用 E Content Space 的公开 codec/parser 重验读回的 portable reference。
+该门禁 SHALL 覆盖 `openUrl=null`、artifact SHA-256 digest 与允许的最大字符串边界，且 SHALL
+NOT 在 A 内复制 E 的 parser。
+
+#### Scenario: 最大边界 artifact 经 PostgreSQL 往返
+
+- **WHEN** A 以 E codec 生成包含 artifact digest 的最大边界 portable reference 并创建 ResourceRef
+- **THEN** PostgreSQL 读回和 `resource.get` SHALL 保持该 envelope 无损
+- **AND** 公共 ResourceRef 的 `openUrl` SHALL 为 `null`
+- **AND** E parser SHALL 重建相同 provider、file、immutable version 和 digest。
+
 #### Scenario: 非 assignee 提交结果
 
 - **WHEN** 非当前 assignee Agent 提交 TaskResult
