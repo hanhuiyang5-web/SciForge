@@ -1,0 +1,58 @@
+name: A OIDC External Verifier
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/a-oidc-external-verifier.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-fixed-public-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIXED_COMMIT: bfe3498b79e73c52ac3acd66ccd7fc800e0f09e8
+      VERIFIER_SHA256: b3aa322778314a34b0c2c43670f9d871571ac6052a827408610d2985ea186fa9
+    steps:
+      - name: Check out the exact deployed commit
+        uses: actions/checkout@v4
+        with:
+          ref: bfe3498b79e73c52ac3acd66ccd7fc800e0f09e8
+          fetch-depth: 1
+
+      - name: Use the release Node.js major
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify and run the fixed external gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          verifier=deploy/collaboration-private/scripts/verify-a-https-oidc-test-external.sh
+          test -f "$verifier"
+          test ! -L "$verifier"
+          test "$(sha256sum "$verifier" | awk '{print $1}')" = "$VERIFIER_SHA256"
+          env \
+            -u CURL_CA_BUNDLE \
+            -u NODE_EXTRA_CA_CERTS \
+            -u NODE_OPTIONS \
+            -u NODE_PATH \
+            -u NODE_TLS_REJECT_UNAUTHORIZED \
+            -u OPENSSL_CONF \
+            -u OPENSSL_MODULES \
+            -u SSL_CERT_DIR \
+            -u SSL_CERT_FILE \
+            bash "$verifier" "$FIXED_COMMIT" "$VERIFIER_SHA256" \
+            | tee external-verifier-receipt.txt
+
+      - name: Preserve the non-secret verifier receipt
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a-oidc-external-verifier-bfe3498b
+          path: external-verifier-receipt.txt
+          if-no-files-found: error
+          retention-days: 30
