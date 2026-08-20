@@ -56,7 +56,12 @@ function encodedJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
 }
 
-function oidcBearer({ subject = 'a-identity-owner', authTimeOffset = -5, expiresIn = 600 } = {}) {
+function oidcBearer({
+  subject = 'a-identity-owner',
+  authTimeOffset = -5,
+  expiresIn = 600,
+  claims: claimOverrides = {}
+} = {}) {
   const nowSeconds = Math.floor(NOW.getTime() / 1_000)
   return [
     encodedJson({ alg: 'RS256', kid: 'a-identity-test-key', typ: 'JWT' }),
@@ -68,7 +73,8 @@ function oidcBearer({ subject = 'a-identity-owner', authTimeOffset = -5, expires
       exp: nowSeconds + expiresIn,
       nbf: nowSeconds - 10,
       iat: nowSeconds - 5,
-      auth_time: nowSeconds + authTimeOffset
+      auth_time: nowSeconds + authTimeOffset,
+      ...claimOverrides
     }),
     randomBytes(256).toString('base64url')
   ].join('.')
@@ -608,8 +614,8 @@ test('secure token reader accepts only an owned 0600 regular non-symlink file', 
 test('A-only public API harness completes identity, accepted Task result, Project completion, Device cascade, and optional Zulip fail-closed proof', async (context) => {
   const directory = await mkdtemp(join(tmpdir(), 'sciforge-a-identity-flow-'))
   context.after(() => rm(directory, { recursive: true, force: true }))
-  const initialBearer = oidcBearer({ authTimeOffset: -30 })
-  const revokeBearer = oidcBearer({ authTimeOffset: -5 })
+  const initialBearer = oidcBearer({ authTimeOffset: -30, claims: { nbf: undefined } })
+  const revokeBearer = oidcBearer({ authTimeOffset: -5, claims: { nbf: undefined } })
   const agentBearer = `agent_${randomBytes(32).toString('base64url')}`
   const bindingCode = `SF-${randomBytes(8).toString('hex').toUpperCase()}`
   const tokenFile = await secureTokenFile(directory, 'initial.jwt', initialBearer)
@@ -862,6 +868,13 @@ test('both OIDC token files and their lifetime, freshness, and principal are pre
     {
       name: 'malformed',
       revokeTokenFile: await secureTokenFile(directory, 'malformed.jwt', 'not-a-valid-jwt-token'),
+      code: 'oidc_token_rejected'
+    },
+    {
+      name: 'invalid-not-before',
+      revokeTokenFile: await secureTokenFile(directory, 'invalid-nbf.jwt', oidcBearer({
+        subject: 'a-owner', claims: { nbf: 'not-a-numeric-date' }
+      })),
       code: 'oidc_token_rejected'
     },
     {

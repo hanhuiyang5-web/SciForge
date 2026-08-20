@@ -163,7 +163,7 @@ curl --fail http://127.0.0.1:8787/console/
 
 ## OIDC、Device、Agent 与 Zulip binding 摘要
 
-User 只由配置 issuer 的 RS256 OIDC Access Token 建立。A 严格验证 Discovery/JWKS、`iss/aud/azp/sub/exp/nbf/iat/auth_time`，再以 `(issuer, sub)` 并发安全地 JIT 映射为稳定 `userId`；`GET /v1/me` 与 User command 使用同一 resolver。A 不保存原始 Token 或完整 claims，也不签发或接受旧 opaque User bearer。
+User 只由配置 issuer 的 RS256 OIDC Access Token 建立。A 严格验证 Discovery/JWKS、`iss/aud/azp/sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。随后 A 以 `(issuer, sub)` 并发安全地 JIT 映射为稳定 `userId`；`GET /v1/me` 与 User command 使用同一 resolver。A 不保存原始 Token 或完整 claims，也不签发或接受旧 opaque User bearer。
 
 已登录 User 先调用 `POST /v1/device-enrollments` 取得一次性 nonce，再用 Device Ed25519 私钥签名规范 enrollment bytes，并向 `POST /v1/devices` 提交签名、公开 JWK、`platform` 和 `capabilitySummary`。这些字段属于 Device；私钥不上传。随后 `agent.register` 只引用该 User 自己的 ACTIVE `deviceId` 来创建或确认 Agent 关联，不创建 Device、不消费 enrollment；Agent 的节点 `capabilities` 仍保留在 Agent，不与 Device 摘要合并。Agent bearer 只在成功注册时返回一次，必须立即写入本地 secret store；撤销 Device 会使其下 Agent credential 失效。
 

@@ -96,6 +96,28 @@ describe('OIDC RS256 access-token verifier', () => {
     })
   })
 
+  it('accepts a standards-compliant token without nbf and uses iat as its effective activation time', async () => {
+    const fixture = await openOidcFixture()
+    const verifier = verifierFor(fixture)
+    const issuedAt = NOW_SECONDS - 5
+    const token = fixture.mintToken({
+      now: NOW_SECONDS,
+      claims: {
+        nbf: undefined,
+        iat: issuedAt,
+        auth_time: issuedAt
+      }
+    })
+
+    await expect(verifier.verifyAccessToken(token)).resolves.toMatchObject({
+      issuer: fixture.issuer,
+      issuedAt,
+      notBefore: issuedAt,
+      expiresAt: NOW_SECONDS + 300,
+      authTime: issuedAt
+    })
+  })
+
   it('rejects exact issuer, audience, authorized-party, subject, and time claim violations', async () => {
     const fixture = await openOidcFixture()
     const verifier = verifierFor(fixture)
@@ -111,6 +133,7 @@ describe('OIDC RS256 access-token verifier', () => {
       { label: 'missing subject', claims: { sub: undefined }, code: 'oidc_claim_invalid' },
       { label: 'expired', claims: { exp: NOW_SECONDS }, code: 'oidc_token_expired' },
       { label: 'future not-before', claims: { nbf: NOW_SECONDS + 1 }, code: 'oidc_token_not_active' },
+      { label: 'string not-before', claims: { nbf: String(NOW_SECONDS - 1) }, code: 'oidc_claim_invalid' },
       { label: 'future issued-at', claims: { iat: NOW_SECONDS + 1 }, code: 'oidc_claim_invalid' },
       { label: 'future authentication time', claims: { auth_time: NOW_SECONDS + 1 }, code: 'oidc_claim_invalid' },
       { label: 'authentication after issuance', claims: {

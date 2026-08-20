@@ -438,8 +438,8 @@ function validateClaims(
   if (!options.allowedAuthorizedParties.includes(authorizedParty)) throw claimError()
 
   const expiresAt = numericDate(claims.exp)
-  const notBefore = numericDate(claims.nbf)
   const issuedAt = numericDate(claims.iat)
+  const notBefore = claims.nbf === undefined ? issuedAt : numericDate(claims.nbf)
   const authTime = numericDate(claims.auth_time)
   const latestAllowed = options.nowSeconds + options.clockToleranceSeconds
   if (expiresAt <= options.nowSeconds - options.clockToleranceSeconds) {

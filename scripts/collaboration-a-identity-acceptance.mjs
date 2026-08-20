@@ -316,8 +316,8 @@ function inspectOidcToken(token, nowSeconds, {
     fail('oidc_token_rejected')
   }
   const expiresAt = numericClaim(claims.exp)
-  const notBefore = numericClaim(claims.nbf)
   const issuedAt = numericClaim(claims.iat)
+  const notBefore = claims.nbf === undefined ? issuedAt : numericClaim(claims.nbf)
   const authTime = numericClaim(claims.auth_time)
   if (!Number.isSafeInteger(minimumRemainingSeconds) || minimumRemainingSeconds < 0 ||
       notBefore > nowSeconds || issuedAt > nowSeconds || expiresAt < nowSeconds + minimumRemainingSeconds ||

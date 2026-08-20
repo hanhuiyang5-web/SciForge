@@ -15,7 +15,7 @@
 ## 3. OIDC verification and User resolution
 
 - [x] 3.1 Implement bounded exact-issuer Discovery/JWKS fetching, caching, coalesced refresh, strict RS256/kid/JWK verification, and key rotation using Node crypto.
-- [x] 3.2 Implement strict iss/aud/azp/sub/exp/nbf/iat/auth_time claim validation, URL/time bounds, and redacted failure diagnostics.
+- [x] 3.2 Implement strict iss/aud/azp/sub/exp/iat/auth_time claim validation, optional standards-compliant `nbf` validation, URL/time bounds, and redacted failure diagnostics.
 - [x] 3.3 Add atomic `(issuer, subject)` JIT User resolution with a stable OIDC actor key, database uniqueness/transaction locking, Fake parity, and no email merge.
 - [x] 3.4 Make `/v1/me` and User commands share the OIDC resolver; reject legacy opaque User credentials and never fall back after JWT failure while preserving opaque Agent credentials.
 - [x] 3.5 Add dynamic OIDC/JWKS tests for valid identity, all negative claims/signature cases, same-email separation, concurrent first login, local User status, caching, rotation, and secret-free diagnostics.

@@ -45,7 +45,7 @@ The configured issuer is the only discovery root. The verifier fetches `<issuer>
 
 JWT header `alg` must equal `RS256`; `kid` is required and selects exactly one signing key. JWKS entries must be RSA signing keys compatible with RS256. Cache lifetime is bounded by configuration/HTTP cache metadata, concurrent refreshes are coalesced, and an unknown `kid` triggers at most one forced refresh per verification. Response/body sizes, key counts, redirects, and timeouts are bounded to prevent SSRF/resource amplification.
 
-Claims are strict: exact `iss`; `aud` string/array containing `sciforge-cloud-api`; `azp` in `sciforge-desktop|sciforge-web-mobile`; non-empty string `sub`; and finite integer `exp`, `nbf`, `iat`, `auth_time` with valid current-time relationships and a small configured skew. Raw JWTs, Authorization values, full claims, binding codes, nonces, signatures, and key material never enter errors, audit, or diagnostics.
+Claims are strict: exact `iss`; `aud` string/array containing `sciforge-cloud-api`; `azp` in `sciforge-desktop|sciforge-web-mobile`; non-empty string `sub`; and finite integer `exp`, `iat`, `auth_time` with valid current-time relationships and a small configured skew. The standards-optional `nbf` claim is validated as an integer NumericDate when present; when absent, `iat` is the token's effective activation time. This matches Keycloak 25+ access tokens without weakening a present `nbf`. Raw JWTs, Authorization values, full claims, binding codes, nonces, signatures, and key material never enter errors, audit, or diagnostics.
 
 ### 4. Make JIT resolution an atomic repository operation
 

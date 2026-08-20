@@ -402,7 +402,7 @@ external_sha="$(node -e '
 
 - `sciforge-keycloak_identity-edge` 是 local bridge，只有 Keycloak app endpoint；该 endpoint 在网络内的唯一上游别名为 `keycloak`、端口为 `8080`，Keycloak 数据库不加入该网络；
 - Keycloak 使用 production start、exact hostname `https://login-test.sciforge.cn`、`xforwarded` proxy headers 和只信任 A edge 的代理范围；
-- Discovery 的 `issuer` 精确为 `https://login-test.sciforge.cn/realms/SciForge`，JWKS 有 RSA/RS256 signing key；真实 Access Token 已确认 header 为 `alg=RS256` 且有 `kid`，claims 必须同时含有效的 `iss/sub/aud/azp/exp/nbf/iat/auth_time`，其中 `aud` 包含 `sciforge-cloud-api`、`azp=sciforge-desktop`。这里只确认 claim 名称与形状，不向 A 或聊天提供 Token 内容。
+- Discovery 的 `issuer` 精确为 `https://login-test.sciforge.cn/realms/SciForge`，JWKS 有 RSA/RS256 signing key；真实 Access Token 已确认 header 为 `alg=RS256` 且有 `kid`，claims 必须含有效的 `iss/sub/aud/azp/exp/iat/auth_time`，其中 `aud` 包含 `sciforge-cloud-api`、`azp=sciforge-desktop`。标准可选的 `nbf` 若存在必须是合法 NumericDate；缺失时 A 使用 `iat` 作为有效生效时间。这里只确认 claim 名称与形状，不向 A 或聊天提供 Token 内容。
 
 A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。它只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络。local verifier 要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
 

@@ -131,7 +131,7 @@ Authorization: Bearer <credential>
 
 `system` 是服务内部 actor，不属于公共调用方。凭据不得放在 URL、请求 JSON、日志或 ResourceRef 中。
 
-每个部署只配置一个精确 OIDC issuer。A 从该 issuer 的 Discovery/JWKS 按 `kid` 验证 RSA/RS256 签名，要求 `aud` 包含 `sciforge-cloud-api`、`azp` 为 `sciforge-desktop` 或 `sciforge-web-mobile`，并严格检查 `sub/exp/nbf/iat/auth_time`。首次成功认证以 `(issuer, sub)` 并发安全地 JIT 创建 User；相同 email 不合并。JWT 验证失败不会回退到旧 opaque User bearer。
+每个部署只配置一个精确 OIDC issuer。A 从该 issuer 的 Discovery/JWKS 按 `kid` 验证 RSA/RS256 签名，要求 `aud` 包含 `sciforge-cloud-api`、`azp` 为 `sciforge-desktop` 或 `sciforge-web-mobile`，并严格检查 `sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。首次成功认证以 `(issuer, sub)` 并发安全地 JIT 创建 User；相同 email 不合并。JWT 验证失败不会回退到旧 opaque User bearer。
 
 统一身份 REST 面如下；所有 User 路由都要求同一个 OIDC resolver，所有写请求的 `Idempotency-Key` 头必须与 body 完全一致：
 

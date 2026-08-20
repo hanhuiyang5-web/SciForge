@@ -26,7 +26,7 @@ A SHALL 为每个部署实例配置且只配置一个 OIDC issuer、预期 audie
 
 ### Requirement: User Access Token 必须经过严格 RS256 与 claims 验证
 
-A MUST 在解析 User Actor 前验证 JWT Header `alg` 恰为 `RS256`，按非空 `kid` 从受信 JWKS 选择 RSA 公钥并验证签名。A SHALL 验证 `iss` 精确匹配、`aud` 字符串或数组包含 `sciforge-cloud-api`、`azp` 恰为 `sciforge-desktop` 或 `sciforge-web-mobile`，并验证 `exp`、`nbf`、`iat`、`auth_time` 是具有合法时间语义的 NumericDate，`sub` 是非空字符串。任何一步失败 MUST 在建立 User Actor 之前终止请求。
+A MUST 在解析 User Actor 前验证 JWT Header `alg` 恰为 `RS256`，按非空 `kid` 从受信 JWKS 选择 RSA 公钥并验证签名。A SHALL 验证 `iss` 精确匹配、`aud` 字符串或数组包含 `sciforge-cloud-api`、`azp` 恰为 `sciforge-desktop` 或 `sciforge-web-mobile`，并验证 `exp`、`iat`、`auth_time` 是具有合法时间语义的 NumericDate，`sub` 是非空字符串。`nbf` MAY 缺失；缺失时 A SHALL 使用 `iat` 作为本次验证的有效生效时间，存在时 MUST 将其作为 NumericDate 严格验证。任何一步失败 MUST 在建立 User Actor 之前终止请求。
 
 #### Scenario: 有效 Desktop Access Token
 
@@ -48,9 +48,15 @@ A MUST 在解析 User Actor 前验证 JWT Header `alg` 恰为 `RS256`，按非�
 
 #### Scenario: 时间或 subject claims 不合法
 
-- **WHEN** Token 已过期、`nbf` 位于未来、`iat` 或 `auth_time` 位于未来、任一时间 claim 类型错误，或 `sub` 缺失、为空或类型错误
+- **WHEN** Token 已过期、存在的 `nbf` 位于未来或类型错误、`iat` 或 `auth_time` 位于未来或类型错误、必需时间 claim 缺失，或 `sub` 缺失、为空或类型错误
 - **THEN** A MUST 拒绝该 Token
 - **AND** SHALL NOT 执行 JIT User 查询或创建。
+
+#### Scenario: Keycloak Access Token 未携带可选 nbf
+
+- **WHEN** 一个通过其余全部验证的 Access Token 未携带 `nbf`
+- **THEN** A SHALL 使用已验证的 `iat` 作为有效生效时间继续验证
+- **AND** MUST NOT 因 `nbf` 缺失而拒绝该 Token或放宽 `iat`、`exp`、签名、issuer、audience 与 authorized-party 检查。
 
 ### Requirement: JWKS 缓存必须支持受控 key rotation
 
