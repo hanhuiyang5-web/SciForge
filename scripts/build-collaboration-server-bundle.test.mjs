@@ -26,6 +26,9 @@ import {
 const approvedCommit = '063155e8d378693bfeba5a926e12b74eeafb3cf8'
 const privateTestCommit = 'a63155e8d378693bfeba5a926e12b74eeafb3cf8'
 const sourceRepositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const identityAcceptanceHarnessFixture = Object.freeze({
+  relativePath: 'scripts/collaboration-a-identity-acceptance.mjs'
+})
 const edgeAssetFixtures = Object.freeze({
   edgeDockerignoreSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/.dockerignore'
@@ -92,6 +95,38 @@ const edgeAssetFixtures = Object.freeze({
   edgeVerifyScriptSha256: Object.freeze({
     expectedMode: 0o755,
     relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge.sh'
+  })
+})
+const identityEdgeAssetFixtures = Object.freeze({
+  ...Object.fromEntries(Object.entries(edgeAssetFixtures).filter(([field]) => ![
+    'edgeCaddyfileSha256',
+    'edgeComposeSha256',
+    'edgeDeployScriptSha256',
+    'edgeDisableScriptSha256',
+    'edgeExternalVerifyScriptSha256',
+    'edgeVerifyScriptSha256'
+  ].includes(field))),
+  identityEdgeCaddyfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-oidc-test'
+  }),
+  identityEdgeComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-https-oidc-test.yml'
+  }),
+  identityEdgeDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy-a-https-oidc-test.sh'
+  }),
+  identityEdgeDisableScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/disable-a-https-oidc-test.sh'
+  }),
+  identityEdgeExternalVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-oidc-test-external.sh'
+  }),
+  identityEdgeVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-oidc-test.sh'
   })
 })
 
@@ -231,7 +266,12 @@ async function createRepository() {
       )
     }
   }
-  for (const { expectedMode, relativePath } of Object.values(edgeAssetFixtures)) {
+  const releaseAssetFixtures = new Map([
+    ...Object.values(edgeAssetFixtures),
+    ...Object.values(identityEdgeAssetFixtures),
+    identityAcceptanceHarnessFixture
+  ].map((fixture) => [fixture.relativePath, fixture]))
+  for (const { expectedMode, relativePath } of releaseAssetFixtures.values()) {
     const path = join(root, relativePath)
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, `fixture:${relativePath}\n`)
@@ -367,6 +407,7 @@ test('CLI requires a complete immutable commit argument', () => {
     '--commit', approvedCommit,
     '--output', 'release'
   ]), {
+    aHttpsOidcTest: false,
     aHttpsTestEdge: false,
     help: false,
     commit: approvedCommit,
@@ -375,19 +416,29 @@ test('CLI requires a complete immutable commit argument', () => {
     teamPrivateAcceptance: false
   })
   assert.deepEqual(parseArguments(['--private-test-release']), {
+    aHttpsOidcTest: false,
     aHttpsTestEdge: false,
     help: false,
     privateTestRelease: true,
     teamPrivateAcceptance: false
   })
   assert.deepEqual(parseArguments(['--team-private-acceptance']), {
+    aHttpsOidcTest: false,
     aHttpsTestEdge: false,
     help: false,
     privateTestRelease: false,
     teamPrivateAcceptance: true
   })
   assert.deepEqual(parseArguments(['--a-https-test-edge']), {
+    aHttpsOidcTest: false,
     aHttpsTestEdge: true,
+    help: false,
+    privateTestRelease: false,
+    teamPrivateAcceptance: false
+  })
+  assert.deepEqual(parseArguments(['--a-https-oidc-test']), {
+    aHttpsOidcTest: true,
+    aHttpsTestEdge: false,
     help: false,
     privateTestRelease: false,
     teamPrivateAcceptance: false
@@ -402,6 +453,9 @@ test('CLI requires a complete immutable commit argument', () => {
     '--a-https-test-edge', '--a-https-test-edge'
   ]), /only be provided once/u)
   assert.throws(() => parseArguments([
+    '--a-https-oidc-test', '--a-https-oidc-test'
+  ]), /only be provided once/u)
+  assert.throws(() => parseArguments([
     '--private-test-release', '--team-private-acceptance'
   ]), /mutually exclusive/u)
   assert.throws(() => parseArguments([
@@ -409,6 +463,15 @@ test('CLI requires a complete immutable commit argument', () => {
   ]), /mutually exclusive/u)
   assert.throws(() => parseArguments([
     '--team-private-acceptance', '--a-https-test-edge'
+  ]), /mutually exclusive/u)
+  assert.throws(() => parseArguments([
+    '--a-https-test-edge', '--a-https-oidc-test'
+  ]), /mutually exclusive/u)
+  assert.throws(() => parseArguments([
+    '--private-test-release', '--a-https-oidc-test'
+  ]), /mutually exclusive/u)
+  assert.throws(() => parseArguments([
+    '--team-private-acceptance', '--a-https-oidc-test'
   ]), /mutually exclusive/u)
   assert.throws(() => parseArguments(['--output']), /Missing value/u)
   assert.throws(() => parseArguments(['--unknown']), /Unknown argument/u)
@@ -436,7 +499,8 @@ test('immutable snapshot child arguments preserve every mutually exclusive relea
   for (const flag of [
     '--private-test-release',
     '--team-private-acceptance',
-    '--a-https-test-edge'
+    '--a-https-test-edge',
+    '--a-https-oidc-test'
   ]) {
     const arguments_ = parseArguments([flag])
     assert.deepEqual(createImmutableSnapshotChildArguments(
@@ -963,6 +1027,152 @@ test('A HTTPS test edge is explicit and freezes the public core-only hostname bo
   }
 })
 
+test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary', async () => {
+  const repositoryRoot = await createRepository()
+  const outputDirectory = join(repositoryRoot, 'a-https-oidc-test')
+  const messages = []
+  const harness = createCommandHarness({
+    headCommit: privateTestCommit,
+    isAncestor: (ancestor, descendant) => (
+      ancestor === approvedCommit && descendant === privateTestCommit
+    ),
+    originGuiCommit: approvedCommit
+  })
+  try {
+    const result = await buildCollaborationServerBundle({
+      ...testBundleDependencies,
+      aHttpsOidcTest: true,
+      commit: privateTestCommit,
+      log: (message) => messages.push(message),
+      outputDirectory,
+      repositoryRoot,
+      runCommand: harness.runCommand
+    })
+    assert.equal(result.commit, privateTestCommit)
+    const manifest = JSON.parse(await readFile(join(outputDirectory, 'RELEASE_MANIFEST.json'), 'utf8'))
+    assert.equal(manifest.schemaVersion, 2)
+    assert.equal(manifest.contractCommit, privateTestCommit)
+    assert.equal(manifest.baseCommit, approvedCommit)
+    assert.equal(manifest.releaseMode, 'a-https-oidc-test')
+    assert.equal(manifest.deploymentBoundary, 'public-https-oidc-test')
+    assert.equal(manifest.hostname, 'cloud-test.sciforge.cn')
+    assert.equal(manifest.identityHostname, 'login-test.sciforge.cn')
+    assert.equal(manifest.oidcIssuer, 'https://login-test.sciforge.cn/realms/SciForge')
+    assert.equal(manifest.oidcAudience, 'sciforge-cloud-api')
+    assert.equal(manifest.oidcAuthorizedParties, 'sciforge-desktop,sciforge-web-mobile')
+    assert.equal(manifest.oidcAllowInsecureLoopback, false)
+    assert.equal(manifest.bindingConfirmMode, 'disabled')
+    assert.equal(manifest.providerMode, 'disabled')
+    assert.equal(manifest.identityEdgeNetwork, 'sciforge-keycloak_identity-edge')
+    assert.equal(manifest.identityAcceptanceHarnessSha256, createHash('sha256')
+      .update(await readFile(join(repositoryRoot, identityAcceptanceHarnessFixture.relativePath)))
+      .digest('hex'))
+    assert.equal(manifest.edgeCaddyImage,
+      'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a')
+    assert.equal(Object.keys(identityEdgeAssetFixtures).length, 18)
+    assert.deepEqual(Object.keys(manifest).sort(), [
+      'artifact',
+      'baseCommit',
+      'bindingConfirmMode',
+      'contractCommit',
+      'deploymentBoundary',
+      'edgeCaddyImage',
+      'hostname',
+      'identityEdgeNetwork',
+      'identityAcceptanceHarnessSha256',
+      'identityHostname',
+      'oidcAllowInsecureLoopback',
+      'oidcAudience',
+      'oidcAuthorizedParties',
+      'oidcIssuer',
+      'packageManager',
+      'packages',
+      'providerMode',
+      'releaseMode',
+      'schemaVersion',
+      ...Object.keys(identityEdgeAssetFixtures)
+    ].sort(), 'schema v2 must contain only the frozen OIDC release fields and asset digests')
+    for (const [field, { relativePath }] of Object.entries(identityEdgeAssetFixtures)) {
+      const expectedDigest = createHash('sha256')
+        .update(await readFile(join(repositoryRoot, relativePath)))
+        .digest('hex')
+      assert.equal(manifest[field], expectedDigest)
+    }
+    assert.equal(manifest.edgeCaddyfileSha256, undefined)
+    assert.equal((await readdir(outputDirectory)).some((entry) => (
+      entry.includes('identity-acceptance') || entry.endsWith('.test.mjs') || entry.includes('token')
+    )), false, 'the bundle contains only the harness digest, never harness/test/token files')
+    assert.match(messages.join('\n'), /A-ONLY HTTPS OIDC TEST/u)
+    assert.match(messages.join('\n'), /Provider and binding confirm stay disabled/u)
+    assert.deepEqual(harness.calls.find(({ args }) => args[0] === 'merge-base')?.args, [
+      'merge-base', '--is-ancestor', approvedCommit, privateTestCommit
+    ])
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true })
+  }
+})
+
+test('A HTTPS OIDC test fails closed when its identity acceptance harness is missing or unsafe', async () => {
+  for (const scenario of ['missing', 'symlink', 'group-writable']) {
+    const repositoryRoot = await createRepository()
+    const harnessPath = join(repositoryRoot, identityAcceptanceHarnessFixture.relativePath)
+    try {
+      if (scenario === 'missing') {
+        await rm(harnessPath)
+      } else if (scenario === 'symlink') {
+        const replacement = join(repositoryRoot, 'untrusted-identity-acceptance.mjs')
+        await writeFile(replacement, 'export {}\n')
+        await rm(harnessPath)
+        await symlink(replacement, harnessPath)
+      } else {
+        await chmod(harnessPath, 0o664)
+      }
+      await assert.rejects(buildCollaborationServerBundle({
+        ...testBundleDependencies,
+        aHttpsOidcTest: true,
+        commit: approvedCommit,
+        outputDirectory: join(repositoryRoot, `unsafe-harness-${scenario}`),
+        repositoryRoot,
+        runCommand: createCommandHarness().runCommand
+      }), scenario === 'missing'
+        ? /identity acceptance harness is missing/u
+        : /identity acceptance harness is unsafe/u)
+    } finally {
+      await rm(repositoryRoot, { recursive: true, force: true })
+    }
+  }
+})
+
+test('post-build identity acceptance harness tampering no longer matches the frozen manifest', async () => {
+  const repositoryRoot = await createRepository()
+  const outputDirectory = join(repositoryRoot, 'identity-harness-provenance')
+  const harnessPath = join(repositoryRoot, identityAcceptanceHarnessFixture.relativePath)
+  try {
+    await buildCollaborationServerBundle({
+      ...testBundleDependencies,
+      aHttpsOidcTest: true,
+      commit: approvedCommit,
+      outputDirectory,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    })
+    const manifest = JSON.parse(await readFile(join(outputDirectory, 'RELEASE_MANIFEST.json'), 'utf8'))
+    await writeFile(harnessPath, 'tampered identity acceptance harness\n')
+    const tamperedDigest = createHash('sha256').update(await readFile(harnessPath)).digest('hex')
+    assert.notEqual(tamperedDigest, manifest.identityAcceptanceHarnessSha256)
+    await assert.rejects(buildCollaborationServerBundle({
+      ...testBundleDependencies,
+      aHttpsOidcTest: true,
+      commit: approvedCommit,
+      outputDirectory: join(repositoryRoot, 'must-not-publish-tampered-harness'),
+      repositoryRoot,
+      runCommand: createCommandHarness({ dirty: true }).runCommand
+    }), /clean worktree/u)
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true })
+  }
+})
+
 test('A HTTPS test edge accepts non-executable common.sh but requires deployment entrypoints at 0755', async () => {
   const executableAssets = Object.values(edgeAssetFixtures).filter(({ expectedMode }) => (
     expectedMode !== undefined
@@ -977,6 +1187,29 @@ test('A HTTPS test edge accepts non-executable common.sh but requires deployment
         aHttpsTestEdge: true,
         commit: approvedCommit,
         outputDirectory: join(repositoryRoot, `unsafe-${basename(relativePath)}`),
+        repositoryRoot,
+        runCommand: createCommandHarness().runCommand
+      }), /must have mode 755/u)
+    } finally {
+      await rm(repositoryRoot, { recursive: true, force: true })
+    }
+  }
+})
+
+test('A HTTPS OIDC test requires every executable deployment asset at 0755', async () => {
+  const executableAssets = Object.values(identityEdgeAssetFixtures).filter(({ expectedMode }) => (
+    expectedMode !== undefined
+  ))
+  assert.ok(executableAssets.length > 0)
+  for (const { relativePath } of executableAssets) {
+    const repositoryRoot = await createRepository()
+    try {
+      await chmod(join(repositoryRoot, relativePath), 0o750)
+      await assert.rejects(buildCollaborationServerBundle({
+        ...testBundleDependencies,
+        aHttpsOidcTest: true,
+        commit: approvedCommit,
+        outputDirectory: join(repositoryRoot, `unsafe-oidc-${basename(relativePath)}`),
         repositoryRoot,
         runCommand: createCommandHarness().runCommand
       }), /must have mode 755/u)
@@ -1033,6 +1266,11 @@ test('production and private test releases reject the opposite or missing ancest
     }), /must equal the currently checked out HEAD/u)
 
     await assert.rejects(buildCollaborationServerBundle({
+      aHttpsOidcTest: 'true',
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /must be an explicit boolean/u)
+    await assert.rejects(buildCollaborationServerBundle({
       aHttpsTestEdge: 'true',
       repositoryRoot,
       runCommand: createCommandHarness().runCommand
@@ -1049,6 +1287,24 @@ test('production and private test releases reject the opposite or missing ancest
     }), /must be an explicit boolean/u)
     await assert.rejects(buildCollaborationServerBundle({
       privateTestRelease: true,
+      teamPrivateAcceptance: true,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /mutually exclusive/u)
+    await assert.rejects(buildCollaborationServerBundle({
+      aHttpsOidcTest: true,
+      aHttpsTestEdge: true,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /mutually exclusive/u)
+    await assert.rejects(buildCollaborationServerBundle({
+      aHttpsOidcTest: true,
+      privateTestRelease: true,
+      repositoryRoot,
+      runCommand: createCommandHarness().runCommand
+    }), /mutually exclusive/u)
+    await assert.rejects(buildCollaborationServerBundle({
+      aHttpsOidcTest: true,
       teamPrivateAcceptance: true,
       repositoryRoot,
       runCommand: createCommandHarness().runCommand

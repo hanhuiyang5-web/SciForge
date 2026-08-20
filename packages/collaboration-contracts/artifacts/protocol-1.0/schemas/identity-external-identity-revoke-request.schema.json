@@ -1,0 +1,36 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-external-identity-revoke-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "externalIdentityId": {
+      "pattern": "^xid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+      "type": "string"
+    },
+    "idempotencyKey": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^idem_[A-Za-z0-9._:-]+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "externalIdentityId",
+    "idempotencyKey"
+  ],
+  "title": "SciForge Collaboration identity-external-identity-revoke-request",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "request",
+        "method": "DELETE",
+        "path": "/v1/me/external-identities/{externalIdentityId}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-device-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "device": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilitySummary": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "deviceId": {
+          "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "displayName": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "installationId": {
+          "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "platform": {
+          "additionalProperties": false,
+          "properties": {
+            "appVersion": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "arch": {
+              "enum": [
+                "x64",
+                "arm64"
+              ],
+              "type": "string"
+            },
+            "os": {
+              "enum": [
+                "windows",
+                "macos",
+                "linux"
+              ],
+              "type": "string"
+            },
+            "osVersion": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "os",
+            "arch",
+            "appVersion"
+          ],
+          "type": "object"
+        },
+        "publicKeyJwk": {
+          "additionalProperties": false,
+          "properties": {
+            "alg": {
+              "const": "EdDSA",
+              "type": "string"
+            },
+            "crv": {
+              "const": "Ed25519",
+              "type": "string"
+            },
+            "kid": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            "kty": {
+              "const": "OKP",
+              "type": "string"
+            },
+            "use": {
+              "const": "sig",
+              "type": "string"
+            },
+            "x": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kty",
+            "crv",
+            "alg",
+            "use",
+            "kid",
+            "x"
+          ],
+          "type": "object"
+        },
+        "revision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "revokedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "device",
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "userId": {
+          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "type",
+        "deviceId",
+        "userId",
+        "installationId",
+        "displayName",
+        "platform",
+        "publicKeyJwk",
+        "capabilitySummary",
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "device"
+  ],
+  "title": "SciForge Collaboration identity-device-response",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "response",
+        "method": "POST",
+        "path": "/v1/devices"
+      },
+      {
+        "body": "response",
+        "method": "DELETE",
+        "path": "/v1/me/devices/{deviceId}"
+      }
+    ]
+  }
+}

@@ -16,7 +16,13 @@ for command in docker curl grep readlink stat sha256sum tar awk sort date; do
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 validate_release_bundle "$expected_commit"
+[[ "$RELEASE_MANIFEST_MODE" != a-https-test-edge \
+    && "$RELEASE_MANIFEST_MODE" != a-https-oidc-test ]] \
+  || die "A public HTTPS release cannot verify with a Provider overlay."
 prepare_compose_environment "$expected_commit" "$env_input"
+[[ -z "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" \
+    && -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" ]] \
+  || die "The private Provider verification forbids a browser origin or OIDC issuer."
 enable_zulip_provider_compose
 "${COMPOSE[@]}" config --quiet
 

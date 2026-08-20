@@ -57,7 +57,7 @@
 - [x] 8.2 Add the direct identity HTTP routes with strict body limits, matching idempotency header/body enforcement, canonical error envelopes, and service-actor isolation.
 - [x] 8.3 Expand log/trace/audit redaction tests for JWT, Authorization, claims, nonce, signature, binding code/digest, Bot secret, API key, and private JWK material.
 - [x] 8.4 Update A server/deployment/public API documentation and verification scripts to describe OIDC User → Device → Agent and User ↔ Zulip binding, remove anonymous bootstrap claims, and label fixture evidence as offline only.
-- [ ] 8.5 Update private Compose/release assets for schema 5 and configured test/production issuer while keeping the confirm route fail-closed until D authentication is frozen.
+- [x] 8.5 Update private Compose/release assets for schema 5 and configured test/production issuer while keeping the confirm route fail-closed until D authentication is frozen.
 
 ## 9. Verification and release
 

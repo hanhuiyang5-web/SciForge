@@ -9,12 +9,27 @@ import { z } from 'zod'
 
 import {
   STATE_TRANSITIONS,
+  canonicalEnrollmentBytes,
   collaborationErrorSchema,
   createCollaborationError,
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceEnrollmentCreateResponseSchema,
+  deviceListResponseSchema,
+  deviceResponseSchema,
+  deviceRevokeRequestSchema,
+  externalIdentityListResponseSchema,
+  externalIdentityResponseSchema,
+  externalIdentityRevokeRequestSchema,
   inboxMessageSchema,
+  meResponseSchema,
   restEntitySchema,
   restRequestSchema,
-  restResponseSchema
+  restResponseSchema,
+  zulipBindingBeginRequestSchema,
+  zulipBindingBeginResponseSchema,
+  zulipBindingConfirmRequestSchema,
+  zulipBindingConfirmResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
@@ -27,6 +42,24 @@ export const COMMIT_PLACEHOLDER = '__SCIFORGE_COLLABORATION_COMMIT__'
 const PROTOCOL_VERSION = '1.0'
 const JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema'
 const TEST_TIMESTAMP = '2026-08-15T08:00:00.000Z'
+const DEVICE_ENROLLMENT_SIGNING_VECTOR = Object.freeze({
+  input: Object.freeze({
+    enrollmentId: 'enr_golden_vector_0001',
+    nonce: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+    userId: 'usr_golden_vector_0001',
+    installationId: 'ins_golden_vector_0001',
+    expiresAt: '2026-08-20T12:34:56.000Z'
+  }),
+  publicKeyJwk: Object.freeze({
+    kty: 'OKP',
+    crv: 'Ed25519',
+    alg: 'EdDSA',
+    use: 'sig',
+    kid: 'device-enrollment-golden-v1',
+    x: '7zLU2WvPQ6D0wBtoRlxojzIQShMQyvReSahjO_Vew6s'
+  }),
+  signatureBase64url: 'LVDhbIQ3YpkxY1ALlyNCWUEJUQJNF5e8q1VY8lHRfvXEIYxH78Yg07EU4fXK6DRcTaNuxjFKMtsCiKuNrtxrAw'
+})
 const TEST_IDS = Object.freeze({
   userId: 'usr_User00000001',
   secondUserId: 'usr_User00000002',
@@ -39,6 +72,7 @@ const TEST_IDS = Object.freeze({
   criterionId: 'cri_Criterion0001',
   inboxMessageId: 'ibx_Inbox0000001',
   confirmationId: 'cnf_Confirm000001',
+  receiptId: 'rcp_CredRevoke001',
   traceId: 'trc_Trace00000001'
 })
 const projectFixture = Object.freeze({
@@ -234,6 +268,15 @@ function jsonSchemaDocument(name, schema, io) {
   }
 }
 
+function identityRestSchemaDocument(name, schema, io, bindings) {
+  return {
+    ...jsonSchemaDocument(name, schema, io),
+    'x-sciforge-http': {
+      bindings
+    }
+  }
+}
+
 function requestId(suffix) {
   return `req_${suffix.padEnd(12, '0')}`
 }
@@ -310,6 +353,37 @@ function fixture(id, category, documents, expectations, contractStatus = 'curren
     contractStatus,
     documents,
     expectations
+  }
+}
+
+function buildDeviceEnrollmentSigningFixture() {
+  const canonical = Buffer.from(canonicalEnrollmentBytes(DEVICE_ENROLLMENT_SIGNING_VECTOR.input))
+  return {
+    fixtureVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
+    contractCommit: COMMIT_PLACEHOLDER,
+    id: 'device-enrollment-signing-v1',
+    kind: 'device-enrollment-signing-vector',
+    contractStatus: 'current',
+    algorithm: 'Ed25519',
+    canonicalization: {
+      encoding: 'UTF-8',
+      domain: 'SCIFORGE-DEVICE-ENROLLMENT-V1',
+      fieldOrder: ['enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'],
+      separator: 'LF',
+      trailingLf: false
+    },
+    input: DEVICE_ENROLLMENT_SIGNING_VECTOR.input,
+    canonical: {
+      utf8: canonical.toString('utf8'),
+      base64url: canonical.toString('base64url'),
+      hex: canonical.toString('hex'),
+      byteLength: canonical.length
+    },
+    expected: {
+      publicKeyJwk: DEVICE_ENROLLMENT_SIGNING_VECTOR.publicKeyJwk,
+      signatureBase64url: DEVICE_ENROLLMENT_SIGNING_VECTOR.signatureBase64url
+    }
   }
 }
 
@@ -410,6 +484,44 @@ function buildFixtures() {
   })
   const confirmationError = errorResponse(mismatchedConfirmation, 'confirmation_mismatch',
     'The confirmation does not match this immutable action.', { confirmationId: TEST_IDS.confirmationId })
+
+  const revokeCurrentCredential = restRequestSchema.parse({
+    protocolVersion: PROTOCOL_VERSION,
+    requestId: requestId('revoke01'),
+    type: 'credential.revoke_current',
+    idempotencyKey: idempotencyKey('credential-revoke')
+  })
+  const credentialRevokedReceipt = restResponseSchema.parse({
+    protocolVersion: PROTOCOL_VERSION,
+    requestId: revokeCurrentCredential.requestId,
+    type: 'rest.receipt',
+    receipt: {
+      schemaVersion: 1,
+      type: 'operation.receipt',
+      receiptId: TEST_IDS.receiptId,
+      actor: {
+        actorType: 'agent',
+        userId: TEST_IDS.userId,
+        agentId: TEST_IDS.agentId,
+        assurance: 'strong'
+      },
+      idempotencyKey: revokeCurrentCredential.idempotencyKey,
+      requestHash: 'a'.repeat(64),
+      status: 'succeeded',
+      resultHash: 'b'.repeat(64),
+      createdAt: TEST_TIMESTAMP
+    }
+  })
+  const revokedCredentialProbe = restRequestSchema.parse({
+    protocolVersion: PROTOCOL_VERSION,
+    requestId: requestId('revoked02'),
+    type: 'inbox.pull',
+    recipientType: 'agent',
+    afterSequence: 0,
+    limit: 1
+  })
+  const revokedCredentialError = errorResponse(revokedCredentialProbe, 'credential_revoked',
+    'The bearer credential has expired or was revoked.')
 
   const ack13Before12 = restRequestSchema.parse({
     protocolVersion: PROTOCOL_VERSION,
@@ -520,6 +632,21 @@ function buildFixtures() {
       attemptedActionDigest: 'b'.repeat(64),
       expectedErrorCode: 'confirmation_mismatch',
       accepted: false
+    }),
+    fixture('credential-revoke-current', 'credential-revoke', [
+      document('revoke-request', 'command', revokeCurrentCredential),
+      document('success-receipt', 'response', credentialRevokedReceipt),
+      document('subsequent-authenticated-request', 'command', revokedCredentialProbe),
+      document('subsequent-response', 'response', revokedCredentialError)
+    ], {
+      actorType: 'agent',
+      revocationScope: 'current-bearer-only',
+      successReceiptStatus: 'succeeded',
+      subsequentAuthentication: 'same-revoked-agent-bearer',
+      subsequentUseAccepted: false,
+      subsequentUseErrorCode: 'credential_revoked',
+      oidcUserTokenRevoked: false,
+      credentialMaterialDisclosed: false
     })
   ]
 }
@@ -571,7 +698,65 @@ export function generateContractArtifactFiles(commitInput) {
     'schemas/responses.schema.json': jsonSchemaDocument('responses', restResponseSchema, 'output'),
     'schemas/inbox.schema.json': jsonSchemaDocument('inbox', inboxMessageSchema, 'output'),
     'schemas/entities.schema.json': jsonSchemaDocument('entities', restEntitySchema, 'output'),
-    'schemas/errors.schema.json': jsonSchemaDocument('errors', collaborationErrorSchema, 'output')
+    'schemas/errors.schema.json': jsonSchemaDocument('errors', collaborationErrorSchema, 'output'),
+    'schemas/identity-me-response.schema.json': identityRestSchemaDocument(
+      'identity-me-response', meResponseSchema, 'output',
+      [{ method: 'GET', path: '/v1/me', body: 'response' }]
+    ),
+    'schemas/identity-device-enrollment-create-request.schema.json': identityRestSchemaDocument(
+      'identity-device-enrollment-create-request', deviceEnrollmentCreateRequestSchema, 'input',
+      [{ method: 'POST', path: '/v1/device-enrollments', body: 'request' }]
+    ),
+    'schemas/identity-device-enrollment-create-response.schema.json': identityRestSchemaDocument(
+      'identity-device-enrollment-create-response', deviceEnrollmentCreateResponseSchema, 'output',
+      [{ method: 'POST', path: '/v1/device-enrollments', body: 'response' }]
+    ),
+    'schemas/identity-device-create-request.schema.json': identityRestSchemaDocument(
+      'identity-device-create-request', deviceCreateRequestSchema, 'input',
+      [{ method: 'POST', path: '/v1/devices', body: 'request' }]
+    ),
+    'schemas/identity-device-response.schema.json': identityRestSchemaDocument(
+      'identity-device-response', deviceResponseSchema, 'output', [
+        { method: 'POST', path: '/v1/devices', body: 'response' },
+        { method: 'DELETE', path: '/v1/me/devices/{deviceId}', body: 'response' }
+      ]
+    ),
+    'schemas/identity-device-list-response.schema.json': identityRestSchemaDocument(
+      'identity-device-list-response', deviceListResponseSchema, 'output',
+      [{ method: 'GET', path: '/v1/me/devices', body: 'response' }]
+    ),
+    'schemas/identity-device-revoke-request.schema.json': identityRestSchemaDocument(
+      'identity-device-revoke-request', deviceRevokeRequestSchema, 'input',
+      [{ method: 'DELETE', path: '/v1/me/devices/{deviceId}', body: 'request' }]
+    ),
+    'schemas/identity-zulip-binding-begin-request.schema.json': identityRestSchemaDocument(
+      'identity-zulip-binding-begin-request', zulipBindingBeginRequestSchema, 'input',
+      [{ method: 'POST', path: '/v1/integrations/zulip/bindings', body: 'request' }]
+    ),
+    'schemas/identity-zulip-binding-begin-response.schema.json': identityRestSchemaDocument(
+      'identity-zulip-binding-begin-response', zulipBindingBeginResponseSchema, 'output',
+      [{ method: 'POST', path: '/v1/integrations/zulip/bindings', body: 'response' }]
+    ),
+    'schemas/identity-zulip-binding-confirm-request.schema.json': identityRestSchemaDocument(
+      'identity-zulip-binding-confirm-request', zulipBindingConfirmRequestSchema, 'input',
+      [{ method: 'POST', path: '/v1/integrations/zulip/bindings/confirm', body: 'request' }]
+    ),
+    'schemas/identity-zulip-binding-confirm-response.schema.json': identityRestSchemaDocument(
+      'identity-zulip-binding-confirm-response', zulipBindingConfirmResponseSchema, 'output',
+      [{ method: 'POST', path: '/v1/integrations/zulip/bindings/confirm', body: 'response' }]
+    ),
+    'schemas/identity-external-identity-list-response.schema.json': identityRestSchemaDocument(
+      'identity-external-identity-list-response', externalIdentityListResponseSchema, 'output',
+      [{ method: 'GET', path: '/v1/me/external-identities', body: 'response' }]
+    ),
+    'schemas/identity-external-identity-revoke-request.schema.json': identityRestSchemaDocument(
+      'identity-external-identity-revoke-request', externalIdentityRevokeRequestSchema, 'input',
+      [{ method: 'DELETE', path: '/v1/me/external-identities/{externalIdentityId}', body: 'request' }]
+    ),
+    'schemas/identity-external-identity-response.schema.json': identityRestSchemaDocument(
+      'identity-external-identity-response', externalIdentityResponseSchema, 'output',
+      [{ method: 'DELETE', path: '/v1/me/external-identities/{externalIdentityId}', body: 'response' }]
+    )
   }
   const commandSchema = schemas['schemas/commands.schema.json']
   const permissionRows = flattenPermissionRows()
@@ -594,6 +779,8 @@ export function generateContractArtifactFiles(commitInput) {
   for (const value of buildFixtures()) {
     files.set(`fixtures/${value.id}.json`, stringify(injectCommit(value, commit)))
   }
+  const signingFixture = buildDeviceEnrollmentSigningFixture()
+  files.set(`fixtures/${signingFixture.id}.json`, stringify(injectCommit(signingFixture, commit)))
   const describedFiles = [...files.entries()].map(([path, content]) => ({
     path,
     sha256: sha256(content),
@@ -606,12 +793,12 @@ export function generateContractArtifactFiles(commitInput) {
     contractCommit: commit,
     commitInjectionPlaceholder: COMMIT_PLACEHOLDER,
     jsonSchemaDialect: JSON_SCHEMA_DIALECT,
-    source: 'packages/collaboration-contracts/src strict Zod exports',
+    source: 'packages/collaboration-contracts/src strict public exports',
     files: describedFiles,
     acceptance: {
       coreOnly: {
         status: 'available',
-        proves: ['schema-generation', 'fixture-validation', 'loopback-transport', 'healthz', 'readyz', 'provider-catalog-boundary', 'anonymous-error-boundary'],
+        proves: ['schema-generation', 'fixture-validation', 'device-enrollment-signing-vector', 'loopback-transport', 'healthz', 'readyz', 'provider-catalog-boundary', 'anonymous-error-boundary'],
         doesNotProve: ['pairing', 'agent-registration', 'project-task-business-loop', 'formal-product-end-to-end']
       },
       identityProvider: { status: 'not-selected' },

@@ -8,12 +8,16 @@ COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.yml"
 PROVIDER_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.provider-zulip.yml"
 A_HTTPS_TEST_EDGE_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-https-test-edge.yml"
 A_HTTPS_TEST_EDGE_CADDYFILE="$PRIVATE_DEPLOY_DIR/Caddyfile.a-https-test-edge"
+A_HTTPS_OIDC_TEST_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-https-oidc-test.yml"
+A_HTTPS_OIDC_TEST_CADDYFILE="$PRIVATE_DEPLOY_DIR/Caddyfile.a-https-oidc-test"
 BUNDLE_DIR="$PRIVATE_DEPLOY_DIR/bundle"
 RELEASE_EXPECTED_SCHEMA_VERSION=""
 RELEASE_EXPECTED_TABLES=""
 RELEASE_MANIFEST_MODE=""
 RELEASE_MANIFEST_HOSTNAME=""
 RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY=""
+RELEASE_MANIFEST_IDENTITY_HOSTNAME=""
+RELEASE_MANIFEST_OIDC_ISSUER=""
 A_HTTPS_TEST_EDGE_HOSTNAME=cloud-test.sciforge.cn
 A_HTTPS_TEST_EDGE_ORIGIN=https://cloud-test.sciforge.cn
 A_HTTPS_TEST_EDGE_PUBLIC_IPV4=47.76.230.118
@@ -25,6 +29,23 @@ A_HTTPS_TEST_EDGE_IMAGE_DIGEST=sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3
 A_HTTPS_TEST_EDGE_IMAGE="caddy:2.11.4-alpine@$A_HTTPS_TEST_EDGE_IMAGE_DIGEST"
 A_HTTPS_TEST_EDGE_IMAGE_ID=""
 A_HTTPS_TEST_EDGE_APP_CONTAINER_ID=""
+A_HTTPS_OIDC_TEST_HOSTNAME=cloud-test.sciforge.cn
+A_HTTPS_OIDC_TEST_ORIGIN=https://cloud-test.sciforge.cn
+A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME=login-test.sciforge.cn
+A_HTTPS_OIDC_TEST_ISSUER=https://login-test.sciforge.cn/realms/SciForge
+A_HTTPS_OIDC_TEST_AUDIENCE=sciforge-cloud-api
+A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile
+A_HTTPS_OIDC_TEST_PUBLIC_IPV4=47.76.230.118
+A_HTTPS_OIDC_TEST_APP_NETWORK=sciforge-collaboration-private_private-edge
+A_HTTPS_OIDC_TEST_DATABASE_NETWORK=sciforge-collaboration-private_database
+A_HTTPS_OIDC_TEST_IDENTITY_NETWORK=sciforge-keycloak_identity-edge
+A_HTTPS_OIDC_TEST_PROJECT=sciforge-collaboration-a-https-oidc-test
+A_HTTPS_OIDC_TEST_STATE_DIR=/srv/sciforge-collaboration/a-https-oidc-test
+A_HTTPS_OIDC_TEST_IMAGE_DIGEST=sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a
+A_HTTPS_OIDC_TEST_IMAGE="caddy:2.11.4-alpine@$A_HTTPS_OIDC_TEST_IMAGE_DIGEST"
+A_HTTPS_OIDC_TEST_IMAGE_ID=""
+A_HTTPS_OIDC_TEST_APP_CONTAINER_ID=""
+A_HTTPS_OIDC_TEST_KEYCLOAK_CONTAINER_ID=""
 PRIVATE_ROOT=/srv/sciforge-collaboration
 PRIVATE_ENV_DIR=/srv/sciforge-collaboration/secrets
 PRIVATE_ENV_FILE="$PRIVATE_ENV_DIR/collaboration.env"
@@ -346,6 +367,15 @@ validate_release_bundle() {
   local manifest_base_commit
   local manifest_deployment_boundary
   local manifest_hostname
+  local manifest_identity_hostname
+  local manifest_oidc_issuer
+  local manifest_oidc_audience
+  local manifest_oidc_authorized_parties
+  local manifest_oidc_allow_insecure_loopback
+  local manifest_binding_confirm_mode
+  local manifest_provider_mode
+  local manifest_identity_edge_network
+  local manifest_identity_acceptance_harness_sha256
   local manifest_edge_caddy_image
   local manifest_edge_backup_script_sha256
   local manifest_edge_backup_restore_verify_script_sha256
@@ -365,6 +395,12 @@ validate_release_bundle() {
   local manifest_edge_postgres_v5_verify_script_sha256
   local manifest_edge_runtime_dockerfile_sha256
   local manifest_edge_verify_script_sha256
+  local manifest_identity_edge_caddyfile_sha256
+  local manifest_identity_edge_compose_sha256
+  local manifest_identity_edge_deploy_script_sha256
+  local manifest_identity_edge_disable_script_sha256
+  local manifest_identity_edge_external_verify_script_sha256
+  local manifest_identity_edge_verify_script_sha256
   local manifest_filename
   local manifest_filenames=()
   local bundle_entries=()
@@ -393,7 +429,8 @@ validate_release_bundle() {
       || die "Bundle is missing regular $required_file."
   done
   preliminary_release_mode="$(awk -F'"' '$2 == "releaseMode" { print $4 }' "$manifest_file")"
-  if [[ "$preliminary_release_mode" == a-https-test-edge ]]; then
+  if [[ "$preliminary_release_mode" == a-https-test-edge \
+      || "$preliminary_release_mode" == a-https-oidc-test ]]; then
     validate_fixed_edge_release_path "$expected_commit"
   fi
   [[ "$(bundle_contract_commit)" == "$expected_commit" ]] \
@@ -426,6 +463,15 @@ validate_release_bundle() {
   manifest_base_commit="$(awk -F'"' '$2 == "baseCommit" { print $4 }' "$manifest_file")"
   manifest_deployment_boundary="$(awk -F'"' '$2 == "deploymentBoundary" { print $4 }' "$manifest_file")"
   manifest_hostname="$(awk -F'"' '$2 == "hostname" { print $4 }' "$manifest_file")"
+  manifest_identity_hostname="$(awk -F'"' '$2 == "identityHostname" { print $4 }' "$manifest_file")"
+  manifest_oidc_issuer="$(awk -F'"' '$2 == "oidcIssuer" { print $4 }' "$manifest_file")"
+  manifest_oidc_audience="$(awk -F'"' '$2 == "oidcAudience" { print $4 }' "$manifest_file")"
+  manifest_oidc_authorized_parties="$(awk -F'"' '$2 == "oidcAuthorizedParties" { print $4 }' "$manifest_file")"
+  manifest_oidc_allow_insecure_loopback="$(awk '$1 == "\"oidcAllowInsecureLoopback\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
+  manifest_binding_confirm_mode="$(awk -F'"' '$2 == "bindingConfirmMode" { print $4 }' "$manifest_file")"
+  manifest_provider_mode="$(awk -F'"' '$2 == "providerMode" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_network="$(awk -F'"' '$2 == "identityEdgeNetwork" { print $4 }' "$manifest_file")"
+  manifest_identity_acceptance_harness_sha256="$(awk -F'"' '$2 == "identityAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
   manifest_edge_caddy_image="$(awk -F'"' '$2 == "edgeCaddyImage" { print $4 }' "$manifest_file")"
   manifest_edge_backup_script_sha256="$(awk -F'"' '$2 == "edgeBackupScriptSha256" { print $4 }' "$manifest_file")"
   manifest_edge_backup_restore_verify_script_sha256="$(awk -F'"' '$2 == "edgeBackupRestoreVerifyScriptSha256" { print $4 }' "$manifest_file")"
@@ -445,31 +491,40 @@ validate_release_bundle() {
   manifest_edge_postgres_v5_verify_script_sha256="$(awk -F'"' '$2 == "edgePostgresV5VerifyScriptSha256" { print $4 }' "$manifest_file")"
   manifest_edge_runtime_dockerfile_sha256="$(awk -F'"' '$2 == "edgeRuntimeDockerfileSha256" { print $4 }' "$manifest_file")"
   manifest_edge_verify_script_sha256="$(awk -F'"' '$2 == "edgeVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_caddyfile_sha256="$(awk -F'"' '$2 == "identityEdgeCaddyfileSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_compose_sha256="$(awk -F'"' '$2 == "identityEdgeComposeSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_deploy_script_sha256="$(awk -F'"' '$2 == "identityEdgeDeployScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_disable_script_sha256="$(awk -F'"' '$2 == "identityEdgeDisableScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_external_verify_script_sha256="$(awk -F'"' '$2 == "identityEdgeExternalVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_identity_edge_verify_script_sha256="$(awk -F'"' '$2 == "identityEdgeVerifyScriptSha256" { print $4 }' "$manifest_file")"
   mapfile -t manifest_filenames < <(awk -F'"' '$2 == "filename" { print $4 }' "$manifest_file")
-  [[ "$manifest_schema_version" == 1 \
-      && "$manifest_artifact" == sciforge-collaboration-server-bundle \
+  [[ "$manifest_artifact" == sciforge-collaboration-server-bundle \
       && "$manifest_commit" == "$expected_commit" ]] \
     || die "RELEASE_MANIFEST.json metadata does not match the approved release."
   case "$manifest_release_mode" in
     origin-gui)
-      [[ -z "$manifest_base_commit" && -z "$manifest_deployment_boundary" \
+      [[ "$manifest_schema_version" == 1 \
+          && -z "$manifest_base_commit" && -z "$manifest_deployment_boundary" \
           && -z "$manifest_hostname" ]] \
         || die "origin-gui manifest must not carry private-release metadata."
       ;;
     private-test)
       validate_commit "$manifest_base_commit"
-      [[ -z "$manifest_deployment_boundary" && -z "$manifest_hostname" ]] \
+      [[ "$manifest_schema_version" == 1 \
+          && -z "$manifest_deployment_boundary" && -z "$manifest_hostname" ]] \
         || die "private-test manifest contains an unexpected deployment boundary."
       ;;
     team-private-acceptance)
       validate_commit "$manifest_base_commit"
-      [[ "$manifest_deployment_boundary" == loopback-ssh-tunnel-only \
+      [[ "$manifest_schema_version" == 1 \
+          && "$manifest_deployment_boundary" == loopback-ssh-tunnel-only \
           && -z "$manifest_hostname" ]] \
         || die "Team private acceptance must retain the loopback/SSH-tunnel boundary."
       ;;
     a-https-test-edge)
       validate_commit "$manifest_base_commit"
-      [[ "$manifest_deployment_boundary" == public-https-core-only \
+      [[ "$manifest_schema_version" == 1 \
+          && "$manifest_deployment_boundary" == public-https-core-only \
           && "$manifest_hostname" == "$A_HTTPS_TEST_EDGE_HOSTNAME" \
           && "$manifest_edge_caddy_image" == "$A_HTTPS_TEST_EDGE_IMAGE" ]] \
         || die "A HTTPS test edge manifest must retain its exact core-only hostname boundary."
@@ -509,6 +564,59 @@ validate_release_bundle() {
         "$manifest_edge_external_verify_script_sha256" true
       validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-a-https-test-edge.sh" \
         "$manifest_edge_verify_script_sha256" true
+      ;;
+    a-https-oidc-test)
+      validate_commit "$manifest_base_commit"
+      [[ "$manifest_schema_version" == 2 \
+          && "$manifest_deployment_boundary" == public-https-oidc-test \
+          && "$manifest_hostname" == "$A_HTTPS_OIDC_TEST_HOSTNAME" \
+          && "$manifest_identity_hostname" == "$A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME" \
+          && "$manifest_oidc_issuer" == "$A_HTTPS_OIDC_TEST_ISSUER" \
+          && "$manifest_oidc_audience" == "$A_HTTPS_OIDC_TEST_AUDIENCE" \
+          && "$manifest_oidc_authorized_parties" == "$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES" \
+          && "$manifest_oidc_allow_insecure_loopback" == false \
+          && "$manifest_binding_confirm_mode" == disabled \
+          && "$manifest_provider_mode" == disabled \
+          && "$manifest_identity_edge_network" == "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" \
+          && "$manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_edge_caddy_image" == "$A_HTTPS_OIDC_TEST_IMAGE" ]] \
+        || die "A HTTPS OIDC test manifest must retain its exact dual-SNI identity boundary."
+      validate_fixed_edge_asset "$A_HTTPS_OIDC_TEST_CADDYFILE" \
+        "$manifest_identity_edge_caddyfile_sha256"
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/common.sh" \
+        "$manifest_edge_common_script_sha256"
+      validate_fixed_edge_asset "$A_HTTPS_OIDC_TEST_COMPOSE_FILE" \
+        "$manifest_identity_edge_compose_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/.dockerignore" \
+        "$manifest_edge_dockerignore_sha256"
+      validate_fixed_edge_asset "$COMPOSE_FILE" \
+        "$manifest_edge_base_compose_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/Dockerfile.runtime" \
+        "$manifest_edge_runtime_dockerfile_sha256"
+      validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/postgres-init/001-create-application-role.sh" \
+        "$manifest_edge_postgres_init_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/deploy.sh" \
+        "$manifest_edge_base_deploy_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify.sh" \
+        "$manifest_edge_base_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/backup.sh" \
+        "$manifest_edge_backup_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-backup-restore.sh" \
+        "$manifest_edge_backup_restore_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-postgres-restart.sh" \
+        "$manifest_edge_postgres_restart_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-postgres-v5-integration.sh" \
+        "$manifest_edge_postgres_v5_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/postgres-v5-integration.mjs" \
+        "$manifest_edge_postgres_v5_integration_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/deploy-a-https-oidc-test.sh" \
+        "$manifest_identity_edge_deploy_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/disable-a-https-oidc-test.sh" \
+        "$manifest_identity_edge_disable_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-a-https-oidc-test-external.sh" \
+        "$manifest_identity_edge_external_verify_script_sha256" true
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-a-https-oidc-test.sh" \
+        "$manifest_identity_edge_verify_script_sha256" true
       ;;
     *) die "RELEASE_MANIFEST.json contains an unsupported release mode." ;;
   esac
@@ -566,6 +674,8 @@ validate_release_bundle() {
   RELEASE_MANIFEST_MODE="$manifest_release_mode"
   RELEASE_MANIFEST_HOSTNAME="$manifest_hostname"
   RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY="$manifest_deployment_boundary"
+  RELEASE_MANIFEST_IDENTITY_HOSTNAME="$manifest_identity_hostname"
+  RELEASE_MANIFEST_OIDC_ISSUER="$manifest_oidc_issuer"
   derive_release_schema_truth
 }
 
@@ -577,6 +687,18 @@ validate_a_https_test_edge_bundle() {
       && "$RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY" == public-https-core-only \
       && "$RELEASE_MANIFEST_HOSTNAME" == "$A_HTTPS_TEST_EDGE_HOSTNAME" ]] \
     || die "The release bundle is not approved for the A HTTPS test edge."
+}
+
+validate_a_https_oidc_test_bundle() {
+  local expected_commit="$1"
+
+  validate_release_bundle "$expected_commit"
+  [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test \
+      && "$RELEASE_MANIFEST_DEPLOYMENT_BOUNDARY" == public-https-oidc-test \
+      && "$RELEASE_MANIFEST_HOSTNAME" == "$A_HTTPS_OIDC_TEST_HOSTNAME" \
+      && "$RELEASE_MANIFEST_IDENTITY_HOSTNAME" == "$A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME" \
+      && "$RELEASE_MANIFEST_OIDC_ISSUER" == "$A_HTTPS_OIDC_TEST_ISSUER" ]] \
+    || die "The release bundle is not approved for the A HTTPS OIDC test."
 }
 
 derive_release_schema_truth() {
@@ -695,6 +817,7 @@ prepare_compose_environment() {
   local app_memory
   local app_pids
   local compose_project_name
+  local deployment_mode
   local edge_cpus
   local edge_memory
   local edge_pids
@@ -735,6 +858,10 @@ prepare_compose_environment() {
   oidc_authorized_parties="${oidc_authorized_parties:-sciforge-desktop,sciforge-web-mobile}"
   oidc_allow_insecure_loopback="$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK optional)"
   oidc_allow_insecure_loopback="${oidc_allow_insecure_loopback:-false}"
+  deployment_mode=core-only-private
+  if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+    deployment_mode=oidc-test-private
+  fi
   postgres_cpus="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_CPUS 1.5)"
   postgres_memory="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_MEMORY 2g)"
   postgres_pids="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_PIDS 256)"
@@ -760,6 +887,7 @@ prepare_compose_environment() {
   export SCIFORGE_COLLABORATION_OIDC_AUDIENCE="$oidc_audience"
   export SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES="$oidc_authorized_parties"
   export SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK="$oidc_allow_insecure_loopback"
+  export SCIFORGE_COLLAB_DEPLOYMENT_MODE="$deployment_mode"
   export SCIFORGE_COLLAB_POSTGRES_CPUS="$postgres_cpus"
   export SCIFORGE_COLLAB_POSTGRES_MEMORY="$postgres_memory"
   export SCIFORGE_COLLAB_POSTGRES_PIDS="$postgres_pids"
@@ -808,6 +936,43 @@ prepare_a_https_test_edge_environment() {
   export SCIFORGE_A_HTTPS_TEST_EDGE_STATE_DIR="$A_HTTPS_TEST_EDGE_STATE_DIR"
   EDGE_COMPOSE=(docker compose --project-name sciforge-collaboration-a-https-test-edge \
     --env-file "$ENV_FILE" -f "$A_HTTPS_TEST_EDGE_COMPOSE_FILE")
+}
+
+prepare_a_https_oidc_test_environment() {
+  local expected_commit="$1"
+  local env_input="$2"
+  local configured_ipv4
+  local configured_state_dir
+
+  prepare_compose_environment "$expected_commit" "$env_input"
+  [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]] \
+    || die "Only the explicit A HTTPS OIDC test release may configure the test issuer."
+  [[ "$SCIFORGE_COLLAB_HOST_PORT" == 8787 ]] \
+    || die "The A HTTPS OIDC test requires the app to remain on 127.0.0.1:8787."
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_OIDC_TEST_ORIGIN" ]] \
+    || die "The A HTTPS OIDC test requires the one exact cloud-test HTTPS origin."
+  [[ "$SCIFORGE_COLLABORATION_OIDC_ISSUER" == "$A_HTTPS_OIDC_TEST_ISSUER" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUDIENCE" == "$A_HTTPS_OIDC_TEST_AUDIENCE" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES" == "$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false ]] \
+    || die "The A HTTPS OIDC test requires its exact issuer, audience, authorized parties, and secure transport."
+  [[ "$SCIFORGE_COLLAB_DEPLOYMENT_MODE" == oidc-test-private ]] \
+    || die "The A HTTPS OIDC test app mode is invalid."
+  configured_ipv4="$(dotenv_value "$ENV_FILE" SCIFORGE_A_HTTPS_OIDC_TEST_IPV4)"
+  [[ "$configured_ipv4" == "$A_HTTPS_OIDC_TEST_PUBLIC_IPV4" ]] \
+    || die "The A HTTPS OIDC test IPv4 must match the approved ECS address."
+  configured_state_dir="$(dotenv_value "$ENV_FILE" SCIFORGE_A_HTTPS_OIDC_TEST_STATE_DIR)"
+  [[ "$configured_state_dir" == "$A_HTTPS_OIDC_TEST_STATE_DIR" ]] \
+    || die "The A HTTPS OIDC test state path must remain outside the fixed release directory."
+  [[ -f "$A_HTTPS_OIDC_TEST_COMPOSE_FILE" && ! -L "$A_HTTPS_OIDC_TEST_COMPOSE_FILE" ]] \
+    || die "The A HTTPS OIDC test Compose file is missing or unsafe."
+  [[ -f "$A_HTTPS_OIDC_TEST_CADDYFILE" && ! -L "$A_HTTPS_OIDC_TEST_CADDYFILE" ]] \
+    || die "The A HTTPS OIDC test Caddyfile is missing or unsafe."
+
+  export SCIFORGE_A_HTTPS_OIDC_TEST_COMMIT="$expected_commit"
+  export SCIFORGE_A_HTTPS_OIDC_TEST_STATE_DIR="$A_HTTPS_OIDC_TEST_STATE_DIR"
+  OIDC_EDGE_COMPOSE=(docker compose --project-name sciforge-collaboration-a-https-oidc-test \
+    --env-file "$ENV_FILE" -f "$A_HTTPS_OIDC_TEST_COMPOSE_FILE")
 }
 
 validate_a_https_test_edge_host() {
@@ -898,6 +1063,7 @@ assert_no_a_https_test_edge_container() {
   local app_ids=()
   local endpoint_ids=()
   local edge_ids=()
+  local oidc_edge_ids=()
   local expected_endpoint=""
   local id
   local port_bindings
@@ -906,6 +1072,10 @@ assert_no_a_https_test_edge_container() {
     --filter "label=com.docker.compose.project=$A_HTTPS_TEST_EDGE_PROJECT")
   (( ${#edge_ids[@]} == 0 )) \
     || die "An HTTPS edge container still exists. Disable and remove the exact edge before changing the app or Provider mode."
+  mapfile -t oidc_edge_ids < <(docker container ls -a --no-trunc -q \
+    --filter "label=com.docker.compose.project=$A_HTTPS_OIDC_TEST_PROJECT")
+  (( ${#oidc_edge_ids[@]} == 0 )) \
+    || die "An HTTPS OIDC edge container still exists. Disable and remove the exact edge before changing the app or Provider mode."
   [[ "$(ss -H -ltn | awk '$4 ~ /:443$/ { count += 1 } END { print count + 0 }')" == 0 \
       && "$(ss -H -lun | awk '$4 ~ /:443$/ { count += 1 } END { print count + 0 }')" == 0 ]] \
     || die "A host TCP/UDP 443 listener exists; the app cannot be changed behind an active public edge."
@@ -1314,4 +1484,314 @@ database_table_row_counts() {
     [[ "$count" =~ ^[0-9]+$ ]] || die "Database returned an invalid table row count."
     printf '%s=%s\n' "$table" "$count"
   done
+}
+
+# The OIDC test edge is deliberately separate from the legacy core-only edge.
+# These helpers validate only A-owned ingress/application facts and the narrow
+# Docker attachment contract offered by the independently managed Keycloak
+# container. They never inspect Keycloak credentials, realm exports, or its
+# database network.
+validate_a_https_oidc_test_state_dirs() {
+  local path
+
+  [[ "$(readlink -f /srv/sciforge-collaboration)" == /srv/sciforge-collaboration ]] \
+    || die "The collaboration service root must be a physical directory."
+  for path in "$A_HTTPS_OIDC_TEST_STATE_DIR" \
+      "$A_HTTPS_OIDC_TEST_STATE_DIR/data" "$A_HTTPS_OIDC_TEST_STATE_DIR/config" \
+      "$A_HTTPS_OIDC_TEST_STATE_DIR/approval"; do
+    [[ -d "$path" && ! -L "$path" ]] \
+      || die "The persistent OIDC edge state directory is missing or is a symlink: $path"
+  done
+  [[ "$(readlink -f "$A_HTTPS_OIDC_TEST_STATE_DIR")" == "$A_HTTPS_OIDC_TEST_STATE_DIR" \
+      && "$(readlink -f "$A_HTTPS_OIDC_TEST_STATE_DIR/data")" == "$A_HTTPS_OIDC_TEST_STATE_DIR/data" \
+      && "$(readlink -f "$A_HTTPS_OIDC_TEST_STATE_DIR/config")" == "$A_HTTPS_OIDC_TEST_STATE_DIR/config" \
+      && "$(readlink -f "$A_HTTPS_OIDC_TEST_STATE_DIR/approval")" == "$A_HTTPS_OIDC_TEST_STATE_DIR/approval" ]] \
+    || die "The persistent OIDC edge state escaped its fixed physical path."
+  [[ "$(stat -c '%u:%g:%a' "$A_HTTPS_OIDC_TEST_STATE_DIR")" == 0:0:750 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_OIDC_TEST_STATE_DIR/data")" == 10002:10002:700 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_OIDC_TEST_STATE_DIR/config")" == 10002:10002:700 \
+      && "$(stat -c '%u:%g:%a' "$A_HTTPS_OIDC_TEST_STATE_DIR/approval")" == 0:10002:750 ]] \
+    || die "The persistent OIDC edge state directories have unsafe ownership or permissions."
+}
+
+prepare_a_https_oidc_test_state_dirs() {
+  local path
+
+  if getent passwd 10002 >/dev/null; then
+    die "Host UID 10002 must remain unassigned before preparing isolated OIDC edge state."
+  fi
+  if getent group 10002 >/dev/null; then
+    die "Host GID 10002 must remain unassigned before preparing isolated OIDC edge state."
+  fi
+  [[ "$(readlink -f /srv/sciforge-collaboration)" == /srv/sciforge-collaboration ]] \
+    || die "The collaboration service root must be a physical directory."
+  for path in "$A_HTTPS_OIDC_TEST_STATE_DIR" \
+      "$A_HTTPS_OIDC_TEST_STATE_DIR/data" "$A_HTTPS_OIDC_TEST_STATE_DIR/config" \
+      "$A_HTTPS_OIDC_TEST_STATE_DIR/approval"; do
+    [[ ! -L "$path" ]] || die "Refusing a symlinked persistent OIDC edge state path: $path"
+  done
+  install -d -o root -g root -m 0750 "$A_HTTPS_OIDC_TEST_STATE_DIR"
+  install -d -o 10002 -g 10002 -m 0700 \
+    "$A_HTTPS_OIDC_TEST_STATE_DIR/data" "$A_HTTPS_OIDC_TEST_STATE_DIR/config"
+  install -d -o root -g 10002 -m 0750 "$A_HTTPS_OIDC_TEST_STATE_DIR/approval"
+  validate_a_https_oidc_test_state_dirs
+}
+
+validate_a_https_oidc_test_host() {
+  local database_network_properties
+  local hostname
+  local identity_network_properties
+  local network_properties
+  local resolved_ipv4=()
+
+  require_root
+  if getent passwd 10002 >/dev/null; then
+    die "Host UID 10002 must remain unassigned for the isolated OIDC edge runtime."
+  fi
+  if getent group 10002 >/dev/null; then
+    die "Host GID 10002 must remain unassigned for the isolated OIDC edge runtime."
+  fi
+  for hostname in "$A_HTTPS_OIDC_TEST_HOSTNAME" "$A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME"; do
+    mapfile -t resolved_ipv4 < <(
+      getent ahostsv4 "$hostname" | awk 'NF { print $1 }' | LC_ALL=C sort -u
+    )
+    (( ${#resolved_ipv4[@]} == 1 )) \
+      || die "$hostname must resolve to exactly one IPv4 address."
+    [[ "${resolved_ipv4[0]}" == "$A_HTTPS_OIDC_TEST_PUBLIC_IPV4" ]] \
+      || die "$hostname does not resolve to the approved ECS address."
+  done
+  network_properties="$(docker network inspect --format \
+    '{{.Internal}}|{{.Driver}}|{{.Scope}}|{{index .Labels "com.docker.compose.project"}}' \
+    "$A_HTTPS_OIDC_TEST_APP_NETWORK")"
+  [[ "$network_properties" == false\|bridge\|local\|sciforge-collaboration-private ]] \
+    || die "The private application edge network is not the fixed local collaboration bridge."
+  database_network_properties="$(docker network inspect --format \
+    '{{.Internal}}|{{.Driver}}|{{.Scope}}|{{index .Labels "com.docker.compose.project"}}' \
+    "$A_HTTPS_OIDC_TEST_DATABASE_NETWORK")"
+  [[ "$database_network_properties" == true\|bridge\|local\|sciforge-collaboration-private ]] \
+    || die "The collaboration database network is not the fixed internal bridge."
+  identity_network_properties="$(docker network inspect --format \
+    '{{.Internal}}|{{.Driver}}|{{.Scope}}' "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK")" \
+    || die "The dedicated Keycloak identity-edge network does not exist."
+  [[ "$identity_network_properties" == false\|bridge\|local ]] \
+    || die "The Keycloak identity-edge network must be a dedicated local bridge."
+  validate_a_https_oidc_test_state_dirs
+}
+
+assert_no_a_https_oidc_test_edge_container() {
+  local edge_ids=()
+
+  mapfile -t edge_ids < <(docker container ls -a --no-trunc -q \
+    --filter "label=com.docker.compose.project=$A_HTTPS_OIDC_TEST_PROJECT")
+  (( ${#edge_ids[@]} == 0 )) \
+    || die "An A HTTPS OIDC edge container still exists."
+}
+
+assert_a_https_oidc_test_network_membership() {
+  local expected_edge_id="${1:-}"
+  local app_aliases
+  local app_networks=()
+  local edge_aliases
+  local edge_networks=()
+  local endpoint_id
+  local identity_endpoint_ids=()
+  local keycloak_aliases
+  local keycloak_candidates=()
+  local keycloak_id
+  local keycloak_networks=()
+  local keycloak_state
+  local private_endpoint_ids=()
+  local expected_private_endpoints=()
+
+  [[ "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]] \
+    || die "The approved OIDC test app identity is unavailable."
+  mapfile -t app_networks < <(docker container inspect --format \
+    '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+    "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID" | awk 'NF { print }' | LC_ALL=C sort)
+  [[ "$(printf '%s\n' "${app_networks[@]}")" == \
+      "$(printf '%s\n' "$A_HTTPS_OIDC_TEST_DATABASE_NETWORK" "$A_HTTPS_OIDC_TEST_APP_NETWORK" | LC_ALL=C sort)" ]] \
+    || die "The OIDC test app must join exactly its database and private-edge networks."
+
+  mapfile -t private_endpoint_ids < <(docker network inspect --format \
+    '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
+    "$A_HTTPS_OIDC_TEST_APP_NETWORK" | awk 'NF { print }' | LC_ALL=C sort)
+  expected_private_endpoints=("$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID")
+  if [[ -n "$expected_edge_id" ]]; then
+    [[ "$expected_edge_id" =~ ^[0-9a-f]{64}$ ]] || die "The OIDC edge identity is invalid."
+    expected_private_endpoints+=("$expected_edge_id")
+  fi
+  [[ "$(printf '%s\n' "${private_endpoint_ids[@]}")" == \
+      "$(printf '%s\n' "${expected_private_endpoints[@]}" | LC_ALL=C sort)" ]] \
+    || die "The private application edge network contains an unapproved endpoint."
+  app_aliases="$(docker container inspect --format \
+    "{{range (index .NetworkSettings.Networks \"$A_HTTPS_OIDC_TEST_APP_NETWORK\").Aliases}}{{println .}}{{end}}" \
+    "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID")"
+  [[ "$(grep -Fxc app <<< "$app_aliases")" == 1 ]] \
+    || die "Exactly the approved application must own the private-edge app alias."
+
+  mapfile -t identity_endpoint_ids < <(docker network inspect --format \
+    '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
+    "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" | awk 'NF { print }' | LC_ALL=C sort)
+  for endpoint_id in "${identity_endpoint_ids[@]}"; do
+    [[ -n "$expected_edge_id" && "$endpoint_id" == "$expected_edge_id" ]] && continue
+    keycloak_candidates+=("$endpoint_id")
+  done
+  (( ${#keycloak_candidates[@]} == 1 )) \
+    || die "The dedicated identity-edge network must contain exactly one Keycloak app plus the optional A edge."
+  keycloak_id="${keycloak_candidates[0]}"
+  [[ "$keycloak_id" != "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID" ]] \
+    || die "The SciForge Cloud app must never join the Keycloak identity-edge network."
+  keycloak_state="$(docker container inspect --format '{{.State.Status}}' "$keycloak_id")"
+  [[ "$keycloak_state" == running ]] || die "The Keycloak identity-edge endpoint is not running."
+  keycloak_aliases="$(docker container inspect --format \
+    "{{range (index .NetworkSettings.Networks \"$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK\").Aliases}}{{println .}}{{end}}" \
+    "$keycloak_id")"
+  [[ "$(grep -Fxc keycloak <<< "$keycloak_aliases")" == 1 ]] \
+    || die "Exactly one identity-edge endpoint must own the keycloak alias."
+  if grep -Eq '^(app|postgres|database)$' <<< "$keycloak_aliases"; then
+    die "The Keycloak endpoint owns a forbidden application or database alias."
+  fi
+  mapfile -t keycloak_networks < <(docker container inspect --format \
+    '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+    "$keycloak_id" | awk 'NF { print }')
+  grep -Fxq "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" <<< "$(printf '%s\n' "${keycloak_networks[@]}")" \
+    || die "The selected Keycloak endpoint is not attached to identity-edge."
+  if printf '%s\n' "${keycloak_networks[@]}" | grep -Eq \
+      "^($A_HTTPS_OIDC_TEST_DATABASE_NETWORK|$A_HTTPS_OIDC_TEST_APP_NETWORK)$"; then
+    die "Keycloak must never join a SciForge Cloud application or database network."
+  fi
+
+  if [[ -n "$expected_edge_id" ]]; then
+    (( ${#identity_endpoint_ids[@]} == 2 )) \
+      || die "The identity-edge network must contain only Keycloak and the A edge."
+    mapfile -t edge_networks < <(docker container inspect --format \
+      '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+      "$expected_edge_id" | awk 'NF { print }' | LC_ALL=C sort)
+    [[ "$(printf '%s\n' "${edge_networks[@]}")" == \
+        "$(printf '%s\n' "$A_HTTPS_OIDC_TEST_APP_NETWORK" "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" | LC_ALL=C sort)" ]] \
+      || die "The OIDC edge must join exactly the Cloud private-edge and Keycloak identity-edge networks."
+    edge_aliases="$(docker container inspect --format \
+      "{{range (index .NetworkSettings.Networks \"$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK\").Aliases}}{{println .}}{{end}}" \
+      "$expected_edge_id")"
+    if grep -Eq '^(keycloak|app|postgres|database)$' <<< "$edge_aliases"; then
+      die "The A edge must not own an upstream or database alias."
+    fi
+  else
+    (( ${#identity_endpoint_ids[@]} == 1 )) \
+      || die "The pre-deployment identity-edge network must contain only Keycloak."
+  fi
+  A_HTTPS_OIDC_TEST_KEYCLOAK_CONTAINER_ID="$keycloak_id"
+}
+
+inspect_a_https_oidc_test_image() {
+  inspect_a_https_test_edge_image "${1:-pull}"
+  A_HTTPS_OIDC_TEST_IMAGE_ID="$A_HTTPS_TEST_EDGE_IMAGE_ID"
+}
+
+a_https_oidc_test_app_snapshot() {
+  a_https_test_edge_app_snapshot "${1:-$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID}"
+}
+
+a_https_oidc_test_keycloak_snapshot() {
+  a_https_test_edge_app_snapshot "${1:-$A_HTTPS_OIDC_TEST_KEYCLOAK_CONTAINER_ID}"
+}
+
+validate_a_https_oidc_test_app() {
+  local expected_commit="$1"
+  local app_container_id
+  local app_environment
+  local app_image_id
+  local app_mode
+  local app_revision
+  local app_state
+  local catalog_body
+  local container_revision
+  local expected_value
+  local key
+  local key_count
+  local key_value
+  local postgres_endpoint
+  local provider_env_count
+  local provider_mount_count
+  local published_endpoint
+  local running_services
+
+  running_services="$("${COMPOSE[@]}" ps --status running --services)"
+  grep -qx postgres <<< "$running_services" || die "PostgreSQL is not running."
+  grep -qx app <<< "$running_services" || die "The OIDC test app is not running."
+  app_container_id="$("${COMPOSE[@]}" ps -q app)"
+  [[ "$app_container_id" =~ ^[0-9a-f]{64}$ ]] || die "Could not identify the OIDC test app."
+  app_state="$(docker container inspect --format \
+    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$app_container_id")"
+  [[ "$app_state" == running\|healthy ]] || die "The OIDC test app is not healthy."
+  app_revision="$(docker container inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$app_container_id")"
+  [[ "$app_revision" == "$expected_commit" ]] || die "The running OIDC test app revision is not approved."
+  app_mode="$(docker container inspect --format \
+    '{{index .Config.Labels "cn.sciforge.deployment.mode"}}' "$app_container_id")"
+  [[ "$app_mode" == oidc-test-private ]] || die "The public OIDC edge requires explicit oidc-test-private mode."
+  [[ "$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' \
+    "$app_container_id")" == sciforge-collaboration-private ]] \
+    || die "The OIDC test app belongs to an unexpected Compose project."
+  app_image_id="$(docker container inspect --format '{{.Image}}' "$app_container_id")"
+  [[ "$app_image_id" == "$(docker image inspect --format '{{.Id}}' \
+    "sciforge-collaboration-runtime:$expected_commit")" ]] \
+    || die "The running OIDC test app does not use the approved image ID."
+  container_revision="$(docker exec "$app_container_id" sh -c \
+    'tr -d "\r\n" < /app/CONTRACT_COMMIT')"
+  [[ "$container_revision" == "$expected_commit" ]] \
+    || die "The OIDC test app container commit proof is invalid."
+  published_endpoint="$("${COMPOSE[@]}" port app 8787)"
+  [[ "$published_endpoint" == 127.0.0.1:8787 ]] \
+    || die "The OIDC test app must remain published only on 127.0.0.1:8787."
+  postgres_endpoint="$("${COMPOSE[@]}" port postgres 5432 2>/dev/null || true)"
+  [[ -z "$postgres_endpoint" ]] || die "PostgreSQL must not publish a host port."
+  assert_a_https_test_edge_backend_port_boundaries
+
+  app_environment="$(docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    "$app_container_id")"
+  while IFS='|' read -r key expected_value; do
+    key_count="$(printf '%s\n' "$app_environment" | awk -F= -v key="$key" \
+      '$1 == key { count += 1 } END { print count + 0 }')"
+    key_value="$(printf '%s\n' "$app_environment" | awk -F= -v key="$key" \
+      '$1 == key { print substr($0, index($0, "=") + 1) }')"
+    [[ "$key_count" == 1 && "$key_value" == "$expected_value" ]] \
+      || die "The OIDC test app has an invalid $key value."
+  done <<EOF
+SCIFORGE_COLLABORATION_ALLOWED_ORIGINS|$A_HTTPS_OIDC_TEST_ORIGIN
+SCIFORGE_COLLABORATION_OIDC_ISSUER|$A_HTTPS_OIDC_TEST_ISSUER
+SCIFORGE_COLLABORATION_OIDC_AUDIENCE|$A_HTTPS_OIDC_TEST_AUDIENCE
+SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES|$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES
+SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK|false
+EOF
+  provider_env_count="$(printf '%s\n' "$app_environment" | awk -F= '
+    $1 == "SCIFORGE_COLLABORATION_PROVIDER_CONFIG_FILE" ||
+    $1 == "SCIFORGE_COLLABORATION_SECRET_DIRECTORY" { count += 1 }
+    END { print count + 0 }
+  ')"
+  [[ "$provider_env_count" == 0 ]] || die "Provider environment is forbidden in A HTTPS OIDC test mode."
+  provider_mount_count="$(docker container inspect --format \
+    '{{range .Mounts}}{{println .Destination}}{{end}}' "$app_container_id" | awk '
+      $0 == "/run/sciforge-provider" || index($0, "/run/sciforge-provider/") == 1 { count += 1 }
+      END { print count + 0 }
+    ')"
+  [[ "$provider_mount_count" == 0 ]] || die "Provider mounts are forbidden in A HTTPS OIDC test mode."
+
+  catalog_body="$(curl --disable --noproxy '*' --proto '=http' \
+    --fail --silent --show-error --max-time 5 \
+    --header 'content-type: application/json' \
+    --data '{"protocolVersion":"1.0","requestId":"req_ahttpsoidccatalog0001","type":"endpoint.catalog.get"}' \
+    http://127.0.0.1:8787/v1/commands)"
+  printf '%s' "$catalog_body" | docker exec -i "$app_container_id" node -e '
+    let input = ""
+    process.stdin.setEncoding("utf8")
+    process.stdin.on("data", (chunk) => { input += chunk })
+    process.stdin.on("end", () => {
+      try {
+        const body = JSON.parse(input)
+        if (body?.type !== "endpoint.catalog" || !Array.isArray(body.providers) || body.providers.length !== 0) process.exit(1)
+      } catch { process.exit(1) }
+    })
+  ' || die "The OIDC test Provider catalog is not exactly empty."
+  A_HTTPS_OIDC_TEST_APP_CONTAINER_ID="$app_container_id"
 }

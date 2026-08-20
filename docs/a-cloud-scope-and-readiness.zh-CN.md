@@ -78,8 +78,8 @@ A 也不为各板块增加专用状态机、中央枚举分支或第二套消息
 
 这一层不依赖真实 Keycloak、Desktop、D Bot、Zulip 或正式域名，可以现在完成并提供给 B/C 做离线合同适配；动态 fixtures 只提供离线证据，不提供真实 User Access Token，也不允许宣称 Agent 注册或 Project/Task 云端闭环成功：
 
-- [x] 从同一固定 commit 生成协议 `1.0` 的 command、response、Inbox、entity、error JSON Schema。
-- [x] 发布状态/actor 表和正常、重复、乱序、revision、idempotency、旧 execution、确认失效 fixtures；manifest 中记录每个文件的 SHA-256。
+- [x] 从同一固定 commit 生成协议 `1.0` 的 command、response、Inbox、entity、error JSON Schema，以及 `/v1/me`、Device enrollment/create/list/revoke、Zulip binding begin/confirm、external identity list/revoke 的独立身份 REST body schema。
+- [x] 发布状态/actor 表和正常、重复、乱序、revision、idempotency、旧 execution、确认失效、当前 Agent bearer 撤销 fixtures；manifest 中记录每个文件的 SHA-256。
 - [x] `npm run collaboration:contracts:check` 与生成物测试通过，固定发布时把完整 commit 注入 manifest。
 - [x] core-only 的 Tunnel、`healthz`、`readyz`、空 catalog、未配置 OIDC 时 User API fail-closed、无 confirm adapter 时 confirm fail-closed、数据库重启、备份恢复和敏感日志扫描通过。
 - [x] 明确标记真实 OIDC→Device→Agent、User↔Zulip binding、Project/Task 业务闭环和产品 E2E 为“未证明”。
@@ -90,7 +90,7 @@ A 也不为各板块增加专用状态机、中央枚举分支或第二套消息
 
 - [x] 为新 A 发布新的固定 commit、release manifest 和可回退备份，工作树与发布物一致。
 - [ ] 正式入口和 Human Provider 方案已书面选定；对应 TLS、HTTP、WSS、base path、身份验证和回退方式一致。
-- [ ] 测试/生产唯一 OIDC issuer、Discovery/JWKS、`acr/amr/auth_time` Mapper 和专用测试账号均已配置；A 逐字符校验 issuer，并固定 audience 与 Desktop/Web `azp` allowlist。
+- [ ] 测试/生产唯一 OIDC issuer、Discovery/JWKS 和专用测试账号均已配置；真实 Access Token 的 RS256/`kid` 以及 `iss/sub/aud/azp/exp/nbf/iat/auth_time` claim 名称与形状已由 IdP owner 非秘密确认，`acr/amr` 如由产品策略要求也已映射。A 逐字符校验 issuer，并固定 audience 与 Desktop/Web `azp` allowlist。
 - [ ] D→A confirm service-auth 已冻结并注入；普通 User Token、匿名请求和未验证 Zulip payload 都不能调用 confirm。
 - [ ] 正式 OIDC 登录以 `(issuer, sub)` JIT User；同 email 不合并；Zulip binding 只关联既有 User，不通过 SQL seed、隐藏后门或共享个人 API key 建立身份。
 - [ ] Project Owner 可使用自己的 OIDC Access Token 直接执行首次分派、换 assignee 主动改派、取消和最终结论；当前 Coordinator 只有持有该 Owner 对同一不可变动作生成的有效 `confirmationId` 才可代执行。Coordinator 无需确认即可对 `succeeded/failed/rejected` Task 发起同 assignee 重试。

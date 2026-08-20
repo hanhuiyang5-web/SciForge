@@ -1,0 +1,42 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-zulip-binding-begin-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingCode": {
+      "maxLength": 128,
+      "minLength": 8,
+      "pattern": "^[A-Z0-9][A-Z0-9-]+$",
+      "type": "string"
+    },
+    "bindingRequestId": {
+      "pattern": "^zbr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+      "type": "string"
+    },
+    "expiresAt": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "bindingRequestId",
+    "bindingCode",
+    "expiresAt"
+  ],
+  "title": "SciForge Collaboration identity-zulip-binding-begin-response",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "response",
+        "method": "POST",
+        "path": "/v1/integrations/zulip/bindings"
+      }
+    ]
+  }
+}

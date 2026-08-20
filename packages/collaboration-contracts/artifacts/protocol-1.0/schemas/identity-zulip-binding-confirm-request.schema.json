@@ -1,0 +1,62 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-zulip-binding-confirm-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingCode": {
+      "maxLength": 128,
+      "minLength": 8,
+      "pattern": "^[A-Z0-9][A-Z0-9-]+$",
+      "type": "string"
+    },
+    "idempotencyKey": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^idem_[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "providerEventId": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "realmId": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "realmUrl": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "type": "string"
+    },
+    "zulipUserId": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "bindingCode",
+    "realmUrl",
+    "realmId",
+    "zulipUserId",
+    "providerEventId",
+    "idempotencyKey"
+  ],
+  "title": "SciForge Collaboration identity-zulip-binding-confirm-request",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "request",
+        "method": "POST",
+        "path": "/v1/integrations/zulip/bindings/confirm"
+      }
+    ]
+  }
+}

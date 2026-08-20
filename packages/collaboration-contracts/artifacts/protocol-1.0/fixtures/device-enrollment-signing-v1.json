@@ -1,0 +1,46 @@
+{
+  "algorithm": "Ed25519",
+  "canonical": {
+    "base64url": "U0NJRk9SR0UtREVWSUNFLUVOUk9MTE1FTlQtVjEKZW5yX2dvbGRlbl92ZWN0b3JfMDAwMQpBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4CnVzcl9nb2xkZW5fdmVjdG9yXzAwMDEKaW5zX2dvbGRlbl92ZWN0b3JfMDAwMQoyMDI2LTA4LTIwVDEyOjM0OjU2LjAwMFo",
+    "byteLength": 167,
+    "hex": "534349464f5247452d4445564943452d454e524f4c4c4d454e542d56310a656e725f676f6c64656e5f766563746f725f303030310a41414543417751464267634943516f4c4441304f4478415245684d554652595847426b61477877644868380a7573725f676f6c64656e5f766563746f725f303030310a696e735f676f6c64656e5f766563746f725f303030310a323032362d30382d32305431323a33343a35362e3030305a",
+    "utf8": "SCIFORGE-DEVICE-ENROLLMENT-V1\nenr_golden_vector_0001\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\nusr_golden_vector_0001\nins_golden_vector_0001\n2026-08-20T12:34:56.000Z"
+  },
+  "canonicalization": {
+    "domain": "SCIFORGE-DEVICE-ENROLLMENT-V1",
+    "encoding": "UTF-8",
+    "fieldOrder": [
+      "enrollmentId",
+      "nonce",
+      "userId",
+      "installationId",
+      "expiresAt"
+    ],
+    "separator": "LF",
+    "trailingLf": false
+  },
+  "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+  "contractStatus": "current",
+  "expected": {
+    "publicKeyJwk": {
+      "alg": "EdDSA",
+      "crv": "Ed25519",
+      "kid": "device-enrollment-golden-v1",
+      "kty": "OKP",
+      "use": "sig",
+      "x": "7zLU2WvPQ6D0wBtoRlxojzIQShMQyvReSahjO_Vew6s"
+    },
+    "signatureBase64url": "LVDhbIQ3YpkxY1ALlyNCWUEJUQJNF5e8q1VY8lHRfvXEIYxH78Yg07EU4fXK6DRcTaNuxjFKMtsCiKuNrtxrAw"
+  },
+  "fixtureVersion": 1,
+  "id": "device-enrollment-signing-v1",
+  "input": {
+    "enrollmentId": "enr_golden_vector_0001",
+    "expiresAt": "2026-08-20T12:34:56.000Z",
+    "installationId": "ins_golden_vector_0001",
+    "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "userId": "usr_golden_vector_0001"
+  },
+  "kind": "device-enrollment-signing-vector",
+  "protocolVersion": "1.0"
+}

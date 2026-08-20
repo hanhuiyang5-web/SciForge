@@ -147,6 +147,35 @@ export const ed25519SignatureSchema = z.string().min(86).max(128).refine(
   { message: 'Ed25519 signature must be canonical base64url for exactly 64 bytes' }
 )
 
+export type EnrollmentSigningFacts = Readonly<{
+  enrollmentId: string
+  nonce: string
+  userId: string
+  installationId: string
+  expiresAt: string
+}>
+
+const DEVICE_ENROLLMENT_SIGNING_DOMAIN = 'SCIFORGE-DEVICE-ENROLLMENT-V1'
+
+/**
+ * Returns the exact UTF-8 bytes that a Device signs to prove possession of its
+ * Ed25519 key during enrollment. The final field is not followed by a LF.
+ */
+export function canonicalEnrollmentBytes(input: EnrollmentSigningFacts): Uint8Array {
+  const values = [
+    DEVICE_ENROLLMENT_SIGNING_DOMAIN,
+    input.enrollmentId,
+    input.nonce,
+    input.userId,
+    input.installationId,
+    input.expiresAt
+  ]
+  if (values.some((value) => typeof value !== 'string' || value.length === 0 || /[\r\n]/u.test(value))) {
+    throw new TypeError('Enrollment signing fields must be non-empty strings without line breaks.')
+  }
+  return Buffer.from(values.join('\n'), 'utf8')
+}
+
 export const deviceEnrollmentSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('device_enrollment'),

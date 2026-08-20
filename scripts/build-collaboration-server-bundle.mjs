@@ -38,7 +38,8 @@ export const IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT = Object.freeze({
   token: 'SCIFORGE_COLLABORATION_BUNDLE_INTERNAL_GUARD_TOKEN'
 })
 const aHttpsTestEdgeImage = 'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a'
-const aHttpsTestEdgeAssets = Object.freeze({
+const identityAcceptanceHarnessRelativePath = 'scripts/collaboration-a-identity-acceptance.mjs'
+const aHttpsSharedEdgeAssets = Object.freeze({
   edgeDockerignoreSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/.dockerignore'
   }),
@@ -80,11 +81,14 @@ const aHttpsTestEdgeAssets = Object.freeze({
     expectedMode: 0o755,
     relativePath: 'deploy/collaboration-private/scripts/postgres-v5-integration.mjs'
   }),
-  edgeCaddyfileSha256: Object.freeze({
-    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-test-edge'
-  }),
   edgeCommonScriptSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/scripts/common.sh'
+  })
+})
+const aHttpsTestEdgeAssets = Object.freeze({
+  ...aHttpsSharedEdgeAssets,
+  edgeCaddyfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-test-edge'
   }),
   edgeComposeSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/compose.a-https-test-edge.yml'
@@ -104,6 +108,31 @@ const aHttpsTestEdgeAssets = Object.freeze({
   edgeVerifyScriptSha256: Object.freeze({
     expectedMode: 0o755,
     relativePath: 'deploy/collaboration-private/scripts/verify-a-https-test-edge.sh'
+  })
+})
+const aHttpsOidcTestAssets = Object.freeze({
+  ...aHttpsSharedEdgeAssets,
+  identityEdgeCaddyfileSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/Caddyfile.a-https-oidc-test'
+  }),
+  identityEdgeComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-https-oidc-test.yml'
+  }),
+  identityEdgeDeployScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/deploy-a-https-oidc-test.sh'
+  }),
+  identityEdgeDisableScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/disable-a-https-oidc-test.sh'
+  }),
+  identityEdgeExternalVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-oidc-test-external.sh'
+  }),
+  identityEdgeVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-a-https-oidc-test.sh'
   })
 })
 
@@ -141,6 +170,7 @@ function usage() {
     '  --private-test-release  TEST-ONLY: allow a clean HEAD descended from origin/gui.',
     '  --team-private-acceptance  TEAM-ONLY: clean descendant for loopback/tunnel acceptance.',
     '  --a-https-test-edge      A-ONLY: clean descendant for cloud-test HTTPS/WSS edge.',
+    '  --a-https-oidc-test      A-ONLY: cloud-test API plus login-test OIDC ingress.',
     '  -h, --help              Show this help.',
     ''
   ].join('\n')
@@ -148,6 +178,7 @@ function usage() {
 
 export function parseArguments(argv) {
   const result = {
+    aHttpsOidcTest: false,
     aHttpsTestEdge: false,
     help: false,
     privateTestRelease: false,
@@ -180,6 +211,13 @@ export function parseArguments(argv) {
       result.aHttpsTestEdge = true
       continue
     }
+    if (argument === '--a-https-oidc-test') {
+      if (result.aHttpsOidcTest) {
+        throw new Error('--a-https-oidc-test may only be provided once.')
+      }
+      result.aHttpsOidcTest = true
+      continue
+    }
     if (argument !== '--commit' && argument !== '--output') {
       throw new Error(`Unknown argument: ${argument}`)
     }
@@ -195,10 +233,11 @@ export function parseArguments(argv) {
   const selectedSpecialModes = [
     result.privateTestRelease,
     result.teamPrivateAcceptance,
-    result.aHttpsTestEdge
+    result.aHttpsTestEdge,
+    result.aHttpsOidcTest
   ].filter(Boolean).length
   if (selectedSpecialModes > 1) {
-    throw new Error('Private and A HTTPS test edge release modes are mutually exclusive.')
+    throw new Error('Private, team acceptance, and A HTTPS release modes are mutually exclusive.')
   }
   return result
 }
@@ -259,6 +298,7 @@ export function createImmutableSnapshotChildArguments(arguments_, approvedCommit
   if (arguments_.privateTestRelease) childArguments.push('--private-test-release')
   if (arguments_.teamPrivateAcceptance) childArguments.push('--team-private-acceptance')
   if (arguments_.aHttpsTestEdge) childArguments.push('--a-https-test-edge')
+  if (arguments_.aHttpsOidcTest) childArguments.push('--a-https-oidc-test')
   return Object.freeze(childArguments)
 }
 
@@ -539,6 +579,56 @@ export async function sha256File(path) {
   const hash = createHash('sha256')
   for await (const chunk of createReadStream(path)) hash.update(chunk)
   return hash.digest('hex')
+}
+
+async function hashIdentityAcceptanceHarness(repositoryRoot) {
+  const absolutePath = join(repositoryRoot, identityAcceptanceHarnessRelativePath)
+  let before
+  try {
+    before = await lstat(absolutePath, { bigint: true })
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new Error(
+        `A HTTPS OIDC identity acceptance harness is missing: ${identityAcceptanceHarnessRelativePath}`,
+        { cause: error }
+      )
+    }
+    throw error
+  }
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    (before.mode & 0o022n) !== 0n ||
+    before.size <= 0n ||
+    before.size > 1024n * 1024n
+  ) {
+    throw new Error(
+      `A HTTPS OIDC identity acceptance harness is unsafe: ${identityAcceptanceHarnessRelativePath}`
+    )
+  }
+
+  const digest = await sha256File(absolutePath)
+  let after
+  try {
+    after = await lstat(absolutePath, { bigint: true })
+  } catch (error) {
+    throw new Error('A HTTPS OIDC identity acceptance harness changed while it was hashed.', {
+      cause: error
+    })
+  }
+  if (
+    !after.isFile() ||
+    after.isSymbolicLink() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.mode !== after.mode ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.ctimeNs !== after.ctimeNs
+  ) {
+    throw new Error('A HTTPS OIDC identity acceptance harness changed while it was hashed.')
+  }
+  return digest
 }
 
 function sha256Content(content) {
@@ -906,6 +996,7 @@ async function assertBundleFileSet(stagingDirectory, expectedFilenames) {
 }
 
 export async function buildCollaborationServerBundle({
+  aHttpsOidcTest = false,
   aHttpsTestEdge = false,
   commit,
   generateContractArtifactFiles = defaultGenerateContractArtifactFiles,
@@ -916,6 +1007,9 @@ export async function buildCollaborationServerBundle({
   repositoryRoot = defaultRepositoryRoot,
   runCommand = defaultRunCommand
 } = {}) {
+  if (typeof aHttpsOidcTest !== 'boolean') {
+    throw new Error('aHttpsOidcTest must be an explicit boolean.')
+  }
   if (typeof aHttpsTestEdge !== 'boolean') {
     throw new Error('aHttpsTestEdge must be an explicit boolean.')
   }
@@ -928,15 +1022,16 @@ export async function buildCollaborationServerBundle({
   const selectedSpecialModes = [
     privateTestRelease,
     teamPrivateAcceptance,
-    aHttpsTestEdge
+    aHttpsTestEdge,
+    aHttpsOidcTest
   ].filter(Boolean).length
   if (selectedSpecialModes > 1) {
-    throw new Error('Private and A HTTPS test edge release modes are mutually exclusive.')
+    throw new Error('Private, team acceptance, and A HTTPS release modes are mutually exclusive.')
   }
   if (typeof generateContractArtifactFiles !== 'function') {
     throw new Error('generateContractArtifactFiles must be a function.')
   }
-  const featureRelease = privateTestRelease || teamPrivateAcceptance || aHttpsTestEdge
+  const featureRelease = privateTestRelease || teamPrivateAcceptance || aHttpsTestEdge || aHttpsOidcTest
   const root = resolve(repositoryRoot)
   const head = await readRepositoryHead(root, runCommand)
   const approvedCommit = assertFullCommit(commit ?? head)
@@ -960,8 +1055,8 @@ export async function buildCollaborationServerBundle({
       })
     } catch (error) {
       throw new Error(
-        `${aHttpsTestEdge
-          ? 'A HTTPS test edge release'
+        `${aHttpsTestEdge || aHttpsOidcTest
+          ? 'A HTTPS test release'
           : teamPrivateAcceptance
             ? 'Team private acceptance'
             : 'Private test release'} HEAD must descend from the current origin/gui commit.`,
@@ -987,7 +1082,10 @@ export async function buildCollaborationServerBundle({
   let published = false
 
   try {
-    if (aHttpsTestEdge) {
+    if (aHttpsOidcTest) {
+      log('*** A-ONLY HTTPS OIDC TEST: cloud-test API plus login-test issuer ingress; Provider and binding confirm stay disabled. ***')
+      log(`Verified clean A HTTPS OIDC test commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
+    } else if (aHttpsTestEdge) {
       log('*** A-ONLY HTTPS TEST EDGE: cloud-test.sciforge.cn core-only boundary; not a product login or Provider deployment. ***')
       log(`Verified clean A HTTPS edge commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
     } else if (teamPrivateAcceptance) {
@@ -1115,37 +1213,47 @@ export async function buildCollaborationServerBundle({
       })
     }
     const edgeProfile = {}
-    if (aHttpsTestEdge) {
-      for (const [field, { expectedMode, relativePath }] of Object.entries(aHttpsTestEdgeAssets)) {
+    const selectedEdgeAssets = aHttpsOidcTest
+      ? aHttpsOidcTestAssets
+      : aHttpsTestEdge
+        ? aHttpsTestEdgeAssets
+        : undefined
+    if (selectedEdgeAssets) {
+      for (const [field, { expectedMode, relativePath }] of Object.entries(selectedEdgeAssets)) {
         const absolutePath = join(root, relativePath)
         let details
         try {
           details = await lstat(absolutePath)
         } catch (error) {
           if (error?.code === 'ENOENT') {
-            throw new Error(`A HTTPS test edge asset is missing: ${relativePath}`, { cause: error })
+            throw new Error(`A HTTPS test release asset is missing: ${relativePath}`, { cause: error })
           }
           throw error
         }
         if (!details.isFile() || details.isSymbolicLink() || (details.mode & 0o022) !== 0) {
-          throw new Error(`A HTTPS test edge asset is unsafe: ${relativePath}`)
+          throw new Error(`A HTTPS test release asset is unsafe: ${relativePath}`)
         }
         const actualMode = details.mode & 0o7777
         if (expectedMode !== undefined && actualMode !== expectedMode) {
           throw new Error(
-            `A HTTPS test edge script must have mode ${expectedMode.toString(8)}: ${relativePath}`
+            `A HTTPS test release script must have mode ${expectedMode.toString(8)}: ${relativePath}`
           )
         }
         edgeProfile[field] = await sha256File(absolutePath)
       }
     }
+    const identityAcceptanceHarnessSha256 = aHttpsOidcTest
+      ? await hashIdentityAcceptanceHarness(root)
+      : undefined
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: aHttpsOidcTest ? 2 : 1,
       artifact: 'sciforge-collaboration-server-bundle',
       contractCommit: approvedCommit,
       releaseMode: teamPrivateAcceptance
         ? 'team-private-acceptance'
-        : aHttpsTestEdge
+        : aHttpsOidcTest
+          ? 'a-https-oidc-test'
+          : aHttpsTestEdge
           ? 'a-https-test-edge'
           : privateTestRelease
             ? 'private-test'
@@ -1153,7 +1261,23 @@ export async function buildCollaborationServerBundle({
       ...(featureRelease ? { baseCommit } : {}),
       ...(teamPrivateAcceptance
         ? { deploymentBoundary: 'loopback-ssh-tunnel-only' }
-        : aHttpsTestEdge
+        : aHttpsOidcTest
+          ? {
+              deploymentBoundary: 'public-https-oidc-test',
+              hostname: 'cloud-test.sciforge.cn',
+              identityHostname: 'login-test.sciforge.cn',
+              oidcIssuer: 'https://login-test.sciforge.cn/realms/SciForge',
+              oidcAudience: 'sciforge-cloud-api',
+              oidcAuthorizedParties: 'sciforge-desktop,sciforge-web-mobile',
+              oidcAllowInsecureLoopback: false,
+              bindingConfirmMode: 'disabled',
+              providerMode: 'disabled',
+              identityEdgeNetwork: 'sciforge-keycloak_identity-edge',
+              identityAcceptanceHarnessSha256,
+              edgeCaddyImage: aHttpsTestEdgeImage,
+              ...edgeProfile
+            }
+          : aHttpsTestEdge
           ? {
               deploymentBoundary: 'public-https-core-only',
               hostname: 'cloud-test.sciforge.cn',
@@ -1200,8 +1324,10 @@ export async function buildCollaborationServerBundle({
       throw error
     }
     published = true
-    log(aHttpsTestEdge
-      ? `Created A-ONLY HTTPS test edge collaboration bundle at ${destination}.`
+    log(aHttpsOidcTest
+      ? `Created A-ONLY HTTPS OIDC test collaboration bundle at ${destination}.`
+      : aHttpsTestEdge
+        ? `Created A-ONLY HTTPS test edge collaboration bundle at ${destination}.`
       : teamPrivateAcceptance
         ? `Created TEAM-PRIVATE acceptance collaboration bundle at ${destination}.`
         : privateTestRelease
@@ -1369,6 +1495,7 @@ export async function runCollaborationServerBundleCli({
       delete process.env[IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT.token]
     }
     return await buildCollaborationServerBundle({
+      aHttpsOidcTest: context.arguments_.aHttpsOidcTest,
       aHttpsTestEdge: context.arguments_.aHttpsTestEdge,
       commit: context.approvedCommit,
       log,

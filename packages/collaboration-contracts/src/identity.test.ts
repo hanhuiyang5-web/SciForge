@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Vendored fixture is intentionally dependency-free JavaScript.
 import { createZulipBindingFixture } from '../../../test-fixtures/collaboration/unified-identity/binding-fixture.mjs'
@@ -9,6 +10,7 @@ import { REDACTED_VALUE, redactCredentials } from './core.js'
 import { agentNodeSchema } from './entities.js'
 import { COLLABORATION_ERROR_RULES, createCollaborationError } from './errors.js'
 import {
+  canonicalEnrollmentBytes,
   deviceCreateRequestSchema,
   deviceEnrollmentCreateRequestSchema,
   deviceEnrollmentCreateResponseSchema,
@@ -102,6 +104,33 @@ describe('strict OIDC and me contracts', () => {
 })
 
 describe('strict Device contracts', () => {
+  it('freezes enrollment proof bytes as six UTF-8 lines without a trailing LF', () => {
+    const facts = {
+      enrollmentId: 'enr_golden_vector_0001',
+      nonce: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+      userId: 'usr_golden_vector_0001',
+      installationId: 'ins_golden_vector_0001',
+      expiresAt: '2026-08-20T12:34:56.000Z'
+    }
+    const expected = [
+      'SCIFORGE-DEVICE-ENROLLMENT-V1',
+      facts.enrollmentId,
+      facts.nonce,
+      facts.userId,
+      facts.installationId,
+      facts.expiresAt
+    ].join('\n')
+    const canonical = canonicalEnrollmentBytes(facts)
+    const canonicalBuffer = Buffer.from(canonical)
+
+    expect(canonical).toBeInstanceOf(Uint8Array)
+    expect(canonicalBuffer).toEqual(Buffer.from(expected, 'utf8'))
+    expect(canonicalBuffer.toString('utf8').split('\n')).toHaveLength(6)
+    expect(canonical.at(-1)).not.toBe(0x0a)
+    expect(() => canonicalEnrollmentBytes({ ...facts, installationId: 'bad\ninstallation' })).toThrow(TypeError)
+    expect(() => canonicalEnrollmentBytes({ ...facts, nonce: '' })).toThrow(TypeError)
+  })
+
   it('parses the vendored Ed25519 request only with explicit nonce and idempotency', () => {
     const fixture = createDeviceFixture()
     const request = {

@@ -1,23 +1,23 @@
-# SciForge Cloud：core-only 预发布与 HTTPS 测试边缘
+# SciForge Cloud：core-only 预发布与 HTTPS/OIDC 测试边缘
 
-本目录为 SciForge Cloud ECS 上 `@sciforge/collaboration-server` 的最小 Docker Compose 预发布层。默认仍是 core-only loopback；只有显式叠加 `compose.provider-zulip.yml` 时才启用私有 Zulip Provider。另有互斥、显式的 `a-https-test-edge` 发布模式，仅把 core-only API/WSS 通过 `https://cloud-test.sciforge.cn` 暴露为 A 的测试入口。
+本目录为 SciForge Cloud ECS 上 `@sciforge/collaboration-server` 的最小 Docker Compose 预发布层。默认仍是 core-only loopback；只有显式叠加 `compose.provider-zulip.yml` 时才启用私有 Zulip Provider。另有两个互斥、显式的公网模式：`a-https-test-edge` 只发布 core-only `cloud-test`，`a-https-oidc-test` 则由 A 的同一固定 Caddy 同时终止 `cloud-test` 与 `login-test` TLS，并把后者仅转发到 Keycloak 同学提供的专用 identity-edge endpoint。
 
-`cloud-test` 不是正式产品登录入口：该模式必须保持 OIDC issuer 未配置、Provider catalog 为空、公开控制台返回 404。它只证明受信任 TLS 下的 A core API/WSS 边界，不证明 Keycloak、Zulip、最新版 SciForge 或真实业务身份链路已经接通。
+core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已配置固定 issuer、双 SNI ingress、Discovery/JWKS 和 fail-closed confirm。只有独立公网探针再加真实 Token 的 A acceptance harness 通过后，才能宣告 A 自己的身份/业务闭环；仍不能宣告 Keycloak 管理、Desktop、Zulip `/bind` 或全产品 E2E 已完成。
 
 | 层面 | 本目录能证明 | 本目录不能单独证明 |
 | --- | --- | --- |
-| SciForge Cloud | 固定发布物、数据库、loopback API/WSS、显式 `cloud-test` TLS edge 和重启恢复行为 | 正式登录、Provider 或产品入口已完成 |
+| SciForge Cloud | 固定发布物、数据库、loopback API/WSS、显式 core-only 或 OIDC 双 SNI edge 和重启恢复行为 | Keycloak 管理、Provider 或正式产品入口已完成 |
 | 自动化验收 | HTTP/WSS 公共边界；显式启用时可验证候选 Provider adapter | 真实最新版 SciForge/AgentRuntime 已完成端到端闭环 |
 | 产品开放 | loopback 控制台、API 与预发布门禁已经具备 | 正式链路已经选定，或成员业务验收已经完成 |
 
 ## 重要边界
 
-- 运行镜像只安装固定 commit 生成的三个 npm tarball：contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述显式 `private-test`、`team-private-acceptance` 或互斥的 `a-https-test-edge` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
+- 运行镜像只安装固定 commit 生成的三个 npm tarball：contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述显式 `private-test`、`team-private-acceptance`、`a-https-test-edge` 或 `a-https-oidc-test` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
 - 默认是 **core-only**：`compose.yml` 不注入 Provider 配置或 secret。`deploy-provider-zulip.sh` 才会显式加载只作用于 app 的 overlay；migrate 始终看不到 Provider 配置和 secret。
-- `compose.yml` 支持透传严格 OIDC 的非秘密配置，但当前正式 issuer 尚未选定。`SCIFORGE_COLLABORATION_OIDC_ISSUER` 为空时进程和数据库 readiness 正常，所有 User、Device 与 binding 入口必须 fail closed；这不是匿名身份模式，也不得恢复 opaque User bearer。Audience 固定为 `sciforge-cloud-api`，授权方固定为 `sciforge-desktop,sciforge-web-mobile`，生产不得允许非 HTTPS issuer。
+- `compose.yml` 只透传严格 OIDC 的非秘密配置。普通私有/core-only 模式的 issuer 为空，所有 User、Device 与 binding 入口 fail closed；`a-https-oidc-test` 唯一允许 `https://login-test.sciforge.cn/realms/SciForge`。Audience 固定为 `sciforge-cloud-api`，授权方固定为 `sciforge-desktop,sciforge-web-mobile`，insecure loopback 永远为 `false`。这不是匿名身份模式，也不恢复 opaque User bearer。
 - 原生入口是 `POST /v1/commands`、WebSocket `/v1/events` 和 A-only 网页控制台 `/console/`；没有 `/v1/meta`，也没有旧实验服务的 `/v1/ws`。
 - 应用在容器内监听 `0.0.0.0:8787`，但 Docker 只向 ECS `127.0.0.1:${SCIFORGE_COLLAB_HOST_PORT}` 发布。PostgreSQL 不发布宿主机端口。
-- 默认与 Provider 私有模式不开放 80/443。只有 `a-https-test-edge` 使用固定 digest 的独立 Caddy Compose 项目发布 TCP 443→容器 8443；不开放 80、UDP 443、8080、8787 或 PostgreSQL，不代理 `login-test.sciforge.cn`，也不加入数据库网络。
+- 默认与 Provider 私有模式不开放 80/443。两个显式 HTTPS 模式都只用固定 digest 的独立 Caddy Compose 项目发布 TCP 443→容器 8443；不公开 80、UDP 443、8080、8787 或 PostgreSQL，也不加入任一数据库网络。OIDC 模式额外只加入 `sciforge-keycloak_identity-edge`，该网络只能有 A edge 和别名为 `keycloak` 的 Keycloak app；Keycloak 数据库不得加入。
 - 本目录只定义 A 的 HTTP/WSS 公共协作边界，不决定最新版 SciForge 最终从何处接入，也不决定 Zulip 是否成为正式 Human Provider。可选 Zulip adapter 只代表一个显式启用的服务器验收候选，不得外推为产品唯一链路。
 - app 与一次性 migrate 容器固定使用非登录 UID/GID `10001:10001`；Provider secret 由宿主机 `root:10001`、文件 `0640`、目录 `0750` 提供，other 无任何权限。Provider 部署门禁还会拒绝 `sciforge-admin` 或任一可登录宿主机账号把数值 GID `10001` 作为主组或附加组；宿主机没有对应的 NSS group 条目是允许的，容器仍可按数值 GID 读取只读挂载。
 
@@ -111,6 +111,31 @@ npm run collaboration:bundle -- \
 ```
 
 manifest 必须记录 `releaseMode: "a-https-test-edge"`、`deploymentBoundary: "public-https-core-only"` 和唯一 `hostname: "cloud-test.sciforge.cn"`。该模式不允许 Provider overlay，必须保持 OIDC issuer 为空，只允许浏览器 Origin `https://cloud-test.sciforge.cn`。它不是 Keycloak、Zulip、Desktop 登录或真实业务 E2E 的完成证明。
+
+### A 的 HTTPS OIDC 测试 bundle
+
+只有 Keycloak 同学已经接受下述窄接口、且 A 要执行真实身份验收时才构建：
+
+```bash
+git fetch origin refs/heads/gui:refs/remotes/origin/gui
+test -z "$(git status --porcelain)"
+release_commit="$(git rev-parse HEAD)"
+base_commit="$(git rev-parse origin/gui)"
+git merge-base --is-ancestor "$base_commit" "$release_commit"
+
+npm ci
+artifact_dir="$(mktemp -d)"
+npm run collaboration:a:typecheck
+npm run collaboration:a:test
+npm run collaboration:bundle:test
+bash deploy/collaboration-private/scripts/static-policy-test.sh
+npm run collaboration:bundle -- \
+  --a-https-oidc-test \
+  --commit "$release_commit" \
+  --output "$artifact_dir/release"
+```
+
+manifest schema 为 `2`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience/authorized parties、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"` 和 64 位 `identityAcceptanceHarnessSha256`。发布脚本逐项校验这些值以及 shared 12 + OIDC 6 个 ECS 运行资产摘要；harness 摘要是独立的本地验收证明，不计入这 18 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
 
 将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：三个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共八个文件。除 `SHA256SUMS` 自身外的七项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和三个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
 
@@ -241,6 +266,20 @@ SCIFORGE_COLLABORATION_OIDC_ISSUER=
 SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK=false
 ```
 
+使用 `a-https-oidc-test` 时改为以下 exact profile；这是非秘密配置，Keycloak 管理员密码、测试用户密码、client secret 和 Access Token 均不得写入本文件、聊天或截图：
+
+```dotenv
+SCIFORGE_COLLABORATION_ALLOWED_ORIGINS=https://cloud-test.sciforge.cn
+SCIFORGE_A_HTTPS_OIDC_TEST_IPV4=47.76.230.118
+SCIFORGE_A_HTTPS_OIDC_TEST_STATE_DIR=/srv/sciforge-collaboration/a-https-oidc-test
+SCIFORGE_COLLABORATION_OIDC_ISSUER=https://login-test.sciforge.cn/realms/SciForge
+SCIFORGE_COLLABORATION_OIDC_AUDIENCE=sciforge-cloud-api
+SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile
+SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK=false
+```
+
+OIDC edge 的 ACME state 与 core-only edge 分目录保存；任何 disable/回滚都只停止并移除对应 edge container，不删除 state。
+
 ACME 账户与证书私钥保存在 release 目录外的固定 state 目录。部署脚本将根目录设为 `root:root/0750`，将 `data/` 和 `config/` 设为 `10002:10002/0700`；另建 `approval/` 为 `root:10002/0750` 并只读挂入容器，批准 marker 为 `root:10002/0440`，未验证的 Caddy 无权自行批准。回滚只停止 edge，绝不删除该目录。
 
 首次启动必须使用新的 `collaboration-db` named volume：官方 PostgreSQL entrypoint 只会在空数据目录执行 `postgres-init/`，从而创建独立管理员和最小权限应用角色。如果检测到旧 volume 缺少 `sciforge_admin` 或应用角色仍有超级用户权限，健康检查/验收会失败；先保全备份并做显式迁移，不得通过删除唯一 volume 绕过检查。
@@ -335,6 +374,7 @@ sudo "$release_dir/deploy/collaboration-private/scripts/verify-a-https-test-edge
 本地门禁通过后，还必须在 ECS 之外的独立公网网络、从同一 fixed release 运行无代理公网探针；只有它通过才能宣告 `cloud-test` 公网可达：
 
 ```bash
+set -euo pipefail
 release_commit=<获批的完整40位contract-commit>
 fixed_release_copy=<本机已核验的fixed-release目录>
 manifest="$fixed_release_copy/deploy/collaboration-private/bundle/RELEASE_MANIFEST.json"
@@ -355,6 +395,78 @@ external_sha="$(node -e '
 该探针通过公共 DNS 精确校验 A/AAAA，直连 `47.76.230.118:443` 验证受信任 TLS、不可缓存的 exact commit 响应头、HTTP 与 WSS 拒绝边界，并从该独立观察点补充验证 80、8080、8787、5432 不可达；ECS 本地门禁同时以宿主 listener 和 Docker PortBindings 证明这些后端端口没有公网绑定，因此不会只依赖外部网络自身的出口策略。它不会声称 OIDC、Provider、成功认证 WSS 或业务 E2E 已完成。首次启动失败后，从该候选所属的 fixed release 运行零参数 `disable-a-https-test-edge.sh` 删除停止的精确候选，再重试。
 
 回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state；若还需回退 app，仅在 schema 兼容已确认后，从目标旧 fixed release 重新运行它自己的 v5 attestation 与 `deploy.sh`。只有当目标旧 release 本身也是 `a-https-test-edge` 且重新通过本地和外部门禁时才可重开 443；旧的 loopback-only release 只能保持 443 关闭。绝不删除 collaboration volume、database network 或固定 ACME state。
+
+### 显式启用 `cloud-test` + `login-test` OIDC 测试 edge
+
+这是同 IP/443 的受控例外，仅当 Keycloak 没有独立 EIP/LB 时使用。A 只拥有 TLS/SNI 与反向代理；不创建 Keycloak compose、realm、client、用户、管理员凭据或数据库。Keycloak owner 必须先完成并用非秘密方式确认：
+
+- `sciforge-keycloak_identity-edge` 是 local bridge，只有 Keycloak app endpoint；该 endpoint 在网络内的唯一上游别名为 `keycloak`、端口为 `8080`，Keycloak 数据库不加入该网络；
+- Keycloak 使用 production start、exact hostname `https://login-test.sciforge.cn`、`xforwarded` proxy headers 和只信任 A edge 的代理范围；
+- Discovery 的 `issuer` 精确为 `https://login-test.sciforge.cn/realms/SciForge`，JWKS 有 RSA/RS256 signing key；真实 Access Token 已确认 header 为 `alg=RS256` 且有 `kid`，claims 必须同时含有效的 `iss/sub/aud/azp/exp/nbf/iat/auth_time`，其中 `aud` 包含 `sciforge-cloud-api`、`azp=sciforge-desktop`。这里只确认 claim 名称与形状，不向 A 或聊天提供 Token 内容。
+
+A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。它只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络。local verifier 要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
+
+切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的 PostgreSQL v5 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
+
+```bash
+release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
+sudo "$release_dir/deploy/collaboration-private/scripts/deploy-a-https-oidc-test.sh" \
+  <获批的完整40位contract-commit> \
+  /srv/sciforge-collaboration/secrets/collaboration.env
+```
+
+候选 edge 初始 `restart: no` 且最多等待五分钟。只有本地门禁同时通过双 SAN TLS、strict SNI、exact Discovery/JWKS、两个 SNI 的 exact revision header、Cloud health、空 Provider catalog、confirm 精确 401、Keycloak 管理/健康/其他 realm 404、WSS/Origin 拒绝和端口/网络边界后，脚本才写入 root-owned approval marker 并切换为 `unless-stopped`。失败 trap 只按本次候选 ID 停止它，保留 Cloud、Keycloak、双方数据库、Docker networks 和 ACME state。
+
+在 ECS 外的独立公网网络继续运行固定摘要的探针：
+
+```bash
+set -euo pipefail
+release_commit=<获批的完整40位contract-commit>
+fixed_release_copy=<本机已核验的fixed-release目录>
+manifest="$fixed_release_copy/deploy/collaboration-private/bundle/RELEASE_MANIFEST.json"
+external_verifier="$fixed_release_copy/deploy/collaboration-private/scripts/verify-a-https-oidc-test-external.sh"
+fixed_source_root=/absolute/path/to/trusted-fixed-source
+harness="$fixed_source_root/scripts/collaboration-a-identity-acceptance.mjs"
+initial_token_file=/absolute/path/oidc-access-token-0600
+fresh_revoke_token_file=/absolute/path/fresh-oidc-access-token-0600
+
+(
+  set -euo pipefail
+  unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY
+  unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy
+  unset SSL_CERT_FILE ssl_cert_file SSL_CERT_DIR ssl_cert_dir CURL_CA_BUNDLE curl_ca_bundle
+
+  IFS=$'\t' read -r external_sha harness_sha < <(node -e '
+    const m = require(process.argv[1])
+    const commit = process.argv[2]
+    if (m.schemaVersion !== 2 || m.contractCommit !== commit
+        || m.releaseMode !== "a-https-oidc-test"
+        || m.deploymentBoundary !== "public-https-oidc-test"
+        || m.oidcIssuer !== "https://login-test.sciforge.cn/realms/SciForge"
+        || !/^[0-9a-f]{64}$/.test(m.identityEdgeExternalVerifyScriptSha256 ?? "")
+        || !/^[0-9a-f]{64}$/.test(m.identityAcceptanceHarnessSha256 ?? "")) process.exit(1)
+    process.stdout.write(`${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\n`)
+  ' "$manifest" "$release_commit")
+  "$external_verifier" "$release_commit" "$external_sha"
+
+  test -f "$harness" && test ! -L "$harness"
+  test "$(shasum -a 256 "$harness" | awk '{print $1}')" = "$harness_sha"
+  node "$harness" \
+    --base-url https://cloud-test.sciforge.cn \
+    --token-file "$initial_token_file" \
+    --revoke-token-file "$fresh_revoke_token_file" \
+    --commit "$release_commit" \
+    --expected-harness-sha256 "$harness_sha"
+)
+```
+
+整个 manifest 提取、外部探针、harness 摘要比对和 harness 进程都处于同一个启动前已清除 Node preload、代理与自定义 CA 变量的 subshell；不能把 hash 提取单独移到外面。外部门禁通过后，harness 才验证 A 的 OIDC User → Device → Agent → Project → Task → accepted result → completed Project → Device revoke → stale Agent credential rejected。
+
+初始 Token 和 fresh revoke Token 必须在启动命令前都已准备好；两个文件都必须是 absolute、regular、非 symlink、当前用户拥有且精确 `0600`。fresh revoke Token 的 `auth_time` 在 harness preflight 时不得超过 180 秒，启动后两个文件保持不变。harness 不输出或上传 Token 内容。只有同一 Token 在启动前已经满足 fresh preflight（包括 `auth_time ≤ 180s`）时，才可把同一个 `0600` 文件同时传给两个参数。
+
+可选追加 `--zulip-realm-url https://chat.sciforge.cn`，但它只验证 A 的 confirm 仍返回 401，不会执行或冒充 D 的 `/bind`。任何 receipt 也不得包含 Token、设备私钥、Agent credential 或 binding code。
+
+回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。如需恢复 core-only edge，必须重新配置空 issuer profile、重新部署 app 并通过旧 core-only 的本地/外部门禁，不能只换 Caddy。
 
 ### 旧两用户 Zulip harness 的状态
 

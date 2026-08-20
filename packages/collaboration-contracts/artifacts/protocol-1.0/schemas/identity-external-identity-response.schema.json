@@ -1,0 +1,118 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-external-identity-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "identity": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "externalIdentityId": {
+          "pattern": "^xid_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "humanEndpointId": {
+          "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "provider": {
+          "const": "zulip",
+          "type": "string"
+        },
+        "realmId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "realmUrl": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "revokedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "external_identity",
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "userId": {
+          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "verifiedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "zulipUserId": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "type",
+        "externalIdentityId",
+        "provider",
+        "userId",
+        "realmUrl",
+        "realmId",
+        "zulipUserId",
+        "humanEndpointId",
+        "status",
+        "verifiedAt"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "identity"
+  ],
+  "title": "SciForge Collaboration identity-external-identity-response",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "response",
+        "method": "DELETE",
+        "path": "/v1/me/external-identities/{externalIdentityId}"
+      }
+    ]
+  }
+}

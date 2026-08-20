@@ -27,8 +27,17 @@ if [[ "$RELEASE_MANIFEST_MODE" == a-https-test-edge ]]; then
       && -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" \
       && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false ]] \
     || die "The A HTTPS test edge app requires its exact origin and an unconfigured fail-closed OIDC boundary."
-elif [[ -n "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" ]]; then
-  die "Only the explicit A HTTPS test edge release may enable a browser origin."
+elif [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_OIDC_TEST_ORIGIN" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ISSUER" == "$A_HTTPS_OIDC_TEST_ISSUER" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUDIENCE" == "$A_HTTPS_OIDC_TEST_AUDIENCE" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES" == "$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false \
+      && "$SCIFORGE_COLLAB_DEPLOYMENT_MODE" == oidc-test-private ]] \
+    || die "The A HTTPS OIDC test app requires its exact immutable identity profile."
+elif [[ -n "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" \
+    || -n "$SCIFORGE_COLLABORATION_OIDC_ISSUER" ]]; then
+  die "Only an explicit A HTTPS release may enable a browser origin or OIDC issuer."
 fi
 
 # Quiet config validation expands secrets internally but never writes the
@@ -69,13 +78,13 @@ stop_unverified_app() {
         && "$candidate_app_revision" == "$expected_commit" \
         && "$current_app_revision" == "$expected_commit" ]]; then
       if ! docker stop -t 20 "$candidate_app_container_id" > /dev/null 2>&1; then
-        echo "ERROR: Core-only verification failed and the unverified app could not be stopped; operator intervention is required." >&2
+        echo "ERROR: App verification failed and the unverified app could not be stopped; operator intervention is required." >&2
         exit_code=1
       else
-        echo "ERROR: Core-only deployment did not pass verification; the unverified app was stopped. PostgreSQL, volumes, container logs, backups, and release evidence were preserved for diagnosis." >&2
+        echo "ERROR: App deployment did not pass verification; the unverified app was stopped. PostgreSQL, volumes, container logs, backups, and release evidence were preserved for diagnosis." >&2
       fi
     else
-      echo "ERROR: Core-only deployment did not pass verification, but the current app identity or revision no longer matches this deployment candidate. Refusing to stop it; operator inspection is required." >&2
+      echo "ERROR: App deployment did not pass verification, but the current app identity or revision no longer matches this deployment candidate. Refusing to stop it; operator inspection is required." >&2
       exit_code=1
     fi
   fi
@@ -104,13 +113,17 @@ if ! "${COMPOSE[@]}" up -d --remove-orphans app --wait --wait-timeout 180; then
 fi
 candidate_app_container_id="$("${COMPOSE[@]}" ps -q app)"
 [[ -n "$candidate_app_container_id" ]] \
-  || die "Could not record the core-only deployment candidate container."
+  || die "Could not record the deployment candidate container."
 candidate_app_revision="$(docker container inspect --format \
   '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
   "$candidate_app_container_id")"
 [[ "$candidate_app_revision" == "$expected_commit" ]] \
-  || die "Core-only deployment candidate revision does not match the approved commit."
+  || die "Deployment candidate revision does not match the approved commit."
 "$SCRIPT_DIR/verify.sh" "$expected_commit" "$ENV_FILE"
 
 deployment_complete=true
-echo "Deployment passed for contract commit $expected_commit (core-only private mode)."
+if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+  echo "Deployment passed for contract commit $expected_commit (OIDC test app configured; public issuer availability remains gated by deploy-a-https-oidc-test.sh)."
+else
+  echo "Deployment passed for contract commit $expected_commit (core-only private mode)."
+fi

@@ -1,15 +1,30 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import {
+  canonicalEnrollmentBytes,
   collaborationErrorSchema,
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceEnrollmentCreateResponseSchema,
+  deviceListResponseSchema,
+  deviceResponseSchema,
+  deviceRevokeRequestSchema,
+  externalIdentityListResponseSchema,
+  externalIdentityResponseSchema,
+  externalIdentityRevokeRequestSchema,
   inboxMessageSchema,
+  meResponseSchema,
   restEntitySchema,
   restRequestSchema,
-  restResponseSchema
+  restResponseSchema,
+  zulipBindingBeginRequestSchema,
+  zulipBindingBeginResponseSchema,
+  zulipBindingConfirmRequestSchema,
+  zulipBindingConfirmResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
 import {
   ARTIFACT_DIRECTORY,
@@ -44,6 +59,8 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   assert.equal(manifest.acceptance.businessEndToEnd.status, 'not-open')
   assert.equal(manifest.acceptance.identityProvider.status, 'not-selected')
   assert.equal(manifest.acceptance.formalProductTransport.status, 'not-selected')
+  assert.ok(manifest.acceptance.coreOnly.proves.includes('device-enrollment-signing-vector'))
+  assert.ok(manifest.files.some((entry) => entry.path === 'fixtures/device-enrollment-signing-v1.json'))
   assert.equal(manifest.files.length, files.size - 1)
   for (const entry of manifest.files) {
     const content = files.get(entry.path)
@@ -53,6 +70,50 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   }
 })
 
+test('Device enrollment golden vector freezes canonical bytes and verifies with public material only', () => {
+  const files = generateContractArtifactFiles()
+  const path = 'fixtures/device-enrollment-signing-v1.json'
+  const fixture = JSON.parse(files.get(path))
+  const expectedUtf8 = [
+    'SCIFORGE-DEVICE-ENROLLMENT-V1',
+    'enr_golden_vector_0001',
+    'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+    'usr_golden_vector_0001',
+    'ins_golden_vector_0001',
+    '2026-08-20T12:34:56.000Z'
+  ].join('\n')
+
+  assert.equal(fixture.kind, 'device-enrollment-signing-vector')
+  assert.equal(fixture.algorithm, 'Ed25519')
+  assert.deepEqual(fixture.canonicalization, {
+    domain: 'SCIFORGE-DEVICE-ENROLLMENT-V1',
+    encoding: 'UTF-8',
+    fieldOrder: ['enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'],
+    separator: 'LF',
+    trailingLf: false
+  })
+  assert.equal(fixture.canonical.utf8, expectedUtf8)
+  assert.equal(fixture.canonical.utf8.split('\n').length, 6)
+  assert.equal(fixture.canonical.utf8.endsWith('\n'), false)
+
+  const canonical = Buffer.from(canonicalEnrollmentBytes(fixture.input))
+  assert.equal(canonical.toString('utf8'), expectedUtf8)
+  assert.equal(canonical.toString('base64url'), fixture.canonical.base64url)
+  assert.equal(canonical.toString('hex'), fixture.canonical.hex)
+  assert.equal(canonical.length, fixture.canonical.byteLength)
+  assert.deepEqual(Buffer.from(fixture.canonical.base64url, 'base64url'), canonical)
+  assert.deepEqual(Buffer.from(fixture.canonical.hex, 'hex'), canonical)
+
+  const publicKeyJwk = fixture.expected.publicKeyJwk
+  assert.deepEqual(Object.keys(publicKeyJwk).sort(), ['alg', 'crv', 'kid', 'kty', 'use', 'x'])
+  assert.equal('d' in publicKeyJwk, false)
+  const signature = Buffer.from(fixture.expected.signatureBase64url, 'base64url')
+  assert.equal(signature.length, 64)
+  assert.equal(signature.toString('base64url'), fixture.expected.signatureBase64url)
+  assert.equal(verify(null, canonical, createPublicKey({ key: publicKeyJwk, format: 'jwk' }), signature), true)
+  assert.equal(/"(?:d|privateKey|privateKeyJwk|seed|secret)"\s*:/iu.test(JSON.stringify(fixture)), false)
+})
+
 test('JSON Schemas expose the complete strict public roots and actor table', () => {
   const files = generateContractArtifactFiles()
   for (const path of [
@@ -60,7 +121,21 @@ test('JSON Schemas expose the complete strict public roots and actor table', () 
     'schemas/responses.schema.json',
     'schemas/inbox.schema.json',
     'schemas/entities.schema.json',
-    'schemas/errors.schema.json'
+    'schemas/errors.schema.json',
+    'schemas/identity-me-response.schema.json',
+    'schemas/identity-device-enrollment-create-request.schema.json',
+    'schemas/identity-device-enrollment-create-response.schema.json',
+    'schemas/identity-device-create-request.schema.json',
+    'schemas/identity-device-response.schema.json',
+    'schemas/identity-device-list-response.schema.json',
+    'schemas/identity-device-revoke-request.schema.json',
+    'schemas/identity-zulip-binding-begin-request.schema.json',
+    'schemas/identity-zulip-binding-begin-response.schema.json',
+    'schemas/identity-zulip-binding-confirm-request.schema.json',
+    'schemas/identity-zulip-binding-confirm-response.schema.json',
+    'schemas/identity-external-identity-list-response.schema.json',
+    'schemas/identity-external-identity-revoke-request.schema.json',
+    'schemas/identity-external-identity-response.schema.json'
   ]) {
     const schema = JSON.parse(files.get(path))
     assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema')
@@ -114,6 +189,112 @@ test('JSON Schemas expose the complete strict public roots and actor table', () 
   assert.deepEqual(actorTable.stateTransitions.resource_ref.unavailable, ['available', 'revoked'])
   assert.deepEqual(actorTable.stateTransitions.resource_ref.revoked, ['available', 'unavailable'])
   assert.deepEqual(actorTable.stateTransitions.resource_ref.invalidated, [])
+})
+
+test('identity REST machine schemas cover every current public identity body', () => {
+  const files = generateContractArtifactFiles()
+  const cases = [
+    {
+      path: 'schemas/identity-me-response.schema.json',
+      source: meResponseSchema,
+      required: ['schemaVersion', 'type', 'userId', 'displayName', 'status', 'oidcIdentityId', 'issuer', 'revision', 'createdAt', 'updatedAt'],
+      bindings: [{ method: 'GET', path: '/v1/me', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-device-enrollment-create-request.schema.json',
+      source: deviceEnrollmentCreateRequestSchema,
+      required: ['installationId', 'idempotencyKey'],
+      bindings: [{ method: 'POST', path: '/v1/device-enrollments', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-device-enrollment-create-response.schema.json',
+      source: deviceEnrollmentCreateResponseSchema,
+      required: ['enrollmentId', 'nonce', 'expiresAt'],
+      bindings: [{ method: 'POST', path: '/v1/device-enrollments', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-device-create-request.schema.json',
+      source: deviceCreateRequestSchema,
+      required: ['enrollmentId', 'nonce', 'installationId', 'displayName', 'platform', 'publicKeyJwk', 'capabilitySummary', 'signature', 'idempotencyKey'],
+      bindings: [{ method: 'POST', path: '/v1/devices', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-device-response.schema.json',
+      source: deviceResponseSchema,
+      required: ['device'],
+      bindings: [
+        { method: 'POST', path: '/v1/devices', body: 'response' },
+        { method: 'DELETE', path: '/v1/me/devices/{deviceId}', body: 'response' }
+      ]
+    },
+    {
+      path: 'schemas/identity-device-list-response.schema.json',
+      source: deviceListResponseSchema,
+      required: ['devices'],
+      bindings: [{ method: 'GET', path: '/v1/me/devices', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-device-revoke-request.schema.json',
+      source: deviceRevokeRequestSchema,
+      required: ['deviceId', 'idempotencyKey'],
+      bindings: [{ method: 'DELETE', path: '/v1/me/devices/{deviceId}', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-zulip-binding-begin-request.schema.json',
+      source: zulipBindingBeginRequestSchema,
+      required: ['realmUrl', 'idempotencyKey'],
+      bindings: [{ method: 'POST', path: '/v1/integrations/zulip/bindings', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-zulip-binding-begin-response.schema.json',
+      source: zulipBindingBeginResponseSchema,
+      required: ['bindingRequestId', 'bindingCode', 'expiresAt'],
+      bindings: [{ method: 'POST', path: '/v1/integrations/zulip/bindings', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-zulip-binding-confirm-request.schema.json',
+      source: zulipBindingConfirmRequestSchema,
+      required: ['bindingCode', 'realmUrl', 'realmId', 'zulipUserId', 'providerEventId', 'idempotencyKey'],
+      bindings: [{ method: 'POST', path: '/v1/integrations/zulip/bindings/confirm', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-zulip-binding-confirm-response.schema.json',
+      source: zulipBindingConfirmResponseSchema,
+      required: ['identity'],
+      bindings: [{ method: 'POST', path: '/v1/integrations/zulip/bindings/confirm', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-external-identity-list-response.schema.json',
+      source: externalIdentityListResponseSchema,
+      required: ['identities'],
+      bindings: [{ method: 'GET', path: '/v1/me/external-identities', body: 'response' }]
+    },
+    {
+      path: 'schemas/identity-external-identity-revoke-request.schema.json',
+      source: externalIdentityRevokeRequestSchema,
+      required: ['externalIdentityId', 'idempotencyKey'],
+      bindings: [{ method: 'DELETE', path: '/v1/me/external-identities/{externalIdentityId}', body: 'request' }]
+    },
+    {
+      path: 'schemas/identity-external-identity-response.schema.json',
+      source: externalIdentityResponseSchema,
+      required: ['identity'],
+      bindings: [{ method: 'DELETE', path: '/v1/me/external-identities/{externalIdentityId}', body: 'response' }]
+    }
+  ]
+
+  assert.equal(cases.length, 14, 'every exported public identity REST body root has one schema')
+  assert.equal(new Set(cases.map((entry) => entry.path)).size, cases.length,
+    'identity REST schema paths must be unique')
+
+  for (const entry of cases) {
+    assert.ok(entry.source, `${entry.path} source Zod schema`)
+    const schema = JSON.parse(files.get(entry.path))
+    assert.equal(schema.additionalProperties, false, entry.path)
+    assert.deepEqual(new Set(schema.required), new Set(entry.required), entry.path)
+    assert.deepEqual(schema['x-sciforge-http'].bindings, entry.bindings, entry.path)
+    assert.equal(schema['x-sciforge-contract'].contractCommit, COMMIT_PLACEHOLDER, entry.path)
+  }
 })
 
 test('machine schemas distinguish command input defaults from normalized entity output', () => {
@@ -196,6 +377,7 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
   const fixtures = [...files.entries()]
     .filter(([path]) => path.startsWith('fixtures/'))
     .map(([, content]) => JSON.parse(content))
+    .filter((fixture) => Array.isArray(fixture.documents))
   assert.deepEqual(new Set(fixtures.map((fixture) => fixture.category)), new Set([
     'normal',
     'duplicate',
@@ -203,7 +385,8 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
     'revision-conflict',
     'idempotency-conflict',
     'execution-conflict',
-    'confirmation-conflict'
+    'confirmation-conflict',
+    'credential-revoke'
   ]))
   for (const fixture of fixtures) {
     assert.equal(fixture.protocolVersion, '1.0')
@@ -221,6 +404,24 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
   assert.deepEqual(outOfOrder.expectations.serverCursorAtGap, { ackedSequence: 11, nextSequence: 12 })
   assert.equal(fixtures.find((fixture) => fixture.category === 'execution-conflict').contractStatus, 'current')
   assert.equal(fixtures.find((fixture) => fixture.category === 'confirmation-conflict').contractStatus, 'current')
+  const credentialRevoke = fixtures.find((fixture) => fixture.category === 'credential-revoke')
+  assert.equal(credentialRevoke.contractStatus, 'current')
+  assert.equal(credentialRevoke.documents.find((entry) => entry.role === 'revoke-request').value.type,
+    'credential.revoke_current')
+  assert.equal(credentialRevoke.documents.find((entry) => entry.role === 'success-receipt').value.receipt.status,
+    'succeeded')
+  assert.equal(credentialRevoke.documents.find((entry) => entry.role === 'subsequent-response').value.error.code,
+    'credential_revoked')
+  assert.deepEqual(credentialRevoke.expectations, {
+    actorType: 'agent',
+    credentialMaterialDisclosed: false,
+    oidcUserTokenRevoked: false,
+    revocationScope: 'current-bearer-only',
+    subsequentAuthentication: 'same-revoked-agent-bearer',
+    subsequentUseAccepted: false,
+    subsequentUseErrorCode: 'credential_revoked',
+    successReceiptStatus: 'succeeded'
+  })
 })
 
 test('release generation can inject one fixed commit without changing the source artifact set', () => {

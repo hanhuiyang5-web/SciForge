@@ -20,13 +20,15 @@ require_root
 acquire_collaboration_deploy_lock
 
 validate_release_bundle "$expected_commit"
-[[ "$RELEASE_MANIFEST_MODE" != a-https-test-edge ]] \
-  || die "The A HTTPS test edge release is core-only and cannot enable a Provider overlay."
+[[ "$RELEASE_MANIFEST_MODE" != a-https-test-edge \
+    && "$RELEASE_MANIFEST_MODE" != a-https-oidc-test ]] \
+  || die "A public HTTPS release cannot enable a Provider overlay."
 prepare_compose_environment "$expected_commit" "$env_input"
 validate_local_docker_endpoint
 assert_no_a_https_test_edge_container
-[[ -z "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" ]] \
-  || die "The private Provider deployment must not enable a public browser origin."
+[[ -z "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" \
+    && -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" ]] \
+  || die "The private Provider deployment must not enable a public browser origin or OIDC issuer."
 enable_zulip_provider_compose
 "${COMPOSE[@]}" config --quiet
 "${COMPOSE[@]}" build app

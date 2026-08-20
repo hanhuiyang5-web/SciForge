@@ -13,6 +13,7 @@
       "proves": [
         "schema-generation",
         "fixture-validation",
+        "device-enrollment-signing-vector",
         "loopback-transport",
         "healthz",
         "readyz",
@@ -33,6 +34,16 @@
   "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
   "contractVersion": "1.0",
   "files": [
+    {
+      "bytes": 2657,
+      "path": "fixtures/credential-revoke-current.json",
+      "sha256": "fc34418bef021fc4377a15a37fea0ab2bc0a7ef717c987f4bfef81f64ecae9b7"
+    },
+    {
+      "bytes": 1957,
+      "path": "fixtures/device-enrollment-signing-v1.json",
+      "sha256": "8d92eb9f474dfcd7879ed14ee7130e7a2285ad5db2480cb01edc1ea1ea441878"
+    },
     {
       "bytes": 1386,
       "path": "fixtures/duplicate-idempotent-replay.json",
@@ -84,6 +95,76 @@
       "sha256": "8a72f50bd30b6d974482249b67758beaa101bfde52a30787a23eb2d29430e23a"
     },
     {
+      "bytes": 3130,
+      "path": "schemas/identity-device-create-request.schema.json",
+      "sha256": "9aa881dda6ca002f1d3986c082e8be2d98acdecc4a5d0be5bf3524ad48c5303a"
+    },
+    {
+      "bytes": 954,
+      "path": "schemas/identity-device-enrollment-create-request.schema.json",
+      "sha256": "0496cf847b18321704dd474dd08192a76f31a1e86f3afcb0c23b3f4292c9624e"
+    },
+    {
+      "bytes": 1317,
+      "path": "schemas/identity-device-enrollment-create-response.schema.json",
+      "sha256": "c04368d2e80bbf5d16150314ad64ddd9f40615ee8c12c54e23e558a092144f1f"
+    },
+    {
+      "bytes": 5674,
+      "path": "schemas/identity-device-list-response.schema.json",
+      "sha256": "de5629cccefec3b4c5f263ab4eafc927247e847dc3532a96dafb8eea484cd82c"
+    },
+    {
+      "bytes": 5397,
+      "path": "schemas/identity-device-response.schema.json",
+      "sha256": "cf65270f161892f5a6d8f3d8179e8fcc2af63fedb6ad27b81f3d91e6862055de"
+    },
+    {
+      "bytes": 925,
+      "path": "schemas/identity-device-revoke-request.schema.json",
+      "sha256": "56cb31c51e5965bc6d2383722a53d135aa9c7cf4a16788b2645b2b9e22783437"
+    },
+    {
+      "bytes": 4373,
+      "path": "schemas/identity-external-identity-list-response.schema.json",
+      "sha256": "6c315078360098f6e60ff70388f59586b96392b54a303333db27617daa056eb5"
+    },
+    {
+      "bytes": 4129,
+      "path": "schemas/identity-external-identity-response.schema.json",
+      "sha256": "238be0028ed0eeb095a16c149a7b8e328dbbeb8a38a4b1aedfa236b47243db21"
+    },
+    {
+      "bytes": 989,
+      "path": "schemas/identity-external-identity-revoke-request.schema.json",
+      "sha256": "08895b39c8b87df319fa234e63ad375e885a7d0283729c1654c1739d20523c2e"
+    },
+    {
+      "bytes": 2310,
+      "path": "schemas/identity-me-response.schema.json",
+      "sha256": "bb4ef0025071e7ac5d45a00c14935f93271ac2798c16fcfb7ad3a8c2e6a5837f"
+    },
+    {
+      "bytes": 916,
+      "path": "schemas/identity-zulip-binding-begin-request.schema.json",
+      "sha256": "be849096c14010bfe350c1188354dd64992174d4664432d1093d6a7254231559"
+    },
+    {
+      "bytes": 1376,
+      "path": "schemas/identity-zulip-binding-begin-response.schema.json",
+      "sha256": "8ee51c9310037255605ddded5039343c8d1ed1e05d9e644ebb9eb15effa715e6"
+    },
+    {
+      "bytes": 1433,
+      "path": "schemas/identity-zulip-binding-confirm-request.schema.json",
+      "sha256": "6c1cf6fddddd31ab46d750bf346300434cb758acd3d07c0a53602d6260678d6a"
+    },
+    {
+      "bytes": 4127,
+      "path": "schemas/identity-zulip-binding-confirm-response.schema.json",
+      "sha256": "beab6bcc0bf2ca28c50cbbe8e5e49cf0e157965b9ab67a4e09726c93c0f09672"
+    },
+    {
       "bytes": 48048,
       "path": "schemas/inbox.schema.json",
       "sha256": "9d699821afa35d96a8e15dd3f3fd0750ad1a037477b862ab41ff1bc135b0fbd9"
@@ -101,5 +182,5 @@
   ],
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "protocolVersion": "1.0",
-  "source": "packages/collaboration-contracts/src strict Zod exports"
+  "source": "packages/collaboration-contracts/src strict public exports"
 }

@@ -1,20 +1,17 @@
 import { createPublicKey, randomBytes, verify } from 'node:crypto'
 
-import type { Ed25519PublicJwk } from '@sciforge/collaboration-contracts'
+import {
+  canonicalEnrollmentBytes as canonicalContractEnrollmentBytes,
+  type Ed25519PublicJwk,
+  type EnrollmentSigningFacts
+} from '@sciforge/collaboration-contracts'
 
 import { digestSecret } from './crypto.js'
 import { fail } from './errors.js'
 
-export type EnrollmentSigningFacts = Readonly<{
-  enrollmentId: string
-  nonce: string
-  userId: string
-  installationId: string
-  expiresAt: string
-}>
-
-const DEVICE_ENROLLMENT_DOMAIN = 'SCIFORGE-DEVICE-ENROLLMENT-V1'
 const BASE32_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+export type { EnrollmentSigningFacts }
 
 export function issueEnrollmentNonce(): string {
   return randomBytes(32).toString('base64url')
@@ -43,20 +40,14 @@ export function issueBindingCode(): string {
 }
 
 export function canonicalEnrollmentBytes(input: EnrollmentSigningFacts): Buffer {
-  const values = [
-    DEVICE_ENROLLMENT_DOMAIN,
-    input.enrollmentId,
-    input.nonce,
-    input.userId,
-    input.installationId,
-    input.expiresAt
-  ]
-  for (const value of values) {
-    if (!value || value.includes('\n') || value.includes('\r')) {
+  try {
+    return Buffer.from(canonicalContractEnrollmentBytes(input))
+  } catch (error) {
+    if (error instanceof TypeError) {
       fail('validation_failed', 'Enrollment signing fields must be non-empty strings without line breaks.')
     }
+    throw error
   }
-  return Buffer.from(values.join('\n'), 'utf8')
 }
 
 export function verifyDeviceEnrollmentProof(input: Readonly<{

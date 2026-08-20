@@ -1,0 +1,145 @@
+{
+  "$id": "https://contracts.sciforge.invalid/collaboration/1.0/identity-device-create-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capabilitySummary": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9_.-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "displayName": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "enrollmentId": {
+      "pattern": "^enr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+      "type": "string"
+    },
+    "idempotencyKey": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^idem_[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "installationId": {
+      "pattern": "^ins_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+      "type": "string"
+    },
+    "nonce": {
+      "maxLength": 512,
+      "minLength": 43,
+      "type": "string"
+    },
+    "platform": {
+      "additionalProperties": false,
+      "properties": {
+        "appVersion": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "arch": {
+          "enum": [
+            "x64",
+            "arm64"
+          ],
+          "type": "string"
+        },
+        "os": {
+          "enum": [
+            "windows",
+            "macos",
+            "linux"
+          ],
+          "type": "string"
+        },
+        "osVersion": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "arch",
+        "appVersion"
+      ],
+      "type": "object"
+    },
+    "publicKeyJwk": {
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "EdDSA",
+          "type": "string"
+        },
+        "crv": {
+          "const": "Ed25519",
+          "type": "string"
+        },
+        "kid": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        },
+        "kty": {
+          "const": "OKP",
+          "type": "string"
+        },
+        "use": {
+          "const": "sig",
+          "type": "string"
+        },
+        "x": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "kty",
+        "crv",
+        "alg",
+        "use",
+        "kid",
+        "x"
+      ],
+      "type": "object"
+    },
+    "signature": {
+      "maxLength": 128,
+      "minLength": 86,
+      "type": "string"
+    }
+  },
+  "required": [
+    "enrollmentId",
+    "nonce",
+    "installationId",
+    "displayName",
+    "platform",
+    "publicKeyJwk",
+    "capabilitySummary",
+    "signature",
+    "idempotencyKey"
+  ],
+  "title": "SciForge Collaboration identity-device-create-request",
+  "type": "object",
+  "x-sciforge-contract": {
+    "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+    "protocolVersion": "1.0"
+  },
+  "x-sciforge-http": {
+    "bindings": [
+      {
+        "body": "request",
+        "method": "POST",
+        "path": "/v1/devices"
+      }
+    ]
+  }
+}

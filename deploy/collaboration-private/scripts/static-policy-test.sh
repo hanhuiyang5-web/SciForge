@@ -30,7 +30,9 @@ for script in "$SCRIPT_DIR"/*.sh; do
 done
 node --check "$SCRIPT_DIR/postgres-v5-integration.mjs"
 for edge_script in deploy-a-https-test-edge.sh disable-a-https-test-edge.sh \
-    verify-a-https-test-edge.sh verify-a-https-test-edge-external.sh; do
+    verify-a-https-test-edge.sh verify-a-https-test-edge-external.sh \
+    deploy-a-https-oidc-test.sh disable-a-https-oidc-test.sh \
+    verify-a-https-oidc-test.sh verify-a-https-oidc-test-external.sh; do
   [[ -x "$SCRIPT_DIR/$edge_script" ]] \
     || die "Fixed HTTPS edge script is not executable: $edge_script"
 done
@@ -287,6 +289,133 @@ assert_contains "$DEPLOY_DIR/compose.a-https-test-edge.yml" 'name: sciforge-coll
 assert_not_contains "$DEPLOY_DIR/compose.a-https-test-edge.yml" 'docker.sock'
 assert_not_contains "$DEPLOY_DIR/compose.a-https-test-edge.yml" 'database'
 assert_not_contains "$DEPLOY_DIR/compose.a-https-test-edge.yml" '8080'
+
+assert_contains "$SCRIPT_DIR/common.sh" 'a-https-oidc-test)'
+assert_contains "$SCRIPT_DIR/common.sh" 'public-https-oidc-test'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME=login-test.sciforge.cn'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_HTTPS_OIDC_TEST_ISSUER=https://login-test.sciforge.cn/realms/SciForge'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_HTTPS_OIDC_TEST_IDENTITY_NETWORK=sciforge-keycloak_identity-edge'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_binding_confirm_mode" == disabled'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_provider_mode" == disabled'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_oidc_allow_insecure_loopback" == false'
+assert_contains "$SCRIPT_DIR/common.sh" '$2 == "identityAcceptanceHarnessSha256" { print $4 }'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$'
+assert_not_contains "$SCRIPT_DIR/common.sh" 'collaboration-a-identity-acceptance.mjs'
+assert_contains "$SCRIPT_DIR/common.sh" 'assert_a_https_oidc_test_network_membership'
+assert_contains "$SCRIPT_DIR/common.sh" 'The dedicated identity-edge network must contain exactly one Keycloak app plus the optional A edge.'
+assert_contains "$SCRIPT_DIR/common.sh" 'Keycloak must never join a SciForge Cloud application or database network.'
+assert_contains "$SCRIPT_DIR/common.sh" 'The OIDC edge must join exactly the Cloud private-edge and Keycloak identity-edge networks.'
+assert_contains "$SCRIPT_DIR/common.sh" 'Provider environment is forbidden in A HTTPS OIDC test mode.'
+assert_contains "$SCRIPT_DIR/common.sh" 'SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK|false'
+assert_contains "$SCRIPT_DIR/common.sh" '--project-name sciforge-collaboration-a-https-oidc-test'
+
+assert_contains "$SCRIPT_DIR/deploy.sh" 'RELEASE_MANIFEST_MODE" == a-https-oidc-test'
+assert_contains "$SCRIPT_DIR/deploy.sh" 'assert_no_a_https_test_edge_container'
+assert_contains "$SCRIPT_DIR/deploy-provider-zulip.sh" 'RELEASE_MANIFEST_MODE" != a-https-oidc-test'
+assert_contains "$SCRIPT_DIR/verify-provider-zulip.sh" 'RELEASE_MANIFEST_MODE" != a-https-oidc-test'
+
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'cloud-test.sciforge.cn:8443'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'login-test.sciforge.cn:8443'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'strict_sni_host on'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'protocols h1 h2'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'X-SciForge-Edge-Revision "{$SCIFORGE_EDGE_COMMIT}"'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'Cache-Control "no-store"'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@forbidden path /admin* /metrics* /health*'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@keycloak_public {'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'path /realms/SciForge /realms/SciForge/* /resources/*'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'path_regexp keycloak_public_case_sensitive ^(?:/realms/SciForge(?:/.*)?|/resources/.*)$'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" $'@keycloak_public {\n\t\tpath /realms/SciForge /realms/SciForge/* /resources/*\n\t\tpath_regexp keycloak_public_case_sensitive ^(?:/realms/SciForge(?:/.*)?|/resources/.*)$\n\t}'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'dynamic a keycloak 8080'
+assert_not_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '/realms/* /resources/*'
+assert_not_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'debug'
+assert_not_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'log_credentials'
+
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'cn.sciforge.edge.mode: public-https-oidc-test'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'cn.sciforge.edge.identity-hostname: login-test.sciforge.cn'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'cn.sciforge.edge.oidc-issuer: https://login-test.sciforge.cn/realms/SciForge'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'name: sciforge-collaboration-private_private-edge'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'name: sciforge-keycloak_identity-edge'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'published: 443'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'target: 8443'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'restart: "no"'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'user: "10002:10002"'
+assert_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'no-new-privileges:true'
+assert_not_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'docker.sock'
+assert_not_contains "$DEPLOY_DIR/compose.a-https-oidc-test.yml" 'database:'
+
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'validate_a_https_oidc_test_bundle'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'assert_no_a_https_test_edge_container'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'assert_a_https_oidc_test_network_membership'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'docker stop -t 20 "$candidate_edge_id"'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'verify-a-https-oidc-test.sh'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'docker update --restart=unless-stopped'
+assert_contains "$SCRIPT_DIR/deploy-a-https-oidc-test.sh" 'Keycloak changed while deploying the independent A-owned ingress edge.'
+
+assert_contains "$SCRIPT_DIR/disable-a-https-oidc-test.sh" 'Usage: disable-a-https-oidc-test.sh'
+assert_contains "$SCRIPT_DIR/disable-a-https-oidc-test.sh" 'assert_no_a_https_oidc_test_edge_container'
+assert_contains "$SCRIPT_DIR/disable-a-https-oidc-test.sh" 'docker rm "$edge_id"'
+assert_contains "$SCRIPT_DIR/disable-a-https-oidc-test.sh" 'Keycloak, databases, and Docker networks were preserved.'
+
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'verify_hostname "$hostname"'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/master/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/sciforge/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/REALMS/SciForge/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/SciForgeX/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/SciForge/%2e%2e/master/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '--path-as-is --output /dev/null'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Trusted Zulip binding confirm is not fail-closed with exact HTTP 401.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Keycloak Discovery does not publish the exact HTTPS issuer/endpoints and RS256 support.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Keycloak JWKS has no unique usable RSA/RS256 signing key.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'unexpected_identity_edge_response'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'published_443_count" == 1'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Real-token acceptance remains a separate harness gate.'
+
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'identity_hostname=login-test.sciforge.cn'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/master/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/sciforge/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/REALMS/SciForge/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/SciForgeX/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/SciForge/%2e%2e/master/.well-known/openid-configuration'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '--path-as-is --output /dev/null'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'expected_issuer=https://login-test.sciforge.cn/realms/SciForge'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'Forbidden public TCP port $forbidden_port is reachable.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'No real-token or cross-team E2E claim is made.'
+
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_A_HTTPS_OIDC_TEST_IPV4='
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_A_HTTPS_OIDC_TEST_STATE_DIR=/srv/sciforge-collaboration/a-https-oidc-test'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_OIDC_ISSUER=https://login-test.sciforge.cn/realms/SciForge'
+assert_contains "$DEPLOY_DIR/README.md" '--a-https-oidc-test'
+assert_contains "$DEPLOY_DIR/README.md" 'sciforge-keycloak_identity-edge'
+assert_contains "$DEPLOY_DIR/README.md" 'disable-a-https-oidc-test.sh'
+assert_contains "$DEPLOY_DIR/README.md" 'identityEdgeExternalVerifyScriptSha256'
+assert_contains "$DEPLOY_DIR/README.md" 'identityAcceptanceHarnessSha256'
+assert_contains "$DEPLOY_DIR/README.md" '${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\n'
+assert_contains "$DEPLOY_DIR/README.md" 'shasum -a 256 "$harness"'
+assert_contains "$DEPLOY_DIR/README.md" 'unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
+assert_contains "$DEPLOY_DIR/README.md" 'unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy'
+assert_contains "$DEPLOY_DIR/README.md" 'unset SSL_CERT_FILE ssl_cert_file SSL_CERT_DIR ssl_cert_dir CURL_CA_BUNDLE curl_ca_bundle'
+assert_contains "$DEPLOY_DIR/README.md" 'node "$harness"'
+assert_contains "$DEPLOY_DIR/README.md" '--expected-harness-sha256 "$harness_sha"'
+assert_contains "$DEPLOY_DIR/README.md" '`auth_time` 在 harness preflight 时不得超过 180 秒'
+assert_contains "$DEPLOY_DIR/README.md" $'(\n  set -euo pipefail\n  unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
+assert_not_contains "$DEPLOY_DIR/README.md" 'npm run collaboration:a:identity:acceptance --'
+assert_not_contains "$DEPLOY_DIR/README.md" 'auth_time` 在运行时仍不超过 240 秒'
+acceptance_block_order="$(awk '
+  $0 == "(" { candidate_open=NR }
+  index($0, "set -euo pipefail") && candidate_open > 0 { strict=candidate_open == NR - 1 ? NR : strict }
+  index($0, "unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS") { open=candidate_open; sanitize=NR }
+  index($0, "read -r external_sha harness_sha") { extract=NR }
+  index($0, "\"$external_verifier\" \"$release_commit\" \"$external_sha\"") { external=NR }
+  index($0, "shasum -a 256 \"$harness\"") { hash=NR }
+  index($0, "node \"$harness\"") { run=NR }
+  $0 == ")" && run > 0 && closing_line == 0 { closing_line=NR }
+  END {
+    if (open > 0 && open < strict && strict < sanitize && sanitize < extract && extract < external &&
+        external < hash && hash < run && run < closing_line) print "pass"
+  }
+' "$DEPLOY_DIR/README.md")"
+[[ "$acceptance_block_order" == pass ]] \
+  || die "Manifest extraction, external verification, harness hashing, and harness execution must remain ordered inside one sanitized subshell."
 
 assert_contains "$DEPLOY_DIR/compose.yml" 'SCIFORGE_COLLABORATION_OIDC_ISSUER: ${SCIFORGE_COLLABORATION_OIDC_ISSUER:-}'
 assert_contains "$DEPLOY_DIR/compose.yml" 'SCIFORGE_COLLABORATION_ALLOWED_ORIGINS: ${SCIFORGE_COLLABORATION_ALLOWED_ORIGINS:-}'

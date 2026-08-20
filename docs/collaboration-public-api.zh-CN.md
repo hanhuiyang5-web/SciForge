@@ -50,12 +50,42 @@ packages/collaboration-contracts/artifacts/protocol-1.0/
 │   ├── responses.schema.json
 │   ├── inbox.schema.json
 │   ├── entities.schema.json
-│   └── errors.schema.json
+│   ├── errors.schema.json
+│   ├── identity-me-response.schema.json
+│   ├── identity-device-enrollment-create-request.schema.json
+│   ├── identity-device-enrollment-create-response.schema.json
+│   ├── identity-device-create-request.schema.json
+│   ├── identity-device-response.schema.json
+│   ├── identity-device-list-response.schema.json
+│   ├── identity-device-revoke-request.schema.json
+│   ├── identity-zulip-binding-begin-request.schema.json
+│   ├── identity-zulip-binding-begin-response.schema.json
+│   ├── identity-zulip-binding-confirm-request.schema.json
+│   ├── identity-zulip-binding-confirm-response.schema.json
+│   ├── identity-external-identity-list-response.schema.json
+│   ├── identity-external-identity-revoke-request.schema.json
+│   └── identity-external-identity-response.schema.json
 ├── state-and-actors.json
 └── fixtures/
+    └── device-enrollment-signing-v1.json
 ```
 
-`ARTIFACT_MANIFEST.json` 记录协议版本、合同 commit 注入位、文件 SHA-256 与验收状态。源码工作树中使用 `__SCIFORGE_COLLABORATION_COMMIT__`，固定发布必须用 `--commit <完整40位SHA>` 重新生成，不能把占位值当成已发布版本。状态/actor 表覆盖严格 command union；fixtures 覆盖正常、重复、乱序、revision conflict、idempotency conflict、旧 execution 和失效确认。
+`ARTIFACT_MANIFEST.json` 记录协议版本、合同 commit 注入位、文件 SHA-256 与验收状态。源码工作树中使用 `__SCIFORGE_COLLABORATION_COMMIT__`，固定发布必须用 `--commit <完整40位SHA>` 重新生成，不能把占位值当成已发布版本。状态/actor 表覆盖严格 command union；fixtures 覆盖正常、重复、乱序、revision conflict、idempotency conflict、旧 execution、失效确认和当前 Agent bearer 撤销。
+
+统一身份 REST 不使用 command envelope，因此另行发布上述严格 body schema，完整覆盖 `/v1/me`、Device enrollment/create/list/revoke、Zulip binding begin/confirm 和 external identity list/revoke；每份都以 `x-sciforge-http.bindings` 机器字段标明 HTTP method、path 和 request/response 方向。`identity-device-response.schema.json` 同时用于 Device create 与 revoke 的成功响应，公共错误仍统一由 `errors.schema.json` 表示。
+
+Device PoP 的公共 canonicalization 入口是 `@sciforge/collaboration-contracts` 导出的纯函数 `canonicalEnrollmentBytes`，返回跨运行时的 `Uint8Array`。它按下列固定顺序产生 **6 行 UTF-8**，各行之间只有一个 LF 字节（`0x0A`），`expiresAt` 后 **没有末尾 LF**：
+
+```text
+SCIFORGE-DEVICE-ENROLLMENT-V1
+<enrollmentId>
+<nonce>
+<userId>
+<installationId>
+<expiresAt>
+```
+
+上述代码块最后一行之后的展示换行不属于签名数据。五个输入字段必须是非空且不含 CR/LF 的字符串；函数不修剪或重排字段。`fixtures/device-enrollment-signing-v1.json` 固定了同一输入的 canonical UTF-8 文本、base64url、hex、字节数、预期 Ed25519 公开 JWK 与签名。该向量只含公开测试材料，不含私钥或生产 secret，客户端可直接用它做跨语言互操作测试。
 
 ```bash
 npm run collaboration:contracts:generate

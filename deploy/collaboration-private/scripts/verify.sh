@@ -16,6 +16,23 @@ done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 validate_release_bundle "$expected_commit"
 prepare_compose_environment "$expected_commit" "$env_input"
+if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_OIDC_TEST_ORIGIN" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ISSUER" == "$A_HTTPS_OIDC_TEST_ISSUER" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUDIENCE" == "$A_HTTPS_OIDC_TEST_AUDIENCE" \
+      && "$SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES" == "$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false \
+      && "$SCIFORGE_COLLAB_DEPLOYMENT_MODE" == oidc-test-private ]] \
+    || die "The OIDC test app does not use its immutable identity profile."
+elif [[ "$RELEASE_MANIFEST_MODE" == a-https-test-edge ]]; then
+  [[ "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" == "$A_HTTPS_TEST_EDGE_ORIGIN" \
+      && -z "$SCIFORGE_COLLABORATION_OIDC_ISSUER" \
+      && "$SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK" == false ]] \
+    || die "The core-only HTTPS edge app identity boundary is invalid."
+elif [[ -n "$SCIFORGE_COLLABORATION_ALLOWED_ORIGINS" \
+    || -n "$SCIFORGE_COLLABORATION_OIDC_ISSUER" ]]; then
+  die "A non-HTTPS release must not enable a browser origin or OIDC issuer."
+fi
 "${COMPOSE[@]}" config --quiet
 
 running_services="$("${COMPOSE[@]}" ps --status running --services)"
@@ -64,6 +81,13 @@ running_image_id="$(docker container inspect --format '{{.Image}}' "$app_contain
 [[ "$running_image_id" == "$image_id" ]] || die "Running application container does not use the approved runtime image."
 container_revision="$("${COMPOSE[@]}" exec -T app sh -c 'tr -d "\r\n" < /app/CONTRACT_COMMIT')"
 [[ "$container_revision" == "$expected_commit" ]] || die "Running container revision proof mismatch."
+app_mode="$(docker container inspect --format \
+  '{{index .Config.Labels "cn.sciforge.deployment.mode"}}' "$app_container_id")"
+if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+  [[ "$app_mode" == oidc-test-private ]] || die "The running app is not in explicit OIDC test mode."
+else
+  [[ "$app_mode" == core-only-private ]] || die "The running app is not in core-only private mode."
+fi
 runtime_identity="$("${COMPOSE[@]}" exec -T app node -e \
   'process.stdout.write(`${process.getuid()}:${process.getgid()}`)')"
 [[ "$runtime_identity" == 10001:10001 ]] \
@@ -74,9 +98,9 @@ runtime_identity="$("${COMPOSE[@]}" exec -T app node -e \
 "${COMPOSE[@]}" exec -T app node -e \
   "if (process.env.SCIFORGE_COLLABORATION_PROVIDER_CONFIG_FILE || process.env.SCIFORGE_COLLABORATION_SECRET_DIRECTORY || process.env.SCIFORGE_COLLAB_DB_ADMIN_PASSWORD || process.env.POSTGRES_PASSWORD) process.exit(1)"
 
-# Real API boundary smoke. A core-only deployment must advertise no Human
-# providers and must not restore anonymous identity bootstrap or persist facts
-# when OIDC and trusted binding confirmation are not configured.
+# Real API boundary smoke. Every A-only deployment must advertise no Human
+# providers, reject unverified JWTs, and keep trusted binding confirmation
+# disabled. The OIDC test edge proves live Discovery/JWKS separately.
 "${COMPOSE[@]}" exec -T app node --input-type=module - <<'NODE'
 import { randomUUID } from 'node:crypto'
 
@@ -195,7 +219,7 @@ const unauthenticatedResponse = await fetch('http://127.0.0.1:8787/v1/commands',
 })
 if (unauthenticatedResponse.status !== 401) fail('unauthenticated user.get was not rejected')
 await unauthenticatedResponse.arrayBuffer()
-console.log('Core-only API smoke passed: OIDC and trusted binding confirmation failed closed; no identity facts persisted.')
+console.log('A-only API smoke passed: invalid OIDC and trusted binding confirmation failed closed; no identity facts persisted.')
 NODE
 
 websocket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 --http1.1 \
@@ -206,4 +230,4 @@ websocket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' 
   "$base_url/v1/events" || true)"
 [[ "$websocket_status" == "401" ]] || die "Unauthenticated WebSocket Upgrade was not rejected with HTTP 401."
 
-echo "Verification passed: loopback-only core, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, fixed image revision/UID/GID, A console, probes and auth boundaries."
+echo "Verification passed: loopback-only app, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, fixed image revision/UID/GID, A console, probes and fail-closed auth boundaries."

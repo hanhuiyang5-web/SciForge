@@ -116,7 +116,7 @@ services:
     stop_grace_period: 25s
     labels:
       org.opencontainers.image.revision: ${SCIFORGE_COLLAB_CONTRACT_COMMIT:?set SCIFORGE_COLLAB_CONTRACT_COMMIT}
-      cn.sciforge.deployment.mode: core-only-private
+      cn.sciforge.deployment.mode: ${SCIFORGE_COLLAB_DEPLOYMENT_MODE:-core-only-private}
 
 networks:
   database:
