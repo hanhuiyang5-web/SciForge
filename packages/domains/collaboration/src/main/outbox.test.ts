@@ -125,6 +125,10 @@ test('restart reconciles an in-flight command and repeated wake calls still deli
 })
 
 class IdempotentCloudClient implements CollaborationCloudClient {
+  readonly me: CollaborationCloudClient['me'] = async () => { throw new Error('unused') }
+  readonly createDeviceEnrollment: CollaborationCloudClient['createDeviceEnrollment'] = async () => { throw new Error('unused') }
+  readonly createDevice: CollaborationCloudClient['createDevice'] = async () => { throw new Error('unused') }
+  readonly listDevices: CollaborationCloudClient['listDevices'] = async () => { throw new Error('unused') }
   attempts = 0
   businessCommits = 0
   dropNextResponse = false
