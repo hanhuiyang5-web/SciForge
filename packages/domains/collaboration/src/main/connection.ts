@@ -1,23 +1,13 @@
 import {
   createHash,
-  createPrivateKey,
-  createPublicKey,
-  generateKeyPairSync,
-  randomUUID,
-  sign,
-  type JsonWebKey as NodeJsonWebKey
+  randomUUID
 } from 'node:crypto'
 import { z } from 'zod'
 import {
-  canonicalEnrollmentBytes,
-  deviceCreateRequestSchema,
-  devicePlatformSchema,
-  ed25519PublicJwkSchema,
+  deviceIdSchema,
   restRequestSchema,
   type AgentInboxMessage,
   type AgentNode,
-  type DevicePlatform,
-  type Ed25519PublicJwk,
   type HumanEndpointBinding,
   type ParticipantProfile,
   type RestRequest,
@@ -32,56 +22,45 @@ import type {
   CollaborationEndpointChallengeStartInput,
   CollaborationProviderOption
 } from '../contract.js'
-import type { CollaborationCloudClient } from './cloud-client.js'
-import { collaborationRequestId } from './cloud-client.js'
+import { CloudProtocolError, collaborationRequestId, type CollaborationCloudClient } from './cloud-client.js'
 import { DurableCloudOutbox } from './outbox.js'
 import { CollaborationSettingsService } from './settings.js'
 import { CollaborationLocalStore, EMPTY_COLLABORATION_LOCAL_STATE } from './store.js'
 
 export const COLLABORATION_OIDC_ACCESS_TOKEN_KEY = 'oidc-access-token' as const
 export const COLLABORATION_DEVICE_CREDENTIAL_KEY = 'device-credential' as const
-export const COLLABORATION_DEVICE_SIGNING_KEY = 'device-ed25519-private-jwk' as const
-export const COLLABORATION_PENDING_DEVICE_CREATE_KEY = 'pending-device-create' as const
 const PAIRING_POLL_KEY = 'pairing-poll' as const
 const WORKER_CAPABILITY = 'project.worker.v1' as const
 const COORDINATOR_CAPABILITY = 'project.coordinator.v1' as const
+
+class CapabilityProfileRevisionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super('Cloud returned the current capability profile revision.')
+    this.name = 'CapabilityProfileRevisionConflictError'
+  }
+}
+
+function capabilityProfileIdempotencyKey(profile: unknown, expectedRevision: number): string {
+  return `idem_agent.capability_profile.${digest(JSON.stringify({ expectedRevision, profile })).slice(0, 48)}`
+}
 
 const pairingPollStateSchema = z.object({
   bindingRequestId: z.string().regex(/^zbr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/),
   expiresAt: z.iso.datetime({ offset: true })
 }).strict()
 
-const cloudIdentityOnboardingInputSchema = z.object({
+const cloudIdentitySessionInputSchema = z.object({
   accessToken: z.string().min(32).max(16_384).refine((value) => !/\s/u.test(value), {
     message: 'OIDC access token cannot contain whitespace.'
   }),
-  deviceDisplayName: z.string().trim().min(1).max(200),
-  platform: devicePlatformSchema,
-  capabilitySummary: z.array(z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/u)).max(256)
-    .refine((values) => new Set(values).size === values.length, 'Device capabilities must be unique')
-}).strict()
-
-const privateEd25519JwkSchema = z.object({
-  kty: z.literal('OKP'),
-  crv: z.literal('Ed25519'),
-  alg: z.literal('EdDSA'),
-  use: z.literal('sig'),
-  kid: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
-  x: z.string().min(1).max(128),
-  d: z.string().min(1).max(128)
-}).strict()
-
-const pendingDeviceCreateSchema = z.object({
   userId: z.string().regex(/^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/u),
-  expiresAt: z.iso.datetime({ offset: true }),
-  request: deviceCreateRequestSchema
+  deviceId: deviceIdSchema
 }).strict()
 
-export type CollaborationCloudIdentityOnboardingInput = Readonly<{
+export type CollaborationCloudIdentitySessionInput = Readonly<{
   accessToken: string
-  deviceDisplayName: string
-  platform: DevicePlatform
-  capabilitySummary: readonly string[]
+  userId: string
+  deviceId: string
 }>
 
 export type CollaborationCloudIdentity = Readonly<{
@@ -265,107 +244,43 @@ export class CollaborationConnection {
       await Promise.all([
         COLLABORATION_OIDC_ACCESS_TOKEN_KEY,
         COLLABORATION_DEVICE_CREDENTIAL_KEY,
-        COLLABORATION_DEVICE_SIGNING_KEY,
-        COLLABORATION_PENDING_DEVICE_CREATE_KEY,
         PAIRING_POLL_KEY
       ].map((key) => this.options.packageSecrets.remove(key)))
-      await this.options.store.transact((draft) => {
-        const empty = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
-        draft.lastInboxSequence = empty.lastInboxSequence
-        delete draft.user
-        delete draft.participant
-        draft.endpoints = empty.endpoints
-        draft.endpointLocators = empty.endpointLocators
-        draft.agents = empty.agents
-        draft.projections = empty.projections
-        draft.projects = empty.projects
-        draft.tasks = empty.tasks
-        draft.taskRuns = empty.taskRuns
-        draft.queue = empty.queue
-        draft.receipts = empty.receipts
-        draft.outbox = empty.outbox
-        draft.diagnostics = empty.diagnostics
-      })
+      await this.resetCloudProjectionState()
     }
     this.client = this.options.createCloudClient(settings.baseUrl)
     this.connectionState = { state: 'disconnected' }
     await this.refreshProviderCatalog()
   }
 
-  /** Main-process only. The OIDC access token and Device private key never enter renderer state. */
-  async onboardCloudIdentity(
-    input: CollaborationCloudIdentityOnboardingInput
+  /** Main-process only. C owns Device enrollment; BC adopts only the validated ACTIVE Device. */
+  async adoptCloudIdentity(
+    input: CollaborationCloudIdentitySessionInput
   ): Promise<CollaborationCloudIdentity> {
-    const parsed = cloudIdentityOnboardingInputSchema.parse(input)
+    const parsed = cloudIdentitySessionInputSchema.parse(input)
     const configured = await this.options.settings.require()
     const credential = { value: parsed.accessToken }
     const me = await this.requireClient().me(credential)
-    let deviceId = configured.deviceId
-    if (deviceId) {
-      const devices = await this.requireClient().listDevices(credential)
-      const current = devices.devices.find((device) => (
-        device.deviceId === deviceId &&
-        device.installationId === configured.installationId &&
-        device.userId === me.userId &&
-        device.status === 'active'
-      ))
-      if (!current) deviceId = undefined
+    if (me.userId !== parsed.userId) {
+      throw new Error('The Desktop identity session does not match the Cloud Principal.')
     }
-    if (!deviceId) {
-      let pending = await this.pendingDeviceCreate(me.userId, configured.installationId)
-      if (!pending) {
-        const signingKey = await this.loadOrCreateDeviceSigningKey()
-        const enrollmentKey = `idem_device.enrollment.${randomUUID().replaceAll('-', '')}`
-        const enrollment = await this.requireClient().createDeviceEnrollment({
-          installationId: configured.installationId,
-          idempotencyKey: enrollmentKey
-        }, credential)
-        const facts = {
-          enrollmentId: enrollment.enrollmentId,
-          nonce: enrollment.nonce,
-          userId: me.userId,
-          installationId: configured.installationId,
-          expiresAt: enrollment.expiresAt
-        }
-        const signature = sign(
-          null,
-          canonicalEnrollmentBytes(facts),
-          signingKey.privateKey
-        ).toString('base64url')
-        const createKey = `idem_device.create.${digest(`${enrollment.enrollmentId}\u0000${signingKey.publicKey.kid}`).slice(0, 48)}`
-        pending = pendingDeviceCreateSchema.parse({
-          userId: me.userId,
-          expiresAt: enrollment.expiresAt,
-          request: {
-            enrollmentId: enrollment.enrollmentId,
-            nonce: enrollment.nonce,
-            installationId: configured.installationId,
-            displayName: parsed.deviceDisplayName,
-            platform: parsed.platform,
-            publicKeyJwk: signingKey.publicKey,
-            capabilitySummary: parsed.capabilitySummary,
-            signature,
-            idempotencyKey: createKey
-          }
-        })
-        await this.options.packageSecrets.write(
-          COLLABORATION_PENDING_DEVICE_CREATE_KEY,
-          JSON.stringify(pending)
-        )
-      }
-      const created = await this.requireClient().createDevice(pending.request, credential)
-      deviceId = created.device.deviceId
-      if (configured.deviceId && configured.deviceId !== deviceId) {
-        await this.options.packageSecrets.remove(COLLABORATION_DEVICE_CREDENTIAL_KEY)
-      }
-      await this.options.settings.bindDevice(deviceId)
-      await this.options.packageSecrets.remove(COLLABORATION_PENDING_DEVICE_CREATE_KEY)
-    } else {
-      await this.options.packageSecrets.remove(COLLABORATION_PENDING_DEVICE_CREATE_KEY)
+    const devices = await this.requireClient().listDevices(credential)
+    const device = devices.devices.find((candidate) => candidate.deviceId === parsed.deviceId)
+    if (!device || device.userId !== me.userId || device.status !== 'active') {
+      throw new Error('The Desktop identity session has no matching ACTIVE Cloud Device.')
     }
+    const accountChanged = this.options.store.snapshot().user?.userId !== undefined &&
+      this.options.store.snapshot().user?.userId !== me.userId
+    const deviceChanged = configured.deviceId !== undefined && configured.deviceId !== device.deviceId
+    if (accountChanged || deviceChanged) {
+      await this.disconnect()
+      await this.options.packageSecrets.remove(COLLABORATION_DEVICE_CREDENTIAL_KEY)
+      await this.resetCloudProjectionState()
+    }
+    await this.options.settings.bindDevice(device.deviceId, device.installationId)
     await this.options.packageSecrets.write(COLLABORATION_OIDC_ACCESS_TOKEN_KEY, parsed.accessToken)
     await this.refreshParticipant(me.userId)
-    return { userId: me.userId, deviceId }
+    return { userId: me.userId, deviceId: device.deviceId }
   }
 
   async applyConnectionAction(input: CollaborationConnectionConnectInput): Promise<void> {
@@ -383,6 +298,25 @@ export class CollaborationConnection {
       this.options.outbox.wake()
     }
     await this.connect()
+  }
+
+  async releaseCloudIdentity(): Promise<void> {
+    const credential = await this.options.packageSecrets.read(COLLABORATION_DEVICE_CREDENTIAL_KEY)
+    if (credential && this.client) {
+      await this.heartbeat({ value: credential }, 'offline').catch(() => undefined)
+    }
+    await this.disconnect()
+    await Promise.all([
+      this.options.packageSecrets.remove(COLLABORATION_OIDC_ACCESS_TOKEN_KEY),
+      this.options.packageSecrets.remove(COLLABORATION_DEVICE_CREDENTIAL_KEY)
+    ])
+    if ((await this.options.settings.read()).settings) {
+      await this.options.settings.rememberAgent(undefined)
+    }
+  }
+
+  reportSessionError(error: unknown): void {
+    this.recordError(error, true)
   }
 
   async startChallenge(input: CollaborationEndpointChallengeStartInput): Promise<Readonly<{
@@ -967,12 +901,29 @@ export class CollaborationConnection {
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'agent.capability_profile.report',
-      idempotencyKey: `idem_agent.capability_profile.${digest(JSON.stringify(profile)).slice(0, 48)}`,
+      idempotencyKey: capabilityProfileIdempotencyKey(profile, settings.capabilityProfileRevision ?? 0),
       expectedProfileRevision: settings.capabilityProfileRevision ?? 0,
       profile
     })
     await this.options.settings.stageCapabilityProfileReport(request)
-    await this.sendCapabilityProfileReport(request, credential)
+    try {
+      await this.sendCapabilityProfileReport(request, credential)
+    } catch (error) {
+      const conflict = error instanceof CloudProtocolError &&
+        error.code === 'revision_conflict' &&
+        typeof error.currentRevision === 'number'
+        ? new CapabilityProfileRevisionConflictError(error.currentRevision)
+        : error
+      if (!(conflict instanceof CapabilityProfileRevisionConflictError)) throw conflict
+      const retryRequest = restRequestSchema.parse({
+        ...request,
+        requestId: collaborationRequestId(),
+        idempotencyKey: capabilityProfileIdempotencyKey(profile, conflict.currentRevision),
+        expectedProfileRevision: conflict.currentRevision
+      })
+      await this.options.settings.stageCapabilityProfileReport(retryRequest)
+      await this.sendCapabilityProfileReport(retryRequest, credential)
+    }
   }
 
   private async sendCapabilityProfileReport(
@@ -984,7 +935,16 @@ export class CollaborationConnection {
       throw new Error('Pending C capability report has an invalid command type.')
     }
     const response = await this.requireClient().execute(request, credential)
-    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type === 'rest.error') {
+      if (
+        response.error.code === 'revision_conflict' &&
+        typeof response.error.currentRevision === 'number' &&
+        response.error.message.toLowerCase().includes('capability profile revision')
+      ) {
+        throw new CapabilityProfileRevisionConflictError(response.error.currentRevision)
+      }
+      throw new Error(response.error.message)
+    }
     if (
       response.type !== 'rest.entity' ||
       response.entity.type !== 'agent_capability_profile' ||
@@ -1035,64 +995,24 @@ export class CollaborationConnection {
     return this.client
   }
 
-  private async loadOrCreateDeviceSigningKey(): Promise<Readonly<{
-    privateKey: ReturnType<typeof createPrivateKey>
-    publicKey: Ed25519PublicJwk
-  }>> {
-    const saved = await this.options.packageSecrets.read(COLLABORATION_DEVICE_SIGNING_KEY)
-    if (saved) {
-      const privateJwk = privateEd25519JwkSchema.parse(JSON.parse(saved) as unknown)
-      const privateKey = createPrivateKey({ key: privateJwk as NodeJsonWebKey, format: 'jwk' })
-      const derived = createPublicKey(privateKey).export({ format: 'jwk' })
-      const publicKey = ed25519PublicJwkSchema.parse({
-        kty: derived.kty,
-        crv: derived.crv,
-        alg: 'EdDSA',
-        use: 'sig',
-        kid: privateJwk.kid,
-        x: derived.x
-      })
-      if (publicKey.x !== privateJwk.x) throw new Error('Stored Device signing key is inconsistent.')
-      return { privateKey, publicKey }
-    }
-    const { privateKey } = generateKeyPairSync('ed25519')
-    const exported = privateKey.export({ format: 'jwk' })
-    if (!exported.x || !exported.d) throw new Error('Generated Device signing key is incomplete.')
-    const privateJwk = privateEd25519JwkSchema.parse({
-      kty: 'OKP',
-      crv: 'Ed25519',
-      alg: 'EdDSA',
-      use: 'sig',
-      kid: `device-${digest(exported.x).slice(0, 24)}`,
-      x: exported.x,
-      d: exported.d
+  private async resetCloudProjectionState(): Promise<void> {
+    await this.options.store.transact((draft) => {
+      const empty = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+      draft.lastInboxSequence = empty.lastInboxSequence
+      delete draft.user
+      delete draft.participant
+      draft.endpoints = empty.endpoints
+      draft.endpointLocators = empty.endpointLocators
+      draft.agents = empty.agents
+      draft.projections = empty.projections
+      draft.projects = empty.projects
+      draft.tasks = empty.tasks
+      draft.taskRuns = empty.taskRuns
+      draft.queue = empty.queue
+      draft.receipts = empty.receipts
+      draft.outbox = empty.outbox
+      draft.diagnostics = empty.diagnostics
     })
-    const publicKey = ed25519PublicJwkSchema.parse({
-      kty: privateJwk.kty,
-      crv: privateJwk.crv,
-      alg: privateJwk.alg,
-      use: privateJwk.use,
-      kid: privateJwk.kid,
-      x: privateJwk.x
-    })
-    await this.options.packageSecrets.write(COLLABORATION_DEVICE_SIGNING_KEY, JSON.stringify(privateJwk))
-    return { privateKey, publicKey }
-  }
-
-  private async pendingDeviceCreate(
-    userId: string,
-    installationId: string
-  ): Promise<z.infer<typeof pendingDeviceCreateSchema> | undefined> {
-    const saved = await this.options.packageSecrets.read(COLLABORATION_PENDING_DEVICE_CREATE_KEY)
-    if (!saved) return undefined
-    const pending = pendingDeviceCreateSchema.parse(JSON.parse(saved) as unknown)
-    if (
-      pending.userId === userId &&
-      pending.request.installationId === installationId &&
-      Date.parse(pending.expiresAt) > this.now().getTime()
-    ) return pending
-    await this.options.packageSecrets.remove(COLLABORATION_PENDING_DEVICE_CREATE_KEY)
-    return undefined
   }
 
   private async requireUserCredential(): Promise<Readonly<{ value: string }>> {

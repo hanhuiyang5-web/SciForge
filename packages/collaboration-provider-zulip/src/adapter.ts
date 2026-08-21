@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import {
   CURRENT_PROTOCOL_VERSION,
-  decodePairingBindCode,
   providerDiagnosticSchema,
   providerEventSchema,
   providerLifecycleResultSchema,
@@ -12,7 +11,6 @@ import {
   type HumanEndpointProvider,
   type HumanEndpointProviderContract,
   type ProviderDiagnostic,
-  type ProviderDirectRecipient,
   type ProviderEvent,
   type ProviderLifecycleRequest,
   type ProviderLifecycleResult,
@@ -112,6 +110,14 @@ type ZulipLocatorCoordinates = {
   topicDisplayName: string
 }
 
+type ZulipDirectRecipient = {
+  type: 'provider_direct_recipient'
+  provider: 'zulip'
+  realmId: string
+  providerUserId: string
+  displayName?: string
+}
+
 type ZulipLocatorOverlay = Map<string, ProviderLocator | null>
 
 export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContract = {
@@ -126,8 +132,7 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
     locatorRename: true,
     locatorMove: true,
     locatorDiscovery: true,
-    identityChallenge: true,
-    directMessages: true
+    identityChallenge: true
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
@@ -228,17 +233,15 @@ function assertResolvedLocator(
 }
 
 const BIND_COMMAND = /^\/bind (\S+)$/u
-const BIND_COMMAND_PREFIX = /^\/bind(?:\s|$)/u
 const HUMAN_ANSWER_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
 
 function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
   const match = BIND_COMMAND.exec(text)
   if (!match) return null
-  try {
-    return decodePairingBindCode(match[1]!)
-  } catch {
-    return null
-  }
+  const encoded = /^SF1\.([a-f0-9]{32})\.([A-Za-z0-9_-]{12})$/u.exec(match[1]!)
+  return encoded
+    ? { challengeId: `chl_${encoded[1]}`, challengeResponse: encoded[2]! }
+    : null
 }
 
 function humanAnswerResponse(text: string): {
@@ -617,7 +620,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
   }
 
   async sendDirectMessage(input: {
-    recipient: ProviderDirectRecipient
+    recipient: ZulipDirectRecipient
     content: string
     idempotencyKey: string
     signal?: AbortSignal
@@ -666,8 +669,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
   }
 
   async send(request: ProviderSendRequest): Promise<ProviderSendResult> {
-    const target = 'recipient' in request ? request.recipient : request.locator
-    if (target.provider !== 'zulip' || target.realmId !== this.realmId) {
+    if (request.locator.provider !== 'zulip' || request.locator.realmId !== this.realmId) {
       return providerSendResultSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'provider.send.failed',
@@ -678,17 +680,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       })
     }
     try {
-      const result = 'recipient' in request
-        ? await this.sendDirectMessage({
-            recipient: request.recipient,
-            content: request.text,
-            idempotencyKey: request.clientMessageId
-          })
-        : await this.sendMessage({
-            locator: request.locator as ZulipLocator,
-            content: request.text,
-            idempotencyKey: request.clientMessageId
-          })
+      const result = await this.sendMessage({
+        locator: request.locator as ZulipLocator,
+        content: request.text,
+        idempotencyKey: request.clientMessageId
+      })
       return providerSendResultSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         type: 'provider.send.succeeded',
@@ -893,11 +889,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (isSelfEcho) return null
     if (message.type === 'private') {
       const pairing = bindPairingResponse(text)
-      if (!pairing && !BIND_COMMAND_PREFIX.test(text)) return null
+      if (!pairing) return null
       return providerEventSchema.parse({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         provider: 'zulip',
-        type: pairing ? 'provider.challenge.responded' : 'provider.challenge.invalid',
+        type: 'provider.challenge.responded',
         eventId,
         eventCursor,
         occurredAt: canonicalOccurredAt(message, receivedAt),
@@ -908,9 +904,8 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
           providerUserId: senderId,
           displayName: message.sender_full_name.trim().slice(0, 200)
         },
-        ...(pairing
-          ? { challengeId: pairing.challengeId, challengeResponse: pairing.challengeResponse }
-          : {})
+        challengeId: pairing.challengeId,
+        challengeResponse: pairing.challengeResponse
       })
     }
     const streamId = stableId(message.stream_id ?? '')

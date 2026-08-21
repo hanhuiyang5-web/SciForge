@@ -234,7 +234,11 @@ export class HttpCollaborationCloudClient implements CollaborationCloudClient {
       if (!response.ok) {
         const parsed = restResponseSchema.safeParse(value)
         if (parsed.success && parsed.data.type === 'rest.error') {
-          throw new CloudProtocolError(parsed.data.error.message, parsed.data.error.code)
+          throw new CloudProtocolError(
+            parsed.data.error.message,
+            parsed.data.error.code,
+            parsed.data.error.currentRevision
+          )
         }
         throw new CloudProtocolError(`Cloud request failed with HTTP ${response.status}.`)
       }
@@ -252,7 +256,11 @@ function idempotencyKey(value: unknown): string | undefined {
 }
 
 export class CloudProtocolError extends Error {
-  constructor(message: string, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly currentRevision?: number
+  ) {
     super(message)
     this.name = 'CloudProtocolError'
   }

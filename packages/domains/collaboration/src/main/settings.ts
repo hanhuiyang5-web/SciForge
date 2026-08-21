@@ -52,10 +52,10 @@ export class CollaborationSettingsService {
     })
   }
 
-  async bindDevice(deviceId: string): Promise<CollaborationSettings> {
+  async bindDevice(deviceId: string, installationId: string): Promise<CollaborationSettings> {
     return this.writeCurrent((current) => {
       if (!current) throw new Error('Configure the collaboration service before binding a cloud Device.')
-      if (current.deviceId === deviceId) return current
+      if (current.deviceId === deviceId && current.installationId === installationId) return current
       const {
         agentId: _agentId,
         capabilityProfileRevision: _profileRevision,
@@ -63,7 +63,7 @@ export class CollaborationSettingsService {
         pendingCapabilityProfileReport: _pendingProfile,
         ...rest
       } = current
-      return { ...rest, schemaVersion: 2, deviceId }
+      return { ...rest, schemaVersion: 2, installationId, deviceId }
     })
   }
 

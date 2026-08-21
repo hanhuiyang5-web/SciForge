@@ -894,7 +894,7 @@ describe('ZulipHumanEndpointProvider', () => {
     const result = await provider.registerEventQueue()
 
     assert.equal(resolverCalls, 0)
-    assert.equal(result.events.length, 2)
+    assert.equal(result.events.length, 1)
     assert.deepEqual(result.events[0], {
       protocolVersion: '1.0',
       provider: 'zulip',
@@ -912,24 +912,9 @@ describe('ZulipHumanEndpointProvider', () => {
       challengeId: `chl_${'a'.repeat(32)}`,
       challengeResponse: 'Abc_123-xYz0'
     })
-    assert.deepEqual(result.events[1], {
-      protocolVersion: '1.0',
-      provider: 'zulip',
-      type: 'provider.challenge.invalid',
-      eventId: result.events[1]?.eventId,
-      eventCursor: result.events[1]?.eventCursor,
-      occurredAt: '2026-08-15T00:00:00.000Z',
-      identity: {
-        type: 'provider_identity',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        providerUserId: '42',
-        displayName: '研究员甲'
-      }
-    })
   })
 
-  it('sends a provider-neutral direct recipient as a Zulip private message', async () => {
+  it('keeps private Zulip delivery package-local instead of extending the A provider contract', async () => {
     const requests: URLSearchParams[] = []
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid',
@@ -946,32 +931,26 @@ describe('ZulipHumanEndpointProvider', () => {
       }
     })
     const request = {
-      protocolVersion: '1.0' as const,
-      type: 'provider.send.message' as const,
       recipient: {
         type: 'provider_direct_recipient' as const,
-        provider: 'zulip',
+        provider: 'zulip' as const,
         realmId: provider.realmId,
         providerUserId: '42'
       },
-      clientMessageId: 'direct-message-1',
-      text: '绑定成功'
+      idempotencyKey: 'direct-message-1',
+      content: '绑定成功'
     }
 
-    const first = await provider.send(request)
-    const duplicate = await provider.send(request)
-    const wrongRealm = await provider.send({
+    const first = await provider.sendDirectMessage(request)
+    const duplicate = await provider.sendDirectMessage(request)
+    await assert.rejects(provider.sendDirectMessage({
       ...request,
       recipient: { ...request.recipient, realmId: 'another-realm' },
-      clientMessageId: 'direct-message-wrong-realm'
-    })
+      idempotencyKey: 'direct-message-wrong-realm'
+    }), (error) => error instanceof ZulipProviderError && error.code === 'invalid_payload')
 
-    assert.equal(first.type, 'provider.send.succeeded')
-    assert.equal(duplicate.type, 'provider.send.succeeded')
-    assert.equal(wrongRealm.type, 'provider.send.failed')
-    if (wrongRealm.type !== 'provider.send.failed') throw new Error('Expected a failed direct send result.')
-    assert.equal(wrongRealm.retryable, false)
-    assert.equal(wrongRealm.providerErrorCode, 'invalid_locator')
+    assert.equal(first.remoteMessageId, '701')
+    assert.equal(duplicate.duplicate, true)
     assert.equal(requests.length, 1)
     assert.equal(requests[0]?.get('type'), 'direct')
     assert.equal(requests[0]?.get('to'), '[42]')

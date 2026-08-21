@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict'
-import { createPublicKey, verify, type JsonWebKey as NodeJsonWebKey } from 'node:crypto'
 import test from 'node:test'
 
 import {
-  canonicalEnrollmentBytes,
-  type DeviceCreateRequest,
   type RestRequest,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
@@ -26,9 +23,7 @@ import type {
 import type { CollaborationCloudClient } from './cloud-client.js'
 import {
   COLLABORATION_DEVICE_CREDENTIAL_KEY,
-  COLLABORATION_DEVICE_SIGNING_KEY,
   COLLABORATION_OIDC_ACCESS_TOKEN_KEY,
-  COLLABORATION_PENDING_DEVICE_CREATE_KEY,
   CollaborationConnection
 } from './connection.js'
 import type { DurableCloudOutbox } from './outbox.js'
@@ -115,16 +110,10 @@ test('C fails closed when A OIDC or Device enrollment is unavailable', async () 
   )
 })
 
-test('C enrolls an Ed25519 A Device and keeps the OIDC token and private key main-only', async (context) => {
+test('C adopts only the ACTIVE A Device already enrolled by Desktop identity', async (context) => {
   const fixture = await connectionFixture()
   context.after(() => fixture.connection.dispose())
   const credentials: string[] = []
-  let deviceRequest: DeviceCreateRequest | undefined
-  const enrollment = {
-    enrollmentId: 'enr_Enrollment0001',
-    nonce: Buffer.alloc(32, 7).toString('base64url'),
-    expiresAt: TEST_LATER_TIMESTAMP
-  }
   fixture.client.me = async (credential) => {
     credentials.push(credential.value)
     return {
@@ -140,31 +129,27 @@ test('C enrolls an Ed25519 A Device and keeps the OIDC token and private key mai
       updatedAt: TEST_TIMESTAMP
     }
   }
-  fixture.client.createDeviceEnrollment = async (request, credential) => {
+  fixture.client.listDevices = async (credential) => {
     credentials.push(credential.value)
-    assert.equal(request.installationId, TEST_IDS.installationId)
-    assert.match(request.idempotencyKey, /^idem_device\.enrollment\./u)
-    return enrollment
-  }
-  fixture.client.createDevice = async (request, credential) => {
-    credentials.push(credential.value)
-    deviceRequest = structuredClone(request)
     return {
-      device: {
+      devices: [{
         schemaVersion: 1,
         type: 'device',
         deviceId: TEST_IDS.deviceId,
         userId: TEST_IDS.userId,
-        installationId: request.installationId,
-        displayName: request.displayName,
-        platform: request.platform,
-        publicKeyJwk: request.publicKeyJwk,
-        capabilitySummary: request.capabilitySummary,
+        installationId: TEST_IDS.installationId,
+        displayName: 'Research Mac',
+        platform: { os: 'macos', arch: 'arm64', osVersion: '15.6', appVersion: '1.0.0' },
+        publicKeyJwk: {
+          kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig',
+          kid: 'desktop-device-key', x: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg'
+        },
+        capabilitySummary: ['agent.execute', 'content-space.read'],
         status: 'active',
         revision: 1,
         createdAt: TEST_TIMESTAMP,
         updatedAt: TEST_TIMESTAMP
-      }
+      }]
     }
   }
   fixture.client.execute = async (request, credential) => {
@@ -179,102 +164,20 @@ test('C enrolls an Ed25519 A Device and keeps the OIDC token and private key mai
   }
   await fixture.connection.activate()
 
-  const identity = await fixture.connection.onboardCloudIdentity({
+  const identity = await fixture.connection.adoptCloudIdentity({
     accessToken: OIDC_TOKEN,
-    deviceDisplayName: 'Research Mac',
-    platform: { os: 'macos', arch: 'arm64', osVersion: '15.6', appVersion: '1.0.0' },
-    capabilitySummary: ['agent.execute', 'content-space.read']
+    userId: TEST_IDS.userId,
+    deviceId: TEST_IDS.deviceId
   })
 
   assert.deepEqual(identity, { userId: TEST_IDS.userId, deviceId: TEST_IDS.deviceId })
-  assert.ok(deviceRequest)
-  const publicKey = createPublicKey({
-    key: deviceRequest.publicKeyJwk as NodeJsonWebKey,
-    format: 'jwk'
-  })
-  assert.equal(verify(
-    null,
-    canonicalEnrollmentBytes({
-      enrollmentId: enrollment.enrollmentId,
-      nonce: enrollment.nonce,
-      userId: TEST_IDS.userId,
-      installationId: TEST_IDS.installationId,
-      expiresAt: enrollment.expiresAt
-    }),
-    publicKey,
-    Buffer.from(deviceRequest.signature, 'base64url')
-  ), true)
-  assert.deepEqual(credentials, [OIDC_TOKEN, OIDC_TOKEN, OIDC_TOKEN, OIDC_TOKEN])
+  assert.deepEqual(credentials, [OIDC_TOKEN, OIDC_TOKEN, OIDC_TOKEN])
   assert.equal(fixture.secrets.get(COLLABORATION_OIDC_ACCESS_TOKEN_KEY), OIDC_TOKEN)
-  const privateKey = fixture.secrets.get(COLLABORATION_DEVICE_SIGNING_KEY)
-  assert.ok(privateKey)
-  assert.equal(JSON.stringify(deviceRequest).includes('"d"'), false)
   assert.equal(JSON.stringify(fixture.store.snapshot()).includes(OIDC_TOKEN), false)
-  assert.equal(JSON.stringify(fixture.store.snapshot()).includes(privateKey), false)
   assert.equal((await fixture.settings.read()).settings?.deviceId, TEST_IDS.deviceId)
 })
 
-test('C replays an uncertain Device creation with the exact secret-stored request', async (context) => {
-  const fixture = await connectionFixture()
-  context.after(() => fixture.connection.dispose())
-  const createRequests: DeviceCreateRequest[] = []
-  let enrollmentCalls = 0
-  fixture.client.me = async () => ({
-    schemaVersion: 1, type: 'me', userId: TEST_IDS.userId, displayName: 'Test User',
-    status: 'active', oidcIdentityId: 'oid_Identity000001', issuer: 'https://identity.example.test',
-    revision: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP
-  })
-  fixture.client.createDeviceEnrollment = async () => {
-    enrollmentCalls += 1
-    return {
-      enrollmentId: 'enr_Enrollment0001',
-      nonce: Buffer.alloc(32, 11).toString('base64url'),
-      expiresAt: '2099-08-20T00:00:00.000Z'
-    }
-  }
-  fixture.client.createDevice = async (request) => {
-    createRequests.push(structuredClone(request))
-    if (createRequests.length === 1) throw new Error('response lost after A committed Device')
-    return {
-      device: {
-        schemaVersion: 1, type: 'device', deviceId: TEST_IDS.deviceId, userId: TEST_IDS.userId,
-        installationId: request.installationId, displayName: request.displayName,
-        platform: request.platform, publicKeyJwk: request.publicKeyJwk,
-        capabilitySummary: request.capabilitySummary, status: 'active', revision: 1,
-        createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP
-      }
-    }
-  }
-  fixture.client.execute = async (request) => {
-    if (request.type === 'endpoint.catalog.get') return endpointCatalog(request.requestId)
-    assert.equal(request.type, 'participant.get')
-    return {
-      protocolVersion: '1.0', type: 'participant.snapshot', requestId: request.requestId,
-      user: userPrincipalFixture, participant: participantProfileFixture,
-      humanEndpoints: [], agents: []
-    }
-  }
-  await fixture.connection.activate()
-  const input = {
-    accessToken: OIDC_TOKEN,
-    deviceDisplayName: 'Research Mac',
-    platform: { os: 'macos' as const, arch: 'arm64' as const, appVersion: '1.0.0' },
-    capabilitySummary: ['agent.execute']
-  }
-
-  await assert.rejects(fixture.connection.onboardCloudIdentity(input), /response lost/u)
-  assert.ok(fixture.secrets.has(COLLABORATION_PENDING_DEVICE_CREATE_KEY))
-  assert.equal(fixture.secrets.has(COLLABORATION_OIDC_ACCESS_TOKEN_KEY), false)
-  await fixture.connection.onboardCloudIdentity(input)
-
-  assert.equal(enrollmentCalls, 1)
-  assert.equal(createRequests.length, 2)
-  assert.deepEqual(createRequests[1], createRequests[0])
-  assert.equal(fixture.secrets.has(COLLABORATION_PENDING_DEVICE_CREATE_KEY), false)
-  assert.equal(fixture.secrets.get(COLLABORATION_OIDC_ACCESS_TOKEN_KEY), OIDC_TOKEN)
-})
-
-test('C replaces a Device not owned by the current OIDC user and clears the old Agent binding', async (context) => {
+test('C adopts a replacement ACTIVE Device and clears the old Agent binding', async (context) => {
   const fixture = await connectionFixture({ device: true, agent: true })
   context.after(() => fixture.connection.dispose())
   fixture.client.execute = async (request) => {
@@ -291,33 +194,31 @@ test('C replaces a Device not owned by the current OIDC user and clears the old 
     status: 'active', oidcIdentityId: 'oid_Identity000001', issuer: 'https://identity.example.test',
     revision: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP
   })
-  fixture.client.listDevices = async () => ({ devices: [] })
-  fixture.client.createDeviceEnrollment = async () => ({
-    enrollmentId: 'enr_Enrollment0001',
-    nonce: Buffer.alloc(32, 13).toString('base64url'),
-    expiresAt: '2099-08-20T00:00:00.000Z'
-  })
-  fixture.client.createDevice = async (request) => ({
-    device: {
+  fixture.client.listDevices = async () => ({
+    devices: [{
       schemaVersion: 1, type: 'device', deviceId: 'dev_Replacement001', userId: TEST_IDS.userId,
-      installationId: request.installationId, displayName: request.displayName,
-      platform: request.platform, publicKeyJwk: request.publicKeyJwk,
-      capabilitySummary: request.capabilitySummary, status: 'active', revision: 1,
+      installationId: 'ins_Replacement0001', displayName: 'Replacement Device',
+      platform: { os: 'macos', arch: 'arm64', appVersion: '1.0.0' },
+      publicKeyJwk: {
+        kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig',
+        kid: 'replacement-device-key', x: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg'
+      },
+      capabilitySummary: ['agent.execute'], status: 'active', revision: 1,
       createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP
-    }
+    }]
   })
   await fixture.connection.activate()
   fixture.secrets.set(COLLABORATION_DEVICE_CREDENTIAL_KEY, DEVICE_CREDENTIAL)
 
-  const identity = await fixture.connection.onboardCloudIdentity({
+  const identity = await fixture.connection.adoptCloudIdentity({
     accessToken: OIDC_TOKEN,
-    deviceDisplayName: 'Replacement Device',
-    platform: { os: 'macos', arch: 'arm64', appVersion: '1.0.0' },
-    capabilitySummary: ['agent.execute']
+    userId: TEST_IDS.userId,
+    deviceId: 'dev_Replacement001'
   })
 
   assert.equal(identity.deviceId, 'dev_Replacement001')
   assert.equal((await fixture.settings.read()).settings?.deviceId, 'dev_Replacement001')
+  assert.equal((await fixture.settings.read()).settings?.installationId, 'ins_Replacement0001')
   assert.equal((await fixture.settings.read()).settings?.agentId, undefined)
   assert.equal(fixture.secrets.has(COLLABORATION_DEVICE_CREDENTIAL_KEY), false)
 })
@@ -326,8 +227,6 @@ test('C clears the previous Cloud authority only when the configured base URL ch
   const fixture = await connectionFixture({ oidc: true, user: true, device: true, agent: true })
   context.after(() => fixture.connection.dispose())
   fixture.secrets.set(COLLABORATION_DEVICE_CREDENTIAL_KEY, DEVICE_CREDENTIAL)
-  fixture.secrets.set(COLLABORATION_DEVICE_SIGNING_KEY, '{"private":"secret"}')
-  fixture.secrets.set(COLLABORATION_PENDING_DEVICE_CREATE_KEY, '{"pending":"secret"}')
   fixture.client.execute = async (request) => {
     if (request.type === 'endpoint.catalog.get') return endpointCatalog(request.requestId)
     assert.equal(request.type, 'participant.get')
@@ -349,8 +248,6 @@ test('C clears the previous Cloud authority only when the configured base URL ch
   assert.equal(settings?.agentId, undefined)
   assert.equal(fixture.secrets.has(COLLABORATION_OIDC_ACCESS_TOKEN_KEY), false)
   assert.equal(fixture.secrets.has(COLLABORATION_DEVICE_CREDENTIAL_KEY), false)
-  assert.equal(fixture.secrets.has(COLLABORATION_DEVICE_SIGNING_KEY), false)
-  assert.equal(fixture.secrets.has(COLLABORATION_PENDING_DEVICE_CREATE_KEY), false)
   assert.equal(fixture.store.snapshot().user, undefined)
   assert.equal(fixture.store.snapshot().agents.length, 0)
   assert.equal(fixture.store.snapshot().outbox.length, 0)
@@ -668,7 +565,7 @@ function lifecycleClient(): CollaborationCloudClient {
     execute: async (request) => unexpected(request),
     pullAgentInbox: async () => ({ messages: [], nextSequence: 1 }),
     observeAgentInbox: async function *(_credential, signal) {
-      if (signal.aborted) return
+      if (!signal.aborted) yield* []
     }
   }
 }

@@ -83,7 +83,7 @@ export {
 export type { CollaborationStateBackend } from './main/store.js'
 export type {
   CollaborationCloudIdentity,
-  CollaborationCloudIdentityOnboardingInput
+  CollaborationCloudIdentitySessionInput
 } from './main/connection.js'
 
 type CapabilityEffect = 'read' | 'external-write'

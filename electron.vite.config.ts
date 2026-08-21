@@ -10,7 +10,12 @@ export default defineConfig({
     // specifiers through Node's ESM loader.
     plugins: [
       externalizeDepsPlugin({
-        exclude: ['@sciforge/codex-runtime', '@sciforge/workspace-egress']
+        exclude: [
+          '@sciforge/collaboration-contracts',
+          '@sciforge/collaboration-identity',
+          '@sciforge/codex-runtime',
+          '@sciforge/workspace-egress'
+        ]
       })
     ],
     build: {

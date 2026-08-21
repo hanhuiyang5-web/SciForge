@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto'
 import { ZulipProviderError, isZulipProviderError } from './errors.js'
-import type { ProviderDirectRecipient } from '@sciforge/collaboration-contracts'
 import type { ZulipLocator } from './locator.js'
+
+type ZulipDirectRecipient = {
+  type: 'provider_direct_recipient'
+  provider: 'zulip'
+  realmId: string
+  providerUserId: string
+  displayName?: string
+}
 
 export type ZulipDeliveryState = 'pending' | 'sent' | 'uncertain' | 'failed'
 
@@ -15,7 +22,7 @@ export type ZulipDeliveryRecord = {
   remoteMessageId?: string
   errorCode?: string
   locator?: ZulipLocator
-  directRecipient?: ProviderDirectRecipient
+  directRecipient?: ZulipDirectRecipient
 }
 
 export type ZulipDeliveryLedger = {
@@ -81,7 +88,7 @@ export class ZulipDeliveryCoordinator {
     send: ZulipSendAttempt
   } & (
     | { locator: ZulipLocator; directRecipient?: never }
-    | { locator?: never; directRecipient: ProviderDirectRecipient }
+    | { locator?: never; directRecipient: ZulipDirectRecipient }
   )): Promise<ZulipDeliveryResult> {
     const idempotencyKey = input.idempotencyKey.trim()
     if (!idempotencyKey || idempotencyKey.length > 256) {

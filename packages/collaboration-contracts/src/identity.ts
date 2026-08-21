@@ -57,6 +57,32 @@ export const oidcIssuerSchema = z.string().min(1).max(2_048).superRefine((value,
 
 export const oidcSubjectSchema = z.string().min(1).max(512)
 export const oidcIdentityStatusSchema = z.enum(['active', 'revoked'])
+export const oidcAudienceSchema = z.string().trim().min(1).max(512)
+export const identityEmailSchema = z.string().trim().email().max(320)
+
+export const verifiedOidcClaimsSchema = z.object({
+  type: z.literal('verified_oidc_claims'),
+  issuer: oidcIssuerSchema,
+  subject: oidcSubjectSchema,
+  audiences: z.array(oidcAudienceSchema).min(1).max(32).refine(
+    uniqueStrings,
+    'OIDC audiences must be unique'
+  ),
+  issuedAt: timestampSchema,
+  expiresAt: timestampSchema,
+  email: identityEmailSchema.optional(),
+  emailVerified: z.boolean().optional(),
+  displayName: displayNameSchema.optional()
+}).strict().superRefine((claims, context) => {
+  if (Date.parse(claims.expiresAt) <= Date.parse(claims.issuedAt)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['expiresAt'],
+      message: 'OIDC token must expire after it is issued'
+    })
+  }
+})
+export type VerifiedOidcClaims = z.infer<typeof verifiedOidcClaimsSchema>
 
 export const oidcIdentitySchema = z.object({
   ...entityMetadataShape,

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import {
   restRequestSchema,
@@ -9,6 +10,10 @@ import {
   type RestResponse,
   type Task
 } from '@sciforge/collaboration-contracts'
+import {
+  cloudIdentitySessionBroker,
+  type ActiveCloudIdentitySession
+} from '@sciforge/collaboration-identity'
 import type {
   DomainMainPackageSecretStoreHost,
   DomainMainPackageSettingsHost
@@ -35,7 +40,7 @@ import type {
 import {
   CollaborationConnection,
   type CollaborationCloudIdentity,
-  type CollaborationCloudIdentityOnboardingInput,
+  type CollaborationCloudIdentitySessionInput,
   type CollaborationInboxHandler
 } from './connection.js'
 import {
@@ -81,6 +86,8 @@ export class CollaborationRuntime {
   private active = false
   private localAgentIdentity: string | undefined
   private bcAbortController: AbortController | null = null
+  private disposeCloudIdentitySession: (() => void) | null = null
+  private cloudIdentityTail: Promise<void> = Promise.resolve()
   private readonly bcPort: Pick<CollaborationBCNodePortImpl, 'handle'>
 
   constructor(private readonly options: CollaborationRuntimeOptions) {
@@ -193,6 +200,10 @@ export class CollaborationRuntime {
     await this.reconcileTranscriptSnapshots()
     await projections.recover()
     await connection.activate()
+    this.disposeCloudIdentitySession = cloudIdentitySessionBroker.subscribe((session) => {
+      const apply = () => this.applyCloudIdentitySession(session)
+      this.cloudIdentityTail = this.cloudIdentityTail.then(apply, apply)
+    })
 
     return async () => {
       await disposeTurnEvents()
@@ -203,11 +214,14 @@ export class CollaborationRuntime {
   async dispose(): Promise<void> {
     if (!this.active) return
     this.active = false
+    this.disposeCloudIdentitySession?.()
+    this.disposeCloudIdentitySession = null
     this.bcAbortController?.abort()
     this.bcAbortController = null
     this.projections?.stop()
     await this.connection?.dispose()
     await Promise.allSettled([
+      this.cloudIdentityTail,
       this.projections?.waitForIdle() ?? Promise.resolve(),
       this.outbox?.waitForIdle() ?? Promise.resolve()
     ])
@@ -318,10 +332,10 @@ export class CollaborationRuntime {
     return (await this.status()).connection
   }
 
-  async onboardCloudIdentity(
-    input: CollaborationCloudIdentityOnboardingInput
+  async adoptCloudIdentity(
+    input: CollaborationCloudIdentitySessionInput
   ): Promise<CollaborationCloudIdentity> {
-    const identity = await this.requireConnection().onboardCloudIdentity(input)
+    const identity = await this.requireConnection().adoptCloudIdentity(input)
     this.localAgentIdentity = (await this.settings.read()).settings?.agentId
     return identity
   }
@@ -345,6 +359,37 @@ export class CollaborationRuntime {
     return (await this.status()).participant!.agents.find((candidate) => (
       candidate.agentId === agent.agentId
     ))!
+  }
+
+  private async applyCloudIdentitySession(
+    session: ActiveCloudIdentitySession | null
+  ): Promise<void> {
+    if (!this.active) return
+    const connection = this.requireConnection()
+    try {
+      if (!session) {
+        await connection.releaseCloudIdentity()
+        this.localAgentIdentity = undefined
+        return
+      }
+      const configured = await this.settings.read()
+      if (configured.settings?.baseUrl !== session.cloudBaseUrl) {
+        await connection.configure(session.cloudBaseUrl)
+      }
+      await this.adoptCloudIdentity({
+        accessToken: session.accessToken,
+        userId: session.userId,
+        deviceId: session.deviceId
+      })
+      const agent = await connection.registerAgent({
+        displayName: `${hostname() || 'SciForge Desktop'} Agent`,
+        nodeType: 'desktop',
+        capabilities: []
+      })
+      this.localAgentIdentity = agent.agentId
+    } catch (error) {
+      connection.reportSessionError(error)
+    }
   }
 
   async collaborationIdentity(): Promise<Readonly<{

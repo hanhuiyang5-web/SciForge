@@ -26,6 +26,7 @@ import {
   oidcUserActorSchema,
   serviceActorSchema,
   trustedZulipConfirmContextSchema,
+  verifiedOidcClaimsSchema,
   zulipBindingBeginRequestSchema,
   zulipBindingBeginResponseSchema,
   zulipBindingConfirmRequestSchema,
@@ -64,6 +65,26 @@ function externalIdentityFixture(binding = createZulipBindingFixture()) {
 }
 
 describe('strict OIDC and me contracts', () => {
+  it('accepts only bounded verified OIDC claims for the local PKCE client', () => {
+    const claims = {
+      type: 'verified_oidc_claims',
+      issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+      subject: 'keycloak-user-123',
+      audiences: ['sciforge-cloud-api'],
+      issuedAt: timestamp,
+      expiresAt: laterTimestamp,
+      email: 'person@example.com',
+      emailVerified: true,
+      displayName: 'Cloud Person'
+    } as const
+    expect(verifiedOidcClaimsSchema.parse(claims)).toEqual(claims)
+    expect(verifiedOidcClaimsSchema.safeParse({
+      ...claims,
+      audiences: ['sciforge-cloud-api', 'sciforge-cloud-api']
+    }).success).toBe(false)
+    expect(verifiedOidcClaimsSchema.safeParse({ ...claims, accessToken: 'not-allowed' }).success).toBe(false)
+  })
+
   it('accepts the vendored dynamic OIDC issuer and underscore-style fixture IDs', async () => {
     const oidc = await startOidcFixtureServer()
     try {
