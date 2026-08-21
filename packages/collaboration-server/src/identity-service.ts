@@ -136,7 +136,7 @@ export class IdentityService {
     if (!resolved.user || resolved.user.status !== 'active' || resolved.identity.status !== 'active') {
       fail('credential_revoked', 'The local OIDC identity is not active.')
     }
-    return oidcUserActor(resolved.user, resolved.identity, verified.authTime)
+    return oidcUserActor(resolved.user, resolved.identity, verified.authTime, verified.expiresAt)
   }
 
   async me(actor: UserActor): Promise<MeResponse> {
@@ -269,7 +269,6 @@ export class IdentityService {
   }
 
   async revokeDevice(actor: UserActor, deviceId: string, idempotencyKey: string): Promise<DeviceResponse> {
-    this.requireRecentAuthentication(actor)
     const response = await this.execute(actor, 'device.revoke', idempotencyKey, { deviceId }, async (tx, at) => {
       const device = await tx.getDeviceForUpdate(deviceId)
       if (!device || device.userId !== actor.userId) fail('not_found', 'The Device was not found for this User.')
@@ -286,7 +285,7 @@ export class IdentityService {
       await tx.updateDevice(revoked, device.revision)
       await tx.revokeAgentCredentialsForDevice(device.deviceId, at)
       return { response: { device: publicDevice(revoked) }, resourceKind: 'device', resourceId: device.deviceId }
-    })
+    }, { beforeFirstExecution: () => this.requireRecentAuthentication(actor) })
     return deviceResponseSchema.parse(response)
   }
 
@@ -458,7 +457,6 @@ export class IdentityService {
     externalIdentityId: string,
     idempotencyKey: string
   ): Promise<ExternalIdentityResponse> {
-    this.requireRecentAuthentication(actor)
     const response = await this.execute(actor, 'zulip.binding.revoke', idempotencyKey, {
       externalIdentityId
     }, async (tx, at) => {
@@ -481,7 +479,7 @@ export class IdentityService {
       await tx.expirePendingZulipBindingRequests(actor.userId, identity.realmUrl, at)
       return { response: { identity: publicExternalIdentity(revoked) },
         resourceKind: 'external_identity', resourceId: identity.externalIdentityId }
-    })
+    }, { beforeFirstExecution: () => this.requireRecentAuthentication(actor) })
     return externalIdentityResponseSchema.parse(response)
   }
 
@@ -504,7 +502,8 @@ export class IdentityService {
     operation: string,
     idempotencyKey: string,
     request: unknown,
-    work: (tx: CollaborationTransaction, at: string) => Promise<IdentityCommandResult<T>>
+    work: (tx: CollaborationTransaction, at: string) => Promise<IdentityCommandResult<T>>,
+    options: { beforeFirstExecution?: () => void } = {}
   ): Promise<Record<string, unknown>> {
     if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 300) {
       fail('validation_failed', 'A valid idempotency key is required.')
@@ -522,6 +521,10 @@ export class IdentityService {
           }
           return existing.response
         }
+        // A receipt replay is a read-only recovery path. Preconditions that
+        // authorize a new mutation still run after proving no receipt exists
+        // and before any command-specific state is read or changed.
+        options.beforeFirstExecution?.()
         const result = await work(tx, at)
         await tx.insertAudit(acceptedAudit(actor, operation, result, idempotencyKey, at))
         const receipt: StoredReceipt = {
@@ -561,7 +564,12 @@ function oidcDisplayName(verified: VerifiedOidcIdentity): string {
   return value.trim().slice(0, 200) || 'SciForge User'
 }
 
-function oidcUserActor(user: StoredUser, identity: StoredOidcIdentity, authTime: number): UserActor {
+function oidcUserActor(
+  user: StoredUser,
+  identity: StoredOidcIdentity,
+  authTime: number,
+  expiresAt: number
+): UserActor {
   return {
     kind: 'user',
     actorKey: `oidc:${identity.identityId}`,
@@ -570,6 +578,7 @@ function oidcUserActor(user: StoredUser, identity: StoredOidcIdentity, authTime:
     issuer: identity.issuer,
     subject: identity.subject,
     authTime,
+    expiresAt,
     assurance: 'verified'
   }
 }

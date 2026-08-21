@@ -66,6 +66,11 @@ assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'running_image_id'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'approved_image_revision'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '--core-only'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '--provider-zulip'
+assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '--a-https-oidc-test'
+assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'prepare_a_https_oidc_test_environment'
+assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '[[ "$provider_mode" == oidc-test-private ]]'
+assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'validate_a_https_oidc_test_app "$expected_commit"'
+assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '[[ "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID" == "$app_container_before" ]]'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '[[ "$provider_mode" == core-only-private ]]'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'body.providers.length !== 0'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '{{range .Config.Env}}{{println .}}{{end}}'
@@ -299,7 +304,10 @@ assert_contains "$SCRIPT_DIR/common.sh" 'manifest_binding_confirm_mode" == disab
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_provider_mode" == disabled'
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_oidc_allow_insecure_loopback" == false'
 assert_contains "$SCRIPT_DIR/common.sh" '$2 == "identityAcceptanceHarnessSha256" { print $4 }'
+assert_contains "$SCRIPT_DIR/common.sh" '$2 == "multiWorkerAcceptanceHarnessSha256" { print $4 }'
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_multi_worker_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$'
+assert_not_contains "$SCRIPT_DIR/common.sh" 'dualPrincipalAcceptanceHarnessSha256'
 assert_not_contains "$SCRIPT_DIR/common.sh" 'collaboration-a-identity-acceptance.mjs'
 assert_contains "$SCRIPT_DIR/common.sh" 'assert_a_https_oidc_test_network_membership'
 assert_contains "$SCRIPT_DIR/common.sh" 'The dedicated identity-edge network must contain exactly one Keycloak app plus the optional A edge.'
@@ -389,25 +397,36 @@ assert_contains "$DEPLOY_DIR/README.md" 'sciforge-keycloak_identity-edge'
 assert_contains "$DEPLOY_DIR/README.md" 'disable-a-https-oidc-test.sh'
 assert_contains "$DEPLOY_DIR/README.md" 'identityEdgeExternalVerifyScriptSha256'
 assert_contains "$DEPLOY_DIR/README.md" 'identityAcceptanceHarnessSha256'
-assert_contains "$DEPLOY_DIR/README.md" '${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\n'
-assert_contains "$DEPLOY_DIR/README.md" 'shasum -a 256 "$harness"'
-assert_contains "$DEPLOY_DIR/README.md" 'unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
+assert_contains "$DEPLOY_DIR/README.md" 'multiWorkerAcceptanceHarnessSha256'
+assert_contains "$DEPLOY_DIR/README.md" '${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\t${m.multiWorkerAcceptanceHarnessSha256}\n'
+assert_contains "$DEPLOY_DIR/README.md" 'shasum -a 256 "$identity_harness"'
+assert_contains "$DEPLOY_DIR/README.md" 'shasum -a 256 "$multi_worker_harness"'
+assert_contains "$DEPLOY_DIR/README.md" 'unset NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_DEBUG_NATIVE NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
 assert_contains "$DEPLOY_DIR/README.md" 'unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy'
 assert_contains "$DEPLOY_DIR/README.md" 'unset SSL_CERT_FILE ssl_cert_file SSL_CERT_DIR ssl_cert_dir CURL_CA_BUNDLE curl_ca_bundle'
-assert_contains "$DEPLOY_DIR/README.md" 'node "$harness"'
-assert_contains "$DEPLOY_DIR/README.md" '--expected-harness-sha256 "$harness_sha"'
-assert_contains "$DEPLOY_DIR/README.md" '`auth_time` 在 harness preflight 时不得超过 180 秒'
-assert_contains "$DEPLOY_DIR/README.md" $'(\n  set -euo pipefail\n  unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
+assert_contains "$DEPLOY_DIR/README.md" 'node "$multi_worker_harness"'
+assert_contains "$DEPLOY_DIR/README.md" 'scripts/collaboration-a-multi-worker-acceptance.mjs'
+assert_not_contains "$DEPLOY_DIR/README.md" 'scripts/collaboration-a-dual-principal-acceptance.mjs'
+assert_contains "$DEPLOY_DIR/README.md" '--expected-identity-harness-sha256 "$identity_harness_sha"'
+assert_contains "$DEPLOY_DIR/README.md" '--expected-multi-worker-harness-sha256 "$multi_worker_harness_sha"'
+assert_contains "$DEPLOY_DIR/README.md" '--worker-descriptor-file "$worker_descriptor_file_1"'
+assert_contains "$DEPLOY_DIR/README.md" '--worker-descriptor-file "$worker_descriptor_file_2"'
+assert_contains "$DEPLOY_DIR/README.md" '`auth_time` 在 multi-worker harness preflight 时不得超过 120 秒'
+assert_contains "$DEPLOY_DIR/README.md" '1 个 Orchestrator → 2–8 个独立 Worker'
+assert_not_contains "$DEPLOY_DIR/README.md" 'dualPrincipalAcceptanceHarnessSha256'
+assert_not_contains "$DEPLOY_DIR/README.md" '--worker-token-file'
+assert_not_contains "$DEPLOY_DIR/README.md" '--worker-revoke-token-file'
+assert_contains "$DEPLOY_DIR/README.md" $'(\n  set -euo pipefail\n  unset NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_DEBUG_NATIVE NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY'
 assert_not_contains "$DEPLOY_DIR/README.md" 'npm run collaboration:a:identity:acceptance --'
 assert_not_contains "$DEPLOY_DIR/README.md" 'auth_time` 在运行时仍不超过 240 秒'
 acceptance_block_order="$(awk '
   $0 == "(" { candidate_open=NR }
   index($0, "set -euo pipefail") && candidate_open > 0 { strict=candidate_open == NR - 1 ? NR : strict }
-  index($0, "unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS") { open=candidate_open; sanitize=NR }
-  index($0, "read -r external_sha harness_sha") { extract=NR }
+  index($0, "unset NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_DEBUG_NATIVE NODE_EXTRA_CA_CERTS") { open=candidate_open; sanitize=NR }
+  index($0, "read -r external_sha identity_harness_sha multi_worker_harness_sha") { extract=NR }
   index($0, "\"$external_verifier\" \"$release_commit\" \"$external_sha\"") { external=NR }
-  index($0, "shasum -a 256 \"$harness\"") { hash=NR }
-  index($0, "node \"$harness\"") { run=NR }
+  index($0, "shasum -a 256 \"$multi_worker_harness\"") { hash=NR }
+  index($0, "node \"$multi_worker_harness\"") { run=NR }
   $0 == ")" && run > 0 && closing_line == 0 { closing_line=NR }
   END {
     if (open > 0 && open < strict && strict < sanitize && sanitize < extract && extract < external &&

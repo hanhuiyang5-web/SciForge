@@ -39,6 +39,8 @@ export const IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT = Object.freeze({
 })
 const aHttpsTestEdgeImage = 'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a'
 const identityAcceptanceHarnessRelativePath = 'scripts/collaboration-a-identity-acceptance.mjs'
+const multiWorkerAcceptanceHarnessRelativePath =
+  'scripts/collaboration-a-multi-worker-acceptance.mjs'
 const aHttpsSharedEdgeAssets = Object.freeze({
   edgeDockerignoreSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/.dockerignore'
@@ -581,15 +583,15 @@ export async function sha256File(path) {
   return hash.digest('hex')
 }
 
-async function hashIdentityAcceptanceHarness(repositoryRoot) {
-  const absolutePath = join(repositoryRoot, identityAcceptanceHarnessRelativePath)
+async function hashAcceptanceHarness(repositoryRoot, relativePath, label) {
+  const absolutePath = join(repositoryRoot, relativePath)
   let before
   try {
     before = await lstat(absolutePath, { bigint: true })
   } catch (error) {
     if (error?.code === 'ENOENT') {
       throw new Error(
-        `A HTTPS OIDC identity acceptance harness is missing: ${identityAcceptanceHarnessRelativePath}`,
+        `A HTTPS OIDC ${label} acceptance harness is missing: ${relativePath}`,
         { cause: error }
       )
     }
@@ -603,7 +605,7 @@ async function hashIdentityAcceptanceHarness(repositoryRoot) {
     before.size > 1024n * 1024n
   ) {
     throw new Error(
-      `A HTTPS OIDC identity acceptance harness is unsafe: ${identityAcceptanceHarnessRelativePath}`
+      `A HTTPS OIDC ${label} acceptance harness is unsafe: ${relativePath}`
     )
   }
 
@@ -612,7 +614,7 @@ async function hashIdentityAcceptanceHarness(repositoryRoot) {
   try {
     after = await lstat(absolutePath, { bigint: true })
   } catch (error) {
-    throw new Error('A HTTPS OIDC identity acceptance harness changed while it was hashed.', {
+    throw new Error(`A HTTPS OIDC ${label} acceptance harness changed while it was hashed.`, {
       cause: error
     })
   }
@@ -626,7 +628,7 @@ async function hashIdentityAcceptanceHarness(repositoryRoot) {
     before.mtimeNs !== after.mtimeNs ||
     before.ctimeNs !== after.ctimeNs
   ) {
-    throw new Error('A HTTPS OIDC identity acceptance harness changed while it was hashed.')
+    throw new Error(`A HTTPS OIDC ${label} acceptance harness changed while it was hashed.`)
   }
   return digest
 }
@@ -1243,10 +1245,21 @@ export async function buildCollaborationServerBundle({
       }
     }
     const identityAcceptanceHarnessSha256 = aHttpsOidcTest
-      ? await hashIdentityAcceptanceHarness(root)
+      ? await hashAcceptanceHarness(
+          root,
+          identityAcceptanceHarnessRelativePath,
+          'identity'
+        )
+      : undefined
+    const multiWorkerAcceptanceHarnessSha256 = aHttpsOidcTest
+      ? await hashAcceptanceHarness(
+          root,
+          multiWorkerAcceptanceHarnessRelativePath,
+          'multi-worker'
+        )
       : undefined
     const manifest = {
-      schemaVersion: aHttpsOidcTest ? 2 : 1,
+      schemaVersion: aHttpsOidcTest ? 3 : 1,
       artifact: 'sciforge-collaboration-server-bundle',
       contractCommit: approvedCommit,
       releaseMode: teamPrivateAcceptance
@@ -1274,6 +1287,7 @@ export async function buildCollaborationServerBundle({
               providerMode: 'disabled',
               identityEdgeNetwork: 'sciforge-keycloak_identity-edge',
               identityAcceptanceHarnessSha256,
+              multiWorkerAcceptanceHarnessSha256,
               edgeCaddyImage: aHttpsTestEdgeImage,
               ...edgeProfile
             }

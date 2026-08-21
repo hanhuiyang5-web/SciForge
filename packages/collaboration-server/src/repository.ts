@@ -76,6 +76,7 @@ export interface CollaborationReadRepository {
   getTaskResultForExecution(taskId: string, executionId: string): Promise<StoredProjectRecord | null>
   listProjectRecords(projectId: string, acceptedOnly: boolean): Promise<StoredProjectRecord[]>
   getResourceRef(resourceRefId: string): Promise<StoredResourceRef | null>
+  getCredential(credentialId: string): Promise<StoredCredential | null>
   getCredentialByDigest(tokenDigest: string): Promise<StoredCredential | null>
   getReceipt(actorKey: string, idempotencyKey: string): Promise<StoredReceipt | null>
   getReceiptById(receiptId: string): Promise<StoredReceipt | null>
@@ -95,6 +96,7 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   getOidcIdentityByIssuerSubjectForUpdate(issuer: string, subject: string): Promise<StoredOidcIdentity | null>
   getDeviceEnrollmentForUpdate(enrollmentId: string): Promise<StoredDeviceEnrollment | null>
   getDeviceForUpdate(deviceId: string): Promise<StoredDevice | null>
+  getCredentialForUpdate(credentialId: string): Promise<StoredCredential | null>
   getZulipBindingRequestForUpdate(bindingRequestId: string): Promise<StoredZulipBindingRequest | null>
   getZulipBindingRequestByCodeDigestForUpdate(codeDigest: string): Promise<StoredZulipBindingRequest | null>
   getExternalIdentityForUpdate(externalIdentityId: string): Promise<StoredExternalIdentity | null>

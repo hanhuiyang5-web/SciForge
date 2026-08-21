@@ -6,7 +6,7 @@ import {
 
 import { actorInboxRecipient, authorize, type AgentActor, type AuthContext, type HumanEndpointActor, type UserActor } from './auth.js'
 import { digestSecret, issueSecret, newId, safeAuditMetadata, stableDigest } from './crypto.js'
-import { CollaborationServiceError, fail } from './errors.js'
+import { CollaborationServiceError, fail, type CollaborationErrorCode } from './errors.js'
 import type {
   InboxRecipient,
   ProviderLocatorValue,
@@ -17,6 +17,7 @@ import type {
   StoredAgent,
   StoredAgentCapabilityProfile,
   StoredAuditEvent,
+  StoredDevice,
   StoredEndpoint,
   StoredInboxMessage,
   StoredParticipant,
@@ -37,7 +38,11 @@ import type {
   StoredAuthorizationRequirement,
   TaskStatus
 } from './model.js'
-import type { CollaborationRepository, CollaborationTransaction } from './repository.js'
+import type {
+  CollaborationReadRepository,
+  CollaborationRepository,
+  CollaborationTransaction
+} from './repository.js'
 
 export type InboxAvailabilityNotifier = {
   notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): void | Promise<void>
@@ -543,13 +548,22 @@ export class CollaborationService {
       const endpointId = input.primaryHumanEndpointId === null ? undefined
         : input.primaryHumanEndpointId ?? existing?.primaryHumanEndpointId
       const agentId = input.primaryAgentId === null ? undefined : input.primaryAgentId ?? existing?.primaryAgentId
+      const agentRoute = agentId
+        ? await prepareAgentRouteLocks(tx, [{
+            agentId,
+            label: 'Agent',
+            unavailableMessage: 'Primary Agent must have an active owner and linked Device.'
+          }])
+        : undefined
       if (endpointId) {
         const endpoint = required(await tx.getEndpoint(endpointId), 'Human endpoint')
         if (endpoint.userId !== actor.userId || endpoint.status !== 'active') fail('permission_denied', 'Primary endpoint must be active and owned by the user.')
       }
       if (agentId) {
-        const agent = required(await tx.getAgent(agentId), 'Agent')
-        if (agent.ownerUserId !== actor.userId || agent.status !== 'active') fail('permission_denied', 'Primary Agent must be active and owned by the user.')
+        const agent = required((await finishAgentRouteLocks(tx, agentRoute!)).get(agentId) ?? null, 'Agent')
+        if (agent.ownerUserId !== actor.userId) {
+          fail('permission_denied', 'Primary Agent must be active and owned by the user.')
+        }
       }
       const participant = completeParticipant({ userId: actor.userId, primaryHumanEndpointId: endpointId,
         primaryAgentId: agentId, status: 'incomplete', revision: (existing?.revision ?? 0) + 1, updatedAt: at })
@@ -569,7 +583,13 @@ export class CollaborationService {
       this.repository.getUser(userId), this.repository.getParticipant(userId),
       this.repository.listEndpointsForUser(userId), this.repository.listAgentsForUser(userId)
     ])
-    return { user: required(user, 'User'), participant: required(participant, 'Participant'), humanEndpoints, agents }
+    const resolvedUser = required(user, 'User')
+    const projectedAgents = await Promise.all(agents.map(async (agent) => (
+      await isUsableAgent(this.repository, agent, resolvedUser)
+        ? agent
+        : { ...agent, connectionStatus: 'offline' as const }
+    )))
+    return { user: resolvedUser, participant: required(participant, 'Participant'), humanEndpoints, agents: projectedAgents }
   }
 
   async createProjection(actor: UserActor, input: {
@@ -584,10 +604,17 @@ export class CollaborationService {
     const allowed = [...new Set([actor.userId, ...input.allowedSenderUserIds])]
     if (allowed.length > 100) fail('validation_failed', 'A shared Session may allow at most 100 users.')
     return this.commit(actor, 'projection.create', input.idempotencyKey, { ...input, allowedSenderUserIds: allowed }, async (tx, at) => {
+      const agentRoute = await prepareAgentRouteLocks(tx, [{
+        agentId: input.agentId,
+        label: 'Projection Agent',
+        unavailableMessage: 'Projection Agent must have an active owner and linked Device.'
+      }])
       await lockProviderLocator(tx, input.locator)
-      const agent = required(await tx.getAgent(input.agentId), 'Projection Agent')
+      const agent = required((await finishAgentRouteLocks(tx, agentRoute)).get(input.agentId) ?? null, 'Projection Agent')
       const endpoint = required(await tx.getEndpoint(input.humanEndpointId), 'Projection endpoint')
-      if (agent.ownerUserId !== actor.userId || agent.status !== 'active') fail('permission_denied', 'Projection Agent must be active and owned by the user.')
+      if (agent.ownerUserId !== actor.userId) {
+        fail('permission_denied', 'Projection Agent must be active and owned by the user.')
+      }
       if (endpoint.userId !== actor.userId || endpoint.status !== 'active') fail('permission_denied', 'Projection endpoint must be active and owned by the user.')
       if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
         fail('validation_failed', 'Projection locator must use the bound endpoint provider and realm.')
@@ -1160,10 +1187,18 @@ export class CollaborationService {
         const user = required(await tx.getUser(userId), 'Project member')
         if (user.status !== 'active') fail('credential_revoked', 'Every Project member must be active.')
       }
-      // A new Project has no row to lock yet, so the Coordinator Agent is the
-      // serialization point shared with ownership transfer.
-      const coordinator = required(await tx.getAgentForUpdate(input.coordinatorAgentId), 'Coordinator Agent')
-      if (coordinator.status !== 'active' || !memberUserIds.includes(coordinator.ownerUserId)) {
+      const coordinatorRoute = await prepareAgentRouteLocks(tx, [{
+        agentId: input.coordinatorAgentId,
+        label: 'Coordinator Agent',
+        unavailableMessage: 'The Coordinator must have an active owner and linked Device.'
+      }])
+      // A new Project has no row to lock yet, so the linked Device and then the
+      // Coordinator Agent are the serialization points shared with revocation.
+      const coordinator = required(
+        (await finishAgentRouteLocks(tx, coordinatorRoute)).get(input.coordinatorAgentId) ?? null,
+        'Coordinator Agent'
+      )
+      if (!memberUserIds.includes(coordinator.ownerUserId)) {
         fail('permission_denied', 'Coordinator ownership must resolve to an active Project member.')
       }
       const projectId = newId('prj')
@@ -1187,6 +1222,11 @@ export class CollaborationService {
     idempotencyKey: string
   }): Promise<StoredProject> {
     return this.commit(actor, 'project.coordinator.transfer', input.idempotencyKey, input, async (tx, at) => {
+      const coordinatorRoute = await prepareAgentRouteLocks(tx, [{
+        agentId: input.coordinatorAgentId,
+        label: 'Coordinator Agent',
+        unavailableMessage: 'The new Coordinator must have an active owner and linked Device.'
+      }])
       const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
       const member = await tx.getProjectMember(project.projectId, actor.userId)
       authorize({ actor, operation: 'project_admin', projectRole: member?.role })
@@ -1194,9 +1234,12 @@ export class CollaborationService {
       if (['completed', 'failed', 'cancelled'].includes(project.status)) {
         fail('invalid_state_transition', 'A terminal Project cannot transfer its Coordinator.')
       }
-      const coordinator = required(await tx.getAgentForUpdate(input.coordinatorAgentId), 'Coordinator Agent')
+      const coordinator = required(
+        (await finishAgentRouteLocks(tx, coordinatorRoute)).get(input.coordinatorAgentId) ?? null,
+        'Coordinator Agent'
+      )
       const coordinatorMember = await tx.getProjectMember(project.projectId, coordinator.ownerUserId)
-      if (coordinator.status !== 'active' || !coordinatorMember?.active) {
+      if (!coordinatorMember?.active) {
         fail('permission_denied', 'The new Coordinator must belong to an active Project member.')
       }
       const oldCoordinatorAgentId = project.coordinatorAgentId
@@ -1246,6 +1289,15 @@ export class CollaborationService {
     idempotencyKey: string
   }): Promise<StoredProject> {
     return this.commit(actor, 'project.transition', input.idempotencyKey, input, async (tx, at) => {
+      const initialProject = required(await tx.getProject(input.projectId), 'Project')
+      const coordinatorRoute = initialProject.status === 'paused' && input.status === 'active'
+        ? await prepareAgentRouteLocks(tx, [{
+            agentId: initialProject.coordinatorAgentId,
+            label: 'Coordinator Agent',
+            unavailableCode: 'credential_revoked',
+            unavailableMessage: 'The paused Project Coordinator must have an active owner and linked Device.'
+          }])
+        : undefined
       const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
       const actingAgent = actor.kind === 'agent_device'
         ? required(await tx.getAgentForUpdate(actor.agentId), 'Agent')
@@ -1269,10 +1321,18 @@ export class CollaborationService {
         fail('invalid_state_transition', `Project cannot transition from ${project.status} to ${input.status}.`)
       }
       if (project.status === 'paused' && input.status === 'active') {
-        // Resuming restores the Coordinator's execution authority. Revalidate the
-        // current Agent under the Project -> Agent lock order instead of trusting
-        // the ownership and membership that existed when the Project was paused.
-        const coordinator = required(await tx.getAgentForUpdate(project.coordinatorAgentId), 'Coordinator Agent')
+        if (!coordinatorRoute || project.coordinatorAgentId !== initialProject.coordinatorAgentId) {
+          fail('revision_conflict', 'The paused Project Coordinator changed while acquiring route locks.', {
+            retryable: true,
+            details: { currentRevision: project.revision }
+          })
+        }
+        // Resuming restores execution authority. The Device row was locked before
+        // the Project, and the Agent is now locked and revalidated against it.
+        const coordinator = required(
+          (await finishAgentRouteLocks(tx, coordinatorRoute)).get(project.coordinatorAgentId) ?? null,
+          'Coordinator Agent'
+        )
         if (coordinator.status !== 'active') {
           fail('credential_revoked', 'The paused Project Coordinator Agent is no longer active.')
         }
@@ -1319,12 +1379,22 @@ export class CollaborationService {
     const authorizationRequirements = normalizeAuthorizationRequirements(input.authorizationRequirements ?? [])
     return this.commit(actor, 'task.create', input.idempotencyKey, { ...input, completionCriteria: criterionInputs,
       dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds, authorizationRequirements }, async (tx, at) => {
+      const agentRoute = await prepareAgentRouteLocks(tx, [
+        {
+          agentId: input.assigneeAgentId,
+          label: 'Assignee Agent',
+          unavailableMessage: 'The assignee Agent must have an active owner and linked Device.'
+        },
+        ...(actor.kind === 'agent_device' ? [{
+          agentId: actor.agentId,
+          label: 'Coordinator Agent',
+          unavailableCode: 'credential_revoked' as const,
+          unavailableMessage: 'The authenticated Coordinator Agent must have an active owner and linked Device.'
+        }] : [])
+      ])
       const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
       if (project.status !== 'active') fail('invalid_state_transition', 'Tasks may only be created for an active Project.')
-      const lockedAgents = await lockAgentsForUpdate(tx, [
-        input.assigneeAgentId,
-        ...(actor.kind === 'agent_device' ? [actor.agentId] : [])
-      ])
+      const lockedAgents = await finishAgentRouteLocks(tx, agentRoute)
       const assignee = required(lockedAgents.get(input.assigneeAgentId) ?? null, 'Assignee Agent')
       const actorMember = await tx.getProjectMember(project.projectId, actor.userId)
       const proposalDigest = stableDigest({ projectId: input.projectId, assigneeAgentId: input.assigneeAgentId,
@@ -1343,7 +1413,7 @@ export class CollaborationService {
       }
       expectRevision(project.revision, input.expectedProjectRevision)
       const member = await tx.getProjectMember(project.projectId, assignee.ownerUserId)
-      if (assignee.status !== 'active' || !member?.active || member.role === 'observer') {
+      if (!member?.active || member.role === 'observer') {
         fail('permission_denied', 'The assignee Agent owner is not an executable Project member.')
       }
       const profile = await tx.getAgentCapabilityProfile(assignee.agentId)
@@ -1581,11 +1651,21 @@ export class CollaborationService {
   }): Promise<StoredTask> {
     return this.commit(actor, 'task.retry', input.idempotencyKey, input, async (tx, at) => {
       const initialTask = required(await tx.getTask(input.taskId), 'Task')
-      const project = required(await tx.getProjectForUpdate(initialTask.projectId), 'Project')
-      const lockedAgents = await lockAgentsForUpdate(tx, [
-        input.assigneeAgentId,
-        ...(actor.kind === 'agent_device' ? [actor.agentId] : [])
+      const agentRoute = await prepareAgentRouteLocks(tx, [
+        {
+          agentId: input.assigneeAgentId,
+          label: 'Assignee Agent',
+          unavailableMessage: 'The assignee Agent must have an active owner and linked Device.'
+        },
+        ...(actor.kind === 'agent_device' ? [{
+          agentId: actor.agentId,
+          label: 'Coordinator Agent',
+          unavailableCode: 'credential_revoked' as const,
+          unavailableMessage: 'The authenticated Coordinator Agent must have an active owner and linked Device.'
+        }] : [])
       ])
+      const project = required(await tx.getProjectForUpdate(initialTask.projectId), 'Project')
+      const lockedAgents = await finishAgentRouteLocks(tx, agentRoute)
       const assignee = required(lockedAgents.get(input.assigneeAgentId) ?? null, 'Assignee Agent')
       const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
       const actorMember = await tx.getProjectMember(project.projectId, actor.userId)
@@ -1626,7 +1706,7 @@ export class CollaborationService {
       }
       if (task.retryCount >= project.budgets.maxTaskRetries) fail('budget_exhausted', 'The task automatic retry budget is exhausted.')
       const member = await tx.getProjectMember(project.projectId, assignee.ownerUserId)
-      if (assignee.status !== 'active' || !member?.active || member.role === 'observer') fail('permission_denied', 'The assignee is not authorized for this Project.')
+      if (!member?.active || member.role === 'observer') fail('permission_denied', 'The assignee is not authorized for this Project.')
       const profile = await tx.getAgentCapabilityProfile(assignee.agentId)
       if (!profile || profile.ownerUserId !== assignee.ownerUserId || profile.expiresAt <= at) {
         fail('capability_profile_expired', 'The assignee Agent capability profile is missing, stale, or owner-mismatched.')
@@ -2230,15 +2310,18 @@ export class CollaborationService {
         .filter((agent): agent is StoredAgent & { lastSeenAt: string } => (
           agent.status === 'active' && agent.lastSeenAt !== undefined
         ))
-        .map(async (agent) => ({ agent, profile: await this.repository.getAgentCapabilityProfile(agent.agentId),
+        .map(async (agent) => ({ agent, usable: await isUsableAgent(this.repository, agent, user),
+          profile: await this.repository.getAgentCapabilityProfile(agent.agentId),
           busy: (await this.repository.listOpenTasksForAgent(agent.agentId))
             .some((task) => ['accepted', 'in_progress', 'needs_human'].includes(task.status)) }))))
         .filter((entry): entry is {
           agent: StoredAgent & { lastSeenAt: string }
+          usable: boolean
           profile: StoredAgentCapabilityProfile
           busy: boolean
         } => (
-          entry.profile !== null && entry.profile.expiresAt > now && entry.profile.ownerUserId === entry.agent.ownerUserId
+          entry.usable && entry.profile !== null && entry.profile.expiresAt > now &&
+          entry.profile.ownerUserId === entry.agent.ownerUserId
         ))
     }))).flat()
       .sort((left, right) => left.agent.ownerUserId === right.agent.ownerUserId
@@ -2387,10 +2470,17 @@ export class CollaborationService {
     try {
       response = await this.repository.transaction(async (tx) => {
       await tx.lockIdempotency(actor.actorKey, idempotencyKey)
-      if (actor.kind === 'agent_device') {
+      let actorDevice: StoredDevice | undefined
+      const routeLocksActorDevice = actor.kind === 'agent_device' &&
+        (operation === 'task.create' || operation === 'task.retry')
+      if (actor.kind === 'agent_device' && !routeLocksActorDevice) {
         const device = await tx.getDeviceForUpdate(actor.deviceId)
         if (!device || device.status !== 'active' || device.userId !== actor.userId) {
           fail('credential_revoked', 'The Agent Device is no longer active.')
+        }
+        actorDevice = device
+        if (operation === 'credential.revoke_current') {
+          await assertCurrentAgentBearer(tx, actor, device, this.timestamp())
         }
       }
       const existing = await tx.getReceipt(actor.actorKey, idempotencyKey)
@@ -2398,9 +2488,20 @@ export class CollaborationService {
         if (existing.requestDigest !== requestDigest || existing.operation !== operation) {
           fail('idempotency_conflict', 'The idempotency key was already used for a different request.')
         }
+        if (actor.kind === 'agent_device' && operation !== 'credential.revoke_current') {
+          actorDevice ??= required(await tx.getDeviceForUpdate(actor.deviceId), 'Agent Device')
+          await assertCurrentAgentBearer(tx, actor, actorDevice, this.timestamp())
+        }
         return existing.response
       }
       const result = await work(tx, at)
+      if (actor.kind === 'agent_device' && operation !== 'credential.revoke_current') {
+        // Task routing locked every participating Device in stable deviceId
+        // order inside work(); this lookup reuses that row lock. Other Agent
+        // writes retain the generic Device-first fence above.
+        actorDevice ??= required(await tx.getDeviceForUpdate(actor.deviceId), 'Agent Device')
+        await assertCurrentAgentBearer(tx, actor, actorDevice, this.timestamp())
+      }
       notifications = result.notifications ?? []
       const audit: StoredAuditEvent = {
         auditEventId: newId('audit'), actorKind: actor.kind,
@@ -2676,6 +2777,29 @@ async function assertNoActiveOwnedAgents(
   }
 }
 
+async function isUsableAgent(
+  repository: Pick<CollaborationReadRepository, 'getUser' | 'getDevice'>,
+  agent: StoredAgent,
+  knownOwner?: StoredUser
+): Promise<boolean> {
+  const deviceId = agent.deviceId
+  if (agent.status !== 'active' || !deviceId) return false
+  const [owner, device] = await Promise.all([
+    knownOwner ? Promise.resolve(knownOwner) : repository.getUser(agent.ownerUserId),
+    repository.getDevice(deviceId)
+  ])
+  return owner?.userId === agent.ownerUserId && owner.status === 'active' &&
+    device?.status === 'active' && device.userId === agent.ownerUserId
+}
+
+async function assertUsableAgent(
+  repository: Pick<CollaborationReadRepository, 'getUser' | 'getDevice'>,
+  agent: StoredAgent,
+  message: string
+): Promise<void> {
+  if (!await isUsableAgent(repository, agent)) fail('permission_denied', message)
+}
+
 async function activeCoordinatorProjectIds(
   tx: CollaborationTransaction,
   agentId: string
@@ -2716,6 +2840,72 @@ async function lockAgentsForUpdate(
   return locked
 }
 
+type AgentRouteLockRequest = Readonly<{
+  agentId: string
+  label: string
+  unavailableCode?: CollaborationErrorCode
+  unavailableMessage: string
+}>
+
+type AgentRouteLockPlan = Readonly<{
+  requests: ReadonlyMap<string, AgentRouteLockRequest>
+  initialAgents: ReadonlyMap<string, StoredAgent>
+  devices: ReadonlyMap<string, StoredDevice>
+}>
+
+async function prepareAgentRouteLocks(
+  tx: CollaborationTransaction,
+  requestedAgents: AgentRouteLockRequest[]
+): Promise<AgentRouteLockPlan> {
+  const requests = new Map<string, AgentRouteLockRequest>()
+  for (const request of requestedAgents) {
+    const existing = requests.get(request.agentId)
+    if (!existing || request.unavailableCode === 'credential_revoked') requests.set(request.agentId, request)
+  }
+
+  // Agent is read without a row lock only to discover the immutable active
+  // Device link. Every Device is then locked in a stable order before any
+  // Agent row, matching the Agent-actor transaction fence and Device revoke.
+  const initialAgents = new Map<string, StoredAgent>()
+  for (const agentId of [...requests.keys()].sort(compareStable)) {
+    const request = requests.get(agentId)!
+    const agent = required(await tx.getAgent(agentId), request.label)
+    if (!agent.deviceId) fail(request.unavailableCode ?? 'permission_denied', request.unavailableMessage)
+    initialAgents.set(agentId, agent)
+  }
+
+  const devices = new Map<string, StoredDevice>()
+  const deviceIds = [...new Set([...initialAgents.values()].map((agent) => agent.deviceId!))]
+    .sort(compareStable)
+  for (const deviceId of deviceIds) {
+    const device = await tx.getDeviceForUpdate(deviceId)
+    if (device) devices.set(deviceId, device)
+  }
+  return { requests, initialAgents, devices }
+}
+
+async function finishAgentRouteLocks(
+  tx: CollaborationTransaction,
+  plan: AgentRouteLockPlan
+): Promise<Map<string, StoredAgent>> {
+  const lockedAgents = new Map<string, StoredAgent>()
+  for (const agentId of [...plan.requests.keys()].sort(compareStable)) {
+    const request = plan.requests.get(agentId)!
+    const initial = plan.initialAgents.get(agentId)!
+    const agent = required(await tx.getAgentForUpdate(agentId), request.label)
+    const device = initial.deviceId ? plan.devices.get(initial.deviceId) : undefined
+    const owner = await tx.getUser(agent.ownerUserId)
+    if (agent.status !== 'active' || !agent.deviceId || agent.deviceId !== initial.deviceId ||
+        agent.ownerUserId !== initial.ownerUserId || !device || device.deviceId !== agent.deviceId ||
+        device.status !== 'active' || device.userId !== agent.ownerUserId ||
+        !owner || owner.userId !== agent.ownerUserId || owner.status !== 'active') {
+      fail(request.unavailableCode ?? 'permission_denied', request.unavailableMessage)
+    }
+    lockedAgents.set(agentId, agent)
+  }
+  return lockedAgents
+}
+
 async function assertCurrentAgentProjectMembership(
   tx: CollaborationTransaction,
   actor: AgentActor,
@@ -2732,6 +2922,29 @@ async function assertCurrentAgentProjectMembership(
 function assertCurrentAgentActor(actor: AgentActor, agent: StoredAgent): void {
   if (agent.agentId !== actor.agentId || agent.status !== 'active' || agent.ownerUserId !== actor.userId) {
     fail('credential_revoked', 'The authenticated Agent ownership is no longer current.')
+  }
+}
+
+async function assertCurrentAgentBearer(
+  tx: CollaborationTransaction,
+  actor: AgentActor,
+  device: StoredDevice,
+  at: string
+): Promise<void> {
+  const agent = await tx.getAgentForUpdate(actor.agentId)
+  const credential = await tx.getCredentialForUpdate(actor.credentialId)
+  if (device.deviceId !== actor.deviceId || device.status !== 'active' || device.userId !== actor.userId ||
+      !agent || agent.agentId !== actor.agentId || agent.status !== 'active' || agent.ownerUserId !== actor.userId ||
+      agent.deviceId !== actor.deviceId || agent.deviceId !== device.deviceId ||
+      agent.credentialGeneration !== actor.credentialGeneration) {
+    fail('credential_revoked', 'The authenticated Agent identity is no longer current.')
+  }
+  if (!credential || credential.credentialId !== actor.credentialId || credential.kind !== 'agent_device' ||
+      credential.subjectUserId !== actor.userId ||
+      credential.subjectAgentId !== actor.agentId || credential.assurance !== actor.assurance ||
+      credential.generation !== actor.credentialGeneration || credential.revokedAt ||
+      (credential.expiresAt !== undefined && credential.expiresAt <= at)) {
+    fail('credential_revoked', 'The authenticated Agent credential has expired or was revoked.')
   }
 }
 

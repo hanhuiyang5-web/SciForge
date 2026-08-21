@@ -6,18 +6,6 @@ function recipientKey(recipient) {
   return `${recipient.kind}:${recipient.id}`
 }
 
-export function fakeAgentActor(agent, userId = agent.ownerUserId) {
-  return {
-    kind: 'agent_device',
-    actorKey: `fake-agent:${agent.agentId}`,
-    userId,
-    agentId: agent.agentId,
-    ...(agent.deviceId ? { deviceId: agent.deviceId } : {}),
-    credentialId: `fake-credential:${agent.agentId}`,
-    assurance: 'device'
-  }
-}
-
 function revisionUpdate(map, id, value, expectedRevision) {
   const current = map.get(id)
   if (!current || current.revision !== expectedRevision) throw new Error('fake repository revision conflict')
@@ -685,6 +673,14 @@ export class FakeCollaborationRepository {
 
   async getCredentialByDigest(tokenDigest) {
     return copy([...this.state.credentials.values()].find((item) => item.tokenDigest === tokenDigest) ?? null)
+  }
+
+  async getCredential(credentialId) {
+    return copy(this.state.credentials.get(credentialId) ?? null)
+  }
+
+  async getCredentialForUpdate(credentialId) {
+    return copy(this.state.credentials.get(credentialId) ?? null)
   }
 
   async revokeCredential(credentialId, revokedAt) {

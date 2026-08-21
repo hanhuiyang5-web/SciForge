@@ -135,7 +135,7 @@ npm run collaboration:bundle -- \
   --output "$artifact_dir/release"
 ```
 
-manifest schema 为 `2`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience/authorized parties、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"` 和 64 位 `identityAcceptanceHarnessSha256`。发布脚本逐项校验这些值以及 shared 12 + OIDC 6 个 ECS 运行资产摘要；harness 摘要是独立的本地验收证明，不计入这 18 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
+manifest schema 为 `3`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience/authorized parties、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"`，以及 64 位 `identityAcceptanceHarnessSha256` 和 `multiWorkerAcceptanceHarnessSha256`。前者绑定 multi-worker harness 导入的安全/协议原语，后者绑定正式的 1 个 Orchestrator → 2–8 个独立 Worker 验收入口。发布脚本逐项校验这些值以及 shared 12 + OIDC 6 个 ECS 运行资产摘要；两个 harness 摘要都是独立的本地验收证明，不计入这 18 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
 
 将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：三个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共八个文件。除 `SHA256SUMS` 自身外的七项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和三个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
 
@@ -426,45 +426,56 @@ fixed_release_copy=<本机已核验的fixed-release目录>
 manifest="$fixed_release_copy/deploy/collaboration-private/bundle/RELEASE_MANIFEST.json"
 external_verifier="$fixed_release_copy/deploy/collaboration-private/scripts/verify-a-https-oidc-test-external.sh"
 fixed_source_root=/absolute/path/to/trusted-fixed-source
-harness="$fixed_source_root/scripts/collaboration-a-identity-acceptance.mjs"
-initial_token_file=/absolute/path/oidc-access-token-0600
-fresh_revoke_token_file=/absolute/path/fresh-oidc-access-token-0600
+identity_harness="$fixed_source_root/scripts/collaboration-a-identity-acceptance.mjs"
+multi_worker_harness="$fixed_source_root/scripts/collaboration-a-multi-worker-acceptance.mjs"
+owner_token_file=/absolute/path/owner-oidc-access-token-0600
+owner_revoke_token_file=/absolute/path/owner-fresh-oidc-access-token-0600
+worker_descriptor_file_1=/absolute/path/worker-1-descriptor-0600.json
+worker_descriptor_file_2=/absolute/path/worker-2-descriptor-0600.json
 
 (
   set -euo pipefail
-  unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY
+  unset NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_DEBUG_NATIVE NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED NODE_USE_ENV_PROXY
   unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy
   unset SSL_CERT_FILE ssl_cert_file SSL_CERT_DIR ssl_cert_dir CURL_CA_BUNDLE curl_ca_bundle
 
-  IFS=$'\t' read -r external_sha harness_sha < <(node -e '
+  IFS=$'\t' read -r external_sha identity_harness_sha multi_worker_harness_sha < <(node -e '
     const m = require(process.argv[1])
     const commit = process.argv[2]
-    if (m.schemaVersion !== 2 || m.contractCommit !== commit
+    if (m.schemaVersion !== 3 || m.contractCommit !== commit
         || m.releaseMode !== "a-https-oidc-test"
         || m.deploymentBoundary !== "public-https-oidc-test"
         || m.oidcIssuer !== "https://login-test.sciforge.cn/realms/SciForge"
         || !/^[0-9a-f]{64}$/.test(m.identityEdgeExternalVerifyScriptSha256 ?? "")
-        || !/^[0-9a-f]{64}$/.test(m.identityAcceptanceHarnessSha256 ?? "")) process.exit(1)
-    process.stdout.write(`${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\n`)
+        || !/^[0-9a-f]{64}$/.test(m.identityAcceptanceHarnessSha256 ?? "")
+        || !/^[0-9a-f]{64}$/.test(m.multiWorkerAcceptanceHarnessSha256 ?? "")) process.exit(1)
+    process.stdout.write(`${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\t${m.multiWorkerAcceptanceHarnessSha256}\n`)
   ' "$manifest" "$release_commit")
   "$external_verifier" "$release_commit" "$external_sha"
 
-  test -f "$harness" && test ! -L "$harness"
-  test "$(shasum -a 256 "$harness" | awk '{print $1}')" = "$harness_sha"
-  node "$harness" \
+  test -f "$identity_harness" && test ! -L "$identity_harness"
+  test -f "$multi_worker_harness" && test ! -L "$multi_worker_harness"
+  test "$(shasum -a 256 "$identity_harness" | awk '{print $1}')" = "$identity_harness_sha"
+  test "$(shasum -a 256 "$multi_worker_harness" | awk '{print $1}')" = "$multi_worker_harness_sha"
+  node "$multi_worker_harness" \
     --base-url https://cloud-test.sciforge.cn \
-    --token-file "$initial_token_file" \
-    --revoke-token-file "$fresh_revoke_token_file" \
+    --owner-token-file "$owner_token_file" \
+    --owner-revoke-token-file "$owner_revoke_token_file" \
+    --worker-descriptor-file "$worker_descriptor_file_1" \
+    --worker-descriptor-file "$worker_descriptor_file_2" \
     --commit "$release_commit" \
-    --expected-harness-sha256 "$harness_sha"
+    --expected-identity-harness-sha256 "$identity_harness_sha" \
+    --expected-multi-worker-harness-sha256 "$multi_worker_harness_sha"
 )
 ```
 
-整个 manifest 提取、外部探针、harness 摘要比对和 harness 进程都处于同一个启动前已清除 Node preload、代理与自定义 CA 变量的 subshell；不能把 hash 提取单独移到外面。外部门禁通过后，harness 才验证 A 的 OIDC User → Device → Agent → Project → Task → accepted result → completed Project → Device revoke → stale Agent credential rejected。
+整个 manifest 提取、外部探针、两个 harness 摘要比对和 multi-worker harness 进程都处于同一个启动前已清除 Node preload、代理与自定义 CA 变量的 subshell；不能把 hash 提取单独移到外面。multi-worker harness 启动后还会再次检查自身及其导入的 identity harness 都是安全 regular file 且摘要匹配。外部门禁通过后，它验证 1 个 Orchestrator 和 2–8 个独立 Worker 分别完成 Device → Agent；Orchestrator 在同一 Project 中向每个 Worker 派发独立 Task，每个 Worker 都必须经过自己的真实 WSS 唤醒、断线重连、持久 Inbox replay/连续 ACK、执行进度和结构化结果，Orchestrator 再逐项验收并完成 Project。最后 harness 撤销所有参与 Device，并确认每个旧 Agent credential 与 WSS 都失效；任何 Worker 缺少任务、通知、回放、结果或撤销证据都会使整次验收失败。
 
-初始 Token 和 fresh revoke Token 必须在启动命令前都已准备好；两个文件都必须是 absolute、regular、非 symlink、当前用户拥有且精确 `0600`。fresh revoke Token 的 `auth_time` 在 harness preflight 时不得超过 180 秒，启动后两个文件保持不变。harness 不输出或上传 Token 内容。只有同一 Token 在启动前已经满足 fresh preflight（包括 `auth_time ≤ 180s`）时，才可把同一个 `0600` 文件同时传给两个参数。
+owner 的初始 Token 与 fresh revoke Token，以及每个 Worker descriptor 引用的两个 Token，必须在启动命令前准备好。owner 的两个 Token 参数必须是 absolute path；每个重复的 `--worker-descriptor-file` 也必须是 absolute、regular、非 symlink、当前用户拥有且精确 `0600`，其 JSON 只能包含 absolute `accessTokenFile` 与 `revokeTokenFile` 两个字段，例如 `{"accessTokenFile":"/absolute/path/worker-1-access-token-0600","revokeTokenFile":"/absolute/path/worker-1-fresh-token-0600"}`。owner Token 文件与 descriptor 引用的所有 Token 文件同样必须是 regular、非 symlink、当前用户拥有且精确 `0600`。命令必须重复提供 2–8 个 descriptor；owner 与所有 Worker 的 `issuer + sub` 必须两两不同。
 
-可选追加 `--zulip-realm-url https://chat.sciforge.cn`，但它只验证 A 的 confirm 仍返回 401，不会执行或冒充 D 的 `/bind`。任何 receipt 也不得包含 Token、设备私钥、Agent credential 或 binding code。
+每个 fresh revoke Token 的 `auth_time` 在 multi-worker harness preflight 时不得超过 120 秒，且所有 Token 至少剩余 240 秒；启动后所有 descriptor 与 Token 文件保持不变。harness 不输出或上传 Token 内容。仅当同一主体的 Token 在启动前已经同时满足 fresh preflight 时，才可让该主体的 access 与 revoke 路径指向同一个 `0600` 文件。
+
+该 multi-worker harness 不接受 Zulip 参数，也不会执行或冒充 D 的 `/bind`；A 的部署门禁已单独证明 binding confirm 保持 401/fail-closed。任何 receipt 也不得包含 Token、claims、设备私钥、Agent credential 或 binding code。
 
 回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。如需恢复 core-only edge，必须重新配置空 issuer profile、重新部署 app 并通过旧 core-only 的本地/外部门禁，不能只换 Caddy。
 
@@ -472,7 +483,7 @@ fresh_revoke_token_file=/absolute/path/fresh-oidc-access-token-0600
 
 仓库仍保留历史 `scripts/collaboration-a-two-user-e2e.test.mjs`，但它建立在旧匿名 pairing、opaque User credential 与固定 Zulip 流拓扑上，不属于统一 OIDC User → Device → Agent 合同的 A 发布门禁，本轮不得运行或据此宣告业务 E2E。A 不会为了兼容该 harness 恢复匿名入口，也不会要求普通成员提交个人 Zulip API key。
 
-正式身份来源、D→A trusted binding confirm、Human Provider 与最新版 SciForge 接入方式冻结后，应由对应成员基于公开机器合同提供新的跨团队 E2E；A 只负责让云端 API、事务、审计、Inbox 与 fail-closed 边界可验证。在那之前，`collaboration:a:test`、真实 PostgreSQL v5 隔离测试和本目录的 core-only 云端门禁是 A 的权威验收，不能冒充真实 Keycloak、Desktop 或 Zulip 往返闭环。
+当 `a-https-oidc-test` 的 fixed release、本地/独立公网 edge 门禁和上述 1 个 Orchestrator → 2–8 个 Worker 的 real-token harness 全部通过时，A 可声明“云端 OIDC User → Device → Agent → 多 Worker 跨 User Task/Inbox/ACK/Result 合同闭环”。该声明只证明 A 的服务端 API、WSS、持久 Inbox 和鉴权/撤销合同；它不等于任意一台最新版 SciForge Desktop 已接入，不证明浏览器 OIDC Authorization Code + PKCE 登录，也不证明 D→A trusted binding confirm、Human Provider 或 Zulip 往返。这些产品端与跨团队环节应由对应成员基于公开机器合同另行验收，不得用 A 的服务端回执冒充产品 E2E。
 
 ## 4. 通过 SSH Tunnel 使用
 
@@ -588,7 +599,17 @@ sudo deploy/collaboration-private/scripts/verify-postgres-restart.sh \
   --provider-zulip
 ```
 
-两种模式都会先验证运行 app 的 image ID、image/container revision label、容器内 `CONTRACT_COMMIT` 都等于传入的固定 commit。core-only 模式要求 `core-only-private` label、没有 Provider env/mount 且 catalog 为空；Provider 模式仍严格要求 `zulip-provider-private` label、只读 config/secret mount 和 catalog 恰为 `zulip`（不依赖 app 必须在十分钟内启动），不会因新增 core-only 分支而放宽。随后脚本记录 app/PostgreSQL container ID、PID、RestartCount、commit 和 release 全表 row counts，停止并原位启动 PostgreSQL，要求 `/healthz` 始终返回 `200`、数据库停机窗口内 `/readyz` 精确返回 `503`、恢复后返回 `200`，且 app container/PID/RestartCount 不变、PostgreSQL PID 改变、row counts 完全一致。`trap` 会在中断或失败时尝试恢复 PostgreSQL。
+固定 release 当前运行 `a-https-oidc-test` 时，必须显式选择 OIDC 模式。该分支会先验证 release manifest 与环境中的 exact issuer、audience、authorized parties、secure transport、`oidc-test-private` app label、固定 image/commit、空 Provider env/mount 与空 catalog，再进入同一个数据库重启门禁；它不会修改 Keycloak、运行 PKCE 或把 restart 验收冒充身份 E2E：
+
+```bash
+sudo deploy/collaboration-private/scripts/verify-postgres-restart.sh \
+  <获批的完整40位contract-commit> \
+  /srv/sciforge-collaboration/secrets/collaboration.env \
+  --confirm-postgres-restart \
+  --a-https-oidc-test
+```
+
+三种模式都会先验证运行 app 的 image ID、image/container revision label、容器内 `CONTRACT_COMMIT` 都等于传入的固定 commit。core-only 模式要求 `core-only-private` label、没有 Provider env/mount 且 catalog 为空；OIDC 模式要求 `oidc-test-private` 与固定身份配置、没有 Provider env/mount 且 catalog 为空；Provider 模式仍严格要求 `zulip-provider-private` label、只读 config/secret mount 和 catalog 恰为 `zulip`（不依赖 app 必须在十分钟内启动），不会因新增分支而放宽。随后脚本记录 app/PostgreSQL container ID、PID、RestartCount、commit 和 release 全表 row counts，停止并原位启动 PostgreSQL，要求 `/healthz` 始终返回 `200`、数据库停机窗口内 `/readyz` 精确返回 `503`、恢复后返回 `200`，且 app container/PID/RestartCount 不变、PostgreSQL PID 改变、row counts 完全一致。`trap` 会在中断或失败时尝试恢复 PostgreSQL。
 
 日志检查只输出三个数字，不输出命中行：必须至少有一个安全的 `postgres.pool.idle_client_error`/`57P0x` 诊断（连接池中多个 idle client 可以各自产生一条），且 unhandled、Client object、stack、`secretKey`、`connectionParameters` 和凭据模式计数都为零。
 

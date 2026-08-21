@@ -298,6 +298,127 @@ describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () =
     expect(credentialState.rows).toEqual([{ revoked: true }])
   }, 60_000)
 
+  it('linearizes Device revocation against new Agent routing', async () => {
+    const identityService = required(identities, 'Identity Service')
+    const collaborationService = required(collaboration, 'Collaboration Service')
+    const authenticationService = required(authentication, 'Authentication Service')
+    const pool = required(databasePool, 'database pool')
+    const postgresRepository = required(repository, 'PostgreSQL repository')
+    const owner = await identityService.resolveOidcUser(verifiedIdentity('postgres-route-owner'))
+    const member = await identityService.resolveOidcUser(verifiedIdentity('postgres-route-member'))
+    const coordinator = await provisionIntegratedAgent(
+      identityService, collaborationService, authenticationService, owner, 'coordinator'
+    )
+    const revokeFirstWorker = await provisionIntegratedAgent(
+      identityService, collaborationService, authenticationService, member, 'revoke-first'
+    )
+    const routeFirstWorker = await provisionIntegratedAgent(
+      identityService, collaborationService, authenticationService, member, 'route-first'
+    )
+    const project = await collaborationService.createProject(owner, {
+      displayName: 'PostgreSQL Device route fence',
+      goal: 'Linearize every new worker route with Device revocation.',
+      memberUserIds: [owner.userId, member.userId],
+      coordinatorAgentId: coordinator.agent.agentId,
+      idempotencyKey: 'idem_pg_device_route_project_0001'
+    })
+    const before = await countProjectTasks(pool, project.projectId)
+
+    // Revocation owns the Device row first. The route must wait, observe the
+    // committed revoked state, and leave both Task and Project revision intact.
+    const revokeConnection = await pool.connect()
+    let revokeCommitted = false
+    try {
+      await revokeConnection.query('BEGIN')
+      await revokeConnection.query(
+        `UPDATE sciforge_collaboration.devices
+         SET status='revoked',revision=revision+1,updated_at=$2,revoked_at=$2
+         WHERE device_id=$1`,
+        [revokeFirstWorker.device.deviceId, NOW.toISOString()]
+      )
+      await revokeConnection.query(
+        `UPDATE sciforge_collaboration.credentials
+         SET revoked_at=$2
+         WHERE kind='agent_device' AND subject_agent_id=$1 AND revoked_at IS NULL`,
+        [revokeFirstWorker.agent.agentId, NOW.toISOString()]
+      )
+      const blockedRoute = collaborationService.createTask(owner, {
+        projectId: project.projectId,
+        assigneeAgentId: revokeFirstWorker.agent.agentId,
+        title: 'Revocation-first route',
+        objective: 'This route must fail after the Device revocation commits.',
+        completionCriteria: ['No Task row is committed.'],
+        dependencyTaskIds: [],
+        expectedProjectRevision: project.revision,
+        idempotencyKey: 'idem_pg_device_route_revoke_first_task_0001'
+      })
+      await waitForDeviceRowLockWait(pool)
+      await expectStillPending(blockedRoute)
+      await revokeConnection.query('COMMIT')
+      revokeCommitted = true
+      await expectServiceCode(() => blockedRoute, 'permission_denied')
+    } finally {
+      if (!revokeCommitted) await revokeConnection.query('ROLLBACK').catch(() => undefined)
+      revokeConnection.release()
+    }
+    expect(await countProjectTasks(pool, project.projectId)).toBe(before)
+    await expect(postgresRepository.getProject(project.projectId)).resolves.toMatchObject({ revision: project.revision })
+
+    // The route owns the Device row first and is deliberately held at the
+    // Project lock. A later real revokeDevice call must wait until that route
+    // commits, after which every further route through the Agent fails closed.
+    const projectBlocker = await pool.connect()
+    let blockerCommitted = false
+    let acceptedTask: Awaited<ReturnType<CollaborationService['createTask']>>
+    try {
+      await projectBlocker.query('BEGIN')
+      await projectBlocker.query(
+        'SELECT project_id FROM sciforge_collaboration.projects WHERE project_id=$1 FOR UPDATE',
+        [project.projectId]
+      )
+      const routeFirst = collaborationService.createTask(owner, {
+        projectId: project.projectId,
+        assigneeAgentId: routeFirstWorker.agent.agentId,
+        title: 'Route-first assignment',
+        objective: 'This route linearizes before the later Device revocation.',
+        completionCriteria: ['Exactly one Task row is committed.'],
+        dependencyTaskIds: [],
+        expectedProjectRevision: project.revision,
+        idempotencyKey: 'idem_pg_device_route_route_first_task_0001'
+      })
+      await waitForProjectRowLockWait(pool)
+      const laterRevocation = identityService.revokeDevice(
+        member,
+        routeFirstWorker.device.deviceId,
+        'idem_pg_device_route_route_first_revoke_0001'
+      )
+      await expectStillPending(laterRevocation)
+      await projectBlocker.query('COMMIT')
+      blockerCommitted = true
+      acceptedTask = await routeFirst
+      await expect(laterRevocation).resolves.toMatchObject({ device: { status: 'revoked' } })
+    } finally {
+      if (!blockerCommitted) await projectBlocker.query('ROLLBACK').catch(() => undefined)
+      projectBlocker.release()
+    }
+
+    expect(acceptedTask!).toMatchObject({ assigneeAgentId: routeFirstWorker.agent.agentId })
+    expect(await countProjectTasks(pool, project.projectId)).toBe(before + 1)
+    const latestProject = await postgresRepository.getProject(project.projectId)
+    if (!latestProject) throw new Error('Expected the route-fence Project after Task creation.')
+    await expectServiceCode(() => collaborationService.createTask(owner, {
+      projectId: project.projectId,
+      assigneeAgentId: routeFirstWorker.agent.agentId,
+      title: 'Post-revocation route',
+      objective: 'No route may commit after Device revocation completes.',
+      completionCriteria: ['No second Task row is committed.'],
+      dependencyTaskIds: [],
+      expectedProjectRevision: latestProject.revision,
+      idempotencyKey: 'idem_pg_device_route_post_revoke_task_0001'
+    }), 'permission_denied')
+    expect(await countProjectTasks(pool, project.projectId)).toBe(before + 1)
+  }, 60_000)
+
   it('enforces both ACTIVE Zulip uniqueness dimensions and creates new history on rebind', async () => {
     const identityService = required(identities, 'Identity Service')
     const owner = await identityService.resolveOidcUser(verifiedIdentity('postgres-binding-owner'))
@@ -486,6 +607,122 @@ function storedAgentFixture(owner: UserActor, updatedAt: string): StoredAgent {
     revision: 1,
     updatedAt
   }
+}
+
+async function provisionIntegratedAgent(
+  identities: IdentityService,
+  collaboration: CollaborationService,
+  authentication: AuthenticationService,
+  owner: UserActor,
+  label: string
+) {
+  const installationId = `ins_pg_route_${label.replaceAll('-', '_')}_0001`
+  const enrollment = await identities.createDeviceEnrollment(owner, {
+    installationId,
+    idempotencyKey: `idem_pg_route_${label}_enrollment_0001`
+  })
+  const fixture = createDeviceFixture({
+    enrollmentId: enrollment.enrollmentId,
+    nonce: enrollment.nonce,
+    userId: owner.userId,
+    installationId,
+    expiresAt: enrollment.expiresAt,
+    capabilitySummary: ['research.execute']
+  })
+  const created = await identities.createDevice(owner, {
+    ...fixture.deviceRequest,
+    nonce: enrollment.nonce,
+    idempotencyKey: `idem_pg_route_${label}_device_0001`
+  })
+  const registered = await collaboration.registerAgent(owner, {
+    deviceId: created.device.deviceId,
+    displayName: `PostgreSQL ${label} Agent`,
+    nodeType: 'desktop',
+    capabilities: ['research.execute'],
+    idempotencyKey: `idem_pg_route_${label}_agent_0001`
+  })
+  if (!registered.deviceCredential) throw new Error(`Expected the ${label} Agent credential.`)
+  const actor = await authentication.resolveBearer(registered.deviceCredential)
+  if (actor.kind !== 'agent_device') throw new Error(`Expected the ${label} Agent actor.`)
+  const agent = await collaboration.heartbeatAgent(actor, {
+    expectedRevision: registered.agent.revision,
+    connectionStatus: 'online',
+    idempotencyKey: `idem_pg_route_${label}_heartbeat_0001`
+  })
+  await collaboration.reportAgentCapabilityProfile(actor, {
+    agentId: agent.agentId,
+    ownerUserId: owner.userId,
+    nodeType: 'personal_computer',
+    os: { family: 'linux', architecture: 'x64' },
+    runtimeIds: ['runtime.postgres-integration'],
+    capabilities: [{
+      capabilityId: 'research.execute',
+      evidence: { level: 'verified', checkedAt: NOW.toISOString() }
+    }],
+    vpnAccessIds: [],
+    slurmClusterIds: [],
+    accessibleResourceRefIds: [],
+    resultReturnPolicy: {
+      summary: true,
+      evidenceRefs: true,
+      resourceRefs: true,
+      logSummary: true,
+      fullFileRequiresConfirmation: true,
+      fullLogRequiresConfirmation: true
+    },
+    reportedAt: NOW.toISOString(),
+    expiresAt: new Date(NOW.getTime() + 60 * 60 * 1_000).toISOString(),
+    idempotencyKey: `idem_pg_route_${label}_capability_0001`
+  })
+  return { device: created.device, agent, actor }
+}
+
+async function countProjectTasks(pool: SqlPool, projectId: string): Promise<number> {
+  const result = await pool.query<{ count: unknown }>(
+    'SELECT count(*) FROM sciforge_collaboration.tasks WHERE project_id=$1',
+    [projectId]
+  )
+  return Number(result.rows[0]?.count ?? 0)
+}
+
+async function expectStillPending(promise: Promise<unknown>): Promise<void> {
+  const state = await Promise.race([
+    promise.then(() => 'fulfilled' as const, () => 'rejected' as const),
+    new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 100))
+  ])
+  expect(state).toBe('pending')
+}
+
+async function waitForProjectRowLockWait(pool: SqlPool): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await pool.query<{ waiting: unknown }>(
+      `SELECT count(*) AS waiting
+       FROM pg_catalog.pg_stat_activity
+       WHERE datname=current_database()
+         AND pid<>pg_backend_pid()
+         AND wait_event_type='Lock'
+         AND query LIKE '%sciforge_collaboration.projects WHERE project_id = $1 FOR UPDATE%'`
+    )
+    if (Number(result.rows[0]?.waiting ?? 0) > 0) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error('Timed out waiting for the routed transaction to block on the Project row lock.')
+}
+
+async function waitForDeviceRowLockWait(pool: SqlPool): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await pool.query<{ waiting: unknown }>(
+      `SELECT count(*) AS waiting
+       FROM pg_catalog.pg_stat_activity
+       WHERE datname=current_database()
+         AND pid<>pg_backend_pid()
+         AND wait_event_type='Lock'
+         AND query LIKE '%sciforge_collaboration.devices WHERE device_id=$1 FOR UPDATE%'`
+    )
+    if (Number(result.rows[0]?.waiting ?? 0) > 0) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error('Timed out waiting for the routed transaction to block on the Device row lock.')
 }
 
 async function expectServiceCode(work: () => Promise<unknown>, code: string): Promise<void> {

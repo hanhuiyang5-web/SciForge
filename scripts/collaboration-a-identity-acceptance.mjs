@@ -31,6 +31,8 @@ const ALLOWED_AUTHORIZED_PARTIES = new Set(['sciforge-desktop', 'sciforge-web-mo
 const UNSAFE_GLOBAL_FETCH_ENVIRONMENT_KEYS = new Set([
   'NODE_OPTIONS',
   'NODE_PATH',
+  'NODE_DEBUG',
+  'NODE_DEBUG_NATIVE',
   'NODE_EXTRA_CA_CERTS',
   'NODE_TLS_REJECT_UNAUTHORIZED',
   'NODE_USE_ENV_PROXY',
@@ -108,13 +110,23 @@ function assertSafeGlobalFetchEnvironment(environment) {
   }
 }
 
-async function currentHarnessSha256() {
+async function secureRegularFileSha256(fileUrl, maximumBytes = MAX_HARNESS_BYTES) {
   if (fsConstants.O_NOFOLLOW === undefined) fail('harness_integrity_rejected')
+  let normalizedFileUrl
+  try {
+    normalizedFileUrl = fileUrl instanceof URL ? fileUrl : new URL(fileUrl)
+  } catch {
+    fail('harness_integrity_rejected')
+  }
+  if (normalizedFileUrl.protocol !== 'file:' || !Number.isSafeInteger(maximumBytes) ||
+      maximumBytes < 1 || maximumBytes > MAX_HARNESS_BYTES) {
+    fail('harness_integrity_rejected')
+  }
   let handle
   try {
-    handle = await open(fileURLToPath(import.meta.url), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    handle = await open(fileURLToPath(normalizedFileUrl), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
     const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(MAX_HARNESS_BYTES)) {
+    if (!before.isFile() || before.nlink !== 1n || before.size < 1n || before.size > BigInt(maximumBytes)) {
       fail('harness_integrity_rejected')
     }
     const source = await handle.readFile()
@@ -130,6 +142,10 @@ async function currentHarnessSha256() {
   } finally {
     await handle?.close().catch(() => undefined)
   }
+}
+
+async function currentHarnessSha256() {
+  return secureRegularFileSha256(import.meta.url)
 }
 
 function requiredRecord(value, step) {
@@ -1270,6 +1286,41 @@ export function identityAcceptanceUsage() {
     '',
     'The process prints one redacted receipt. It never accepts an inline token.'
   ].join('\n')
+}
+
+// The multi-worker acceptance harness imports these already-tested primitives
+// instead of maintaining a second token, TLS, response-size, and contract
+// implementation. Keep this surface deliberately narrow and side-effect free.
+export const identityAcceptanceSecurityPolicy = Object.freeze({
+  expectedCloudBaseUrl: EXPECTED_CLOUD_BASE_URL,
+  preflightMinimumTokenRemainingSeconds: PREFLIGHT_MIN_TOKEN_REMAINING_SECONDS,
+  runtimeMinimumTokenRemainingSeconds: RUNTIME_MIN_TOKEN_REMAINING_SECONDS,
+  revokePreflightMaximumAuthenticationAgeSeconds: REVOKE_PREFLIGHT_MAX_AGE_SECONDS,
+  revokeMaximumAuthenticationAgeSeconds: REVOKE_AUTH_MAX_AGE_SECONDS,
+  defaultRequestTimeoutMs: REQUEST_TIMEOUT_MS
+})
+
+export {
+  AcceptanceFailure,
+  assertSafeGlobalFetchEnvironment,
+  assertSameOidcPrincipal,
+  command as identityAcceptanceCommand,
+  currentDate as identityAcceptanceCurrentDate,
+  deviceFromResponse as identityAcceptanceDeviceFromResponse,
+  exactEntity as identityAcceptanceExactEntity,
+  exactTask as identityAcceptanceExactTask,
+  fail as failIdentityAcceptance,
+  inspectOidcToken,
+  isRecord as isIdentityAcceptanceRecord,
+  listedDevice as identityAcceptanceListedDevice,
+  meIdentity as identityAcceptanceMeIdentity,
+  normalizeHttpsBaseUrl,
+  platformFacts as identityAcceptancePlatformFacts,
+  requestJson as identityAcceptanceRequestJson,
+  requiredId as identityAcceptanceRequiredId,
+  requiredRecord as identityAcceptanceRequiredRecord,
+  requiredRevision as identityAcceptanceRequiredRevision,
+  secureRegularFileSha256
 }
 
 async function main() {

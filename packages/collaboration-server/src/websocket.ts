@@ -15,8 +15,13 @@ export type CollaborationWebSocketOptions = {
   now?: () => Date
 }
 
+type AuthenticatedWebSocket = Readonly<{
+  socket: WebSocket
+  reauthenticate: () => Promise<void>
+}>
+
 export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
-  private readonly clients = new Map<string, Set<WebSocket>>()
+  private readonly clients = new Map<string, Set<AuthenticatedWebSocket>>()
   private server?: WebSocketServer
 
   attach(httpServer: Server, options: CollaborationWebSocketOptions): void {
@@ -38,8 +43,14 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
         if (recipient.kind === 'human_endpoint') throw new Error('Provider endpoints do not use the public WebSocket.')
         server.handleUpgrade(request, socket, head, (webSocket) => {
           const key = recipientKey(recipient)
-          const clients = this.clients.get(key) ?? new Set<WebSocket>()
-          clients.add(webSocket)
+          const client: AuthenticatedWebSocket = {
+            socket: webSocket,
+            reauthenticate: async () => {
+              await options.authentication.assertCurrent(actor)
+            }
+          }
+          const clients = this.clients.get(key) ?? new Set<AuthenticatedWebSocket>()
+          clients.add(client)
           this.clients.set(key, clients)
           webSocket.on('error', (error) => {
             const code = (error as { code?: string }).code
@@ -47,7 +58,7 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
             else webSocket.close(1011, 'WebSocket transport error')
           })
           webSocket.once('close', () => {
-            clients.delete(webSocket)
+            clients.delete(client)
             if (clients.size === 0) this.clients.delete(key)
           })
           webSocket.on('message', (data, binary) => {
@@ -55,8 +66,11 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
             try {
               const message = webSocketMessageSchema.parse(JSON.parse(data.toString()))
               if (message.type !== 'connection.ping') return webSocket.close(1008, 'Only ping is accepted')
-              webSocket.send(JSON.stringify({ protocolVersion: '1.0', type: 'connection.pong',
-                nonce: message.nonce, sentAt: (options.now ?? (() => new Date()))().toISOString() }))
+              void client.reauthenticate().then(() => {
+                if (webSocket.readyState !== WebSocket.OPEN) return
+                webSocket.send(JSON.stringify({ protocolVersion: '1.0', type: 'connection.pong',
+                  nonce: message.nonce, sentAt: (options.now ?? (() => new Date()))().toISOString() }))
+              }).catch(() => webSocket.close(1008, 'Authentication is no longer current'))
             } catch {
               webSocket.close(1007, 'Invalid collaboration WebSocket message')
             }
@@ -71,18 +85,24 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
     })
   }
 
-  notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): void {
+  async notifyInboxAvailable(recipient: InboxRecipient, latestSequence: number): Promise<void> {
     if (recipient.kind === 'human_endpoint') return
     const payload = JSON.stringify({ protocolVersion: '1.0', type: 'inbox.available',
       recipientType: recipient.kind === 'agent' ? 'agent' : 'user', highestSequence: latestSequence })
-    for (const client of this.clients.get(recipientKey(recipient)) ?? []) {
-      if (client.readyState === WebSocket.OPEN) client.send(payload)
-    }
+    await Promise.all([...this.clients.get(recipientKey(recipient)) ?? []].map(async (client) => {
+      if (client.socket.readyState !== WebSocket.OPEN) return
+      try {
+        await client.reauthenticate()
+        if (client.socket.readyState === WebSocket.OPEN) client.socket.send(payload)
+      } catch {
+        client.socket.close(1008, 'Authentication is no longer current')
+      }
+    }))
   }
 
   async close(): Promise<void> {
     for (const clients of this.clients.values()) {
-      for (const client of clients) client.close(1001, 'Server shutting down')
+      for (const client of clients) client.socket.close(1001, 'Server shutting down')
     }
     this.clients.clear()
     const server = this.server

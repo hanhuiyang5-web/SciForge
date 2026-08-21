@@ -10,7 +10,7 @@
 
 - 不运行模型、桌面 Session、本地工具或科研工作流；这些仍由本地 SciForge Agent runtime 管理。
 - 除已冻结的 User↔Zulip external identity binding 外，Project/Task/Inbox 核心不解释 provider 私有 ID。已安装 adapter 通过 manifest 与 generated composition 注入，协作领域只使用 `@sciforge/collaboration-contracts` 的 provider-neutral contract。
-- 不把 WebSocket 当作消息事实源。WebSocket 只通知 `connection.ready` 和 `inbox.available`；客户端仍按 sequence 拉取并 ack，因此断线和重启不会跳过正文。
+- 不把 WebSocket 当作消息事实源。WebSocket 只通知 `connection.ready` 和 `inbox.available`；客户端仍按 sequence 拉取并 ack，因此断线和重启不会跳过正文。连接不保存原始 Bearer，并在 pong/notification 前重新检查 OIDC 到期与本地 identity，或 Agent credential generation、credential/Device/User 生命周期；失效连接按策略关闭。
 - 不提供第二套内存或文件生产后端。测试可注入 fake repository，但生产只有 PostgreSQL 路径。
 
 公共包入口如下：
@@ -163,9 +163,11 @@ curl --fail http://127.0.0.1:8787/console/
 
 ## OIDC、Device、Agent 与 Zulip binding 摘要
 
-User 只由配置 issuer 的 RS256 OIDC Access Token 建立。A 严格验证 Discovery/JWKS、`iss/aud/azp/sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。随后 A 以 `(issuer, sub)` 并发安全地 JIT 映射为稳定 `userId`；`GET /v1/me` 与 User command 使用同一 resolver。A 不保存原始 Token 或完整 claims，也不签发或接受旧 opaque User bearer。
+User 只由配置 issuer 的 RS256 OIDC Access Token 建立。A 严格验证 Discovery/JWKS、`iss/aud/azp/sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。未知 `kid` 的强制 JWKS refresh 受全局冷却限制，并发验证共享 in-flight refresh。随后 A 以 `(issuer, sub)` 并发安全地 JIT 映射为稳定 `userId`；`GET /v1/me` 与 User command 使用同一 resolver。A 不保存原始 Token 或完整 claims，也不签发或接受旧 opaque User bearer。
 
-已登录 User 先调用 `POST /v1/device-enrollments` 取得一次性 nonce，再用 Device Ed25519 私钥签名规范 enrollment bytes，并向 `POST /v1/devices` 提交签名、公开 JWK、`platform` 和 `capabilitySummary`。这些字段属于 Device；私钥不上传。随后 `agent.register` 只引用该 User 自己的 ACTIVE `deviceId` 来创建或确认 Agent 关联，不创建 Device、不消费 enrollment；Agent 的节点 `capabilities` 仍保留在 Agent，不与 Device 摘要合并。Agent bearer 只在成功注册时返回一次，必须立即写入本地 secret store；撤销 Device 会使其下 Agent credential 失效。
+已登录 User 先调用 `POST /v1/device-enrollments` 取得一次性 nonce，再用 Device Ed25519 私钥签名规范 enrollment bytes，并向 `POST /v1/devices` 提交签名、公开 JWK、`platform` 和 `capabilitySummary`。这些字段属于 Device；私钥不上传。随后 `agent.register` 只引用该 User 自己的 ACTIVE `deviceId` 来创建或确认 Agent 关联，不创建 Device、不消费 enrollment；Agent 的节点 `capabilities` 仍保留在 Agent，不与 Device 摘要合并。Agent bearer 只在成功注册时返回一次，必须立即写入本地 secret store；撤销 Device 会使其下 Agent credential 失效。关联 Agent 的历史行仍保留，但 User 侧的新 primary、Projection、Coordinator、Task 分派和 capability directory 都把它视为不可用，Participant 历史视图将其派生为 offline。
+
+A 不暴露可枚举的全局 User/Agent 目录。当前阶段的 Project 入组前置是：待邀请用户通过 `GET /v1/me` 获得自己的稳定 `userId`，再经受信带外渠道交给 owner；owner 在 `project.create.memberUserIds` 中显式引用。Project 建立后才能从 `project.capability_directory.get` 取得成员的可用 Agent。如需 Cloud 内建邀请，应新增一次性、不可枚举的 invitation/join 合同，不能以全局枚举作为默认方案。
 
 Zulip 绑定由已登录 OIDC User 调用 `POST /v1/integrations/zulip/bindings` 发起并取得五分钟、一次性的 `bindingCode`，D 负责解析 `/bind CODE` 和验证 Zulip 事件。D 只可通过受信 confirm adapter 把验证后的 Realm/User/event 上下文交给 A；A 从绑定请求取得目标 `userId`，confirm 不接受匿名调用、不创建 User。`pairing.begin/redeem` 仅作为同一状态机的已认证兼容 command，不再匿名 bootstrap，也不返回 User bearer。
 

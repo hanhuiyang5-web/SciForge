@@ -224,6 +224,34 @@ describe('A unified identity Service', () => {
     }), 'request_expired')
   })
 
+  it('replays an exact Device revoke after recent authentication ages out without authorizing a new revoke', async () => {
+    const clock = new FakeClock('2026-08-18T12:00:00.000Z')
+    const repository = new FakeCollaborationRepository()
+    const identities = new IdentityService({ repository, now: clock.now })
+    const actor = await identities.resolveOidcUser(verifiedIdentity(clock))
+    const enrollment = await identities.createDeviceEnrollment(actor, {
+      installationId: 'ins_identity_revoke_replay',
+      idempotencyKey: 'idem_device_revoke_replay_enrollment'
+    })
+    const fixture = createDeviceFixture({ ...enrollment, userId: actor.userId,
+      installationId: 'ins_identity_revoke_replay' })
+    const created = await identities.createDevice(actor, {
+      ...fixture.deviceRequest,
+      nonce: enrollment.nonce,
+      idempotencyKey: 'idem_device_revoke_replay_create'
+    })
+    const revokeKey = 'idem_device_revoke_replay'
+    const revoked = await identities.revokeDevice(actor, created.device.deviceId, revokeKey)
+
+    clock.tick(301_000)
+
+    await expect(identities.revokeDevice(actor, created.device.deviceId, revokeKey)).resolves.toEqual(revoked)
+    await expectServiceCode(() => identities.revokeDevice(actor, 'dev_identity_conflict_0001', revokeKey),
+      'idempotency_conflict')
+    await expectServiceCode(() => identities.revokeDevice(actor, created.device.deviceId,
+      'idem_device_revoke_stale_new'), 'assurance_insufficient')
+  })
+
   it('revokes an Agent without changing its owning Device lifecycle', async () => {
     const clock = new FakeClock('2026-08-18T12:00:00.000Z')
     const repository = new FakeCollaborationRepository()
@@ -330,6 +358,34 @@ describe('A unified identity Service', () => {
       .toEqual(['active', 'revoked'])
     expect((await repository.getExternalIdentityByProviderIdentity(fixture.confirmRequest.realmId,
       fixture.confirmRequest.zulipUserId))?.externalIdentityId).toBe(rebound.identity.externalIdentityId)
+  })
+
+  it('replays an exact external identity revoke after recent authentication ages out without authorizing a new revoke', async () => {
+    const clock = new FakeClock('2026-08-18T12:00:00.000Z')
+    const repository = new FakeCollaborationRepository()
+    const identities = new IdentityService({ repository, now: clock.now })
+    const actor = await identities.resolveOidcUser(verifiedIdentity(clock))
+    const fixture = createZulipBindingFixture({ userId: actor.userId, requestedAt: clock.now() })
+    const begun = await identities.beginZulipBinding(actor, {
+      ...fixture.beginRequest,
+      idempotencyKey: 'idem_binding_revoke_replay_begin'
+    })
+    const bound = await identities.confirmZulipBinding(fixture.serviceActor, {
+      ...fixture.confirmRequest,
+      bindingCode: begun.bindingCode,
+      idempotencyKey: 'idem_binding_revoke_replay_confirm'
+    })
+    const revokeKey = 'idem_binding_revoke_replay'
+    const revoked = await identities.revokeExternalIdentity(actor, bound.identity.externalIdentityId, revokeKey)
+
+    clock.tick(301_000)
+
+    await expect(identities.revokeExternalIdentity(actor, bound.identity.externalIdentityId, revokeKey))
+      .resolves.toEqual(revoked)
+    await expectServiceCode(() => identities.revokeExternalIdentity(actor, 'xid_identity_conflict_0001', revokeKey),
+      'idempotency_conflict')
+    await expectServiceCode(() => identities.revokeExternalIdentity(actor, bound.identity.externalIdentityId,
+      'idem_binding_revoke_stale_new'), 'assurance_insufficient')
   })
 
   it('expires old same-Realm codes and distinguishes expiration from single use', async () => {

@@ -67,3 +67,11 @@
 - [x] 9.4 Create a fixed commit and reproducible A release bundle with exact manifest/digests and no credentials, parent-workspace-only fixtures, source tree, or development environment files.
 - [x] 9.5 Back up A ECS, deploy migration 5 and the fixed bundle, then verify health, readiness, schema, fail-closed confirm, OIDC dependency behavior, core contract, restart, and recovery gates.
 - [x] 9.6 Report real Keycloak/Desktop/D-Zulip E2E as not run until those external environments and service authentication are available; never promote offline fixtures to real E2E evidence.
+
+## 10. Post-deployment continuation, routing, and multi-worker evidence
+
+- [x] 10.1 Revalidate OIDC User and Agent continuation before WebSocket pong/notification, and fence every Agent write receipt/commit against the current credential generation, Agent, Device, and User state without retaining the raw bearer.
+- [x] 10.2 Exclude Device-revoked historical Agents from every new primary, Projection, Coordinator, Task, and capability-directory route; serialize Device revocation with all new Agent routes using a stable Device-first lock order and deterministic Fake/PostgreSQL race tests.
+- [x] 10.3 Add a fixed-hash multi-worker acceptance harness for one Orchestrator plus 2–8 distinct OIDC Workers, with one Device/Agent per principal, per-Worker public WSS reconnect, durable Inbox replay/ACK, progress/result, Orchestrator acceptance/completion, and revoke-first stale credential/WSS rejection; keep its aggregate/per-Worker receipt secret-free and bind both harnesses in the OIDC release manifest.
+- [ ] 10.4 Create a new clean fixed commit and reproducible `a-https-oidc-test` bundle, then run the real PostgreSQL v5 concurrency/restart/backup-restore gates and deploy the app plus dual-SNI edge with local and independent external verification.
+- [ ] 10.5 Run the fixed multi-worker harness with one real Keycloak Orchestrator plus at least two distinct real Keycloak Workers and fresh file-backed Tokens, retain the redacted aggregate/per-Worker receipt, and report the result as an A cloud contract closure rather than a multi-Desktop product or Provider/Zulip E2E.

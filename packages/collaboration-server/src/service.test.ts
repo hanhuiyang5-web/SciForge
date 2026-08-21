@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  fakeAgentActor,
   FakeCollaborationRepository,
   FakeInboxNotifier
 } from '../../../test-fixtures/collaboration/fake-adapters.mjs'
@@ -67,12 +66,15 @@ async function registerAgent(
   label: string,
   options: { provisionCapability?: boolean; heartbeat?: boolean } = {}
 ) {
+  const repository = (service as unknown as { repository: FakeCollaborationRepository }).repository
   const created = await createDevice(service, user, label)
   const result = await service.registerAgent(user, { deviceId: created.device.deviceId,
     displayName: `${label} desktop`, nodeType: 'desktop', capabilities: ['research.execute'],
     idempotencyKey: `idem_agent_register_${label}` })
   if (!result.deviceCredential) throw new Error('Expected one-time device credential')
-  const device = fakeAgentActor(result.agent, user.userId)
+  const authenticated = await new AuthenticationService(repository, now).resolveBearer(result.deviceCredential)
+  if (authenticated.kind !== 'agent_device') throw new Error('Expected an authenticated Agent actor')
+  const device = authenticated
   const agent = options.heartbeat === false
     ? result.agent
     : await service.heartbeatAgent(device, {
@@ -107,7 +109,7 @@ async function registerAgent(
       idempotencyKey: `idem_agent_capability_${label}`
     })
   }
-  return { ...result, agent }
+  return { ...result, agent, actor: device }
 }
 
 async function createDevice(
@@ -294,7 +296,7 @@ describe('CollaborationService canonical transactions', () => {
       completionCriteria: ['The reassigned owner remains a member'], dependencyTaskIds: [],
       expectedProjectRevision: latestProject.revision, idempotencyKey: 'idem_owner_transfer_race_retry_task_01'
     })
-    const workerActor = fakeAgentActor(initialWorker.agent, member.userId)
+    const workerActor = initialWorker.actor
     const accepted = await service.transitionTask(workerActor, {
       taskId: failedTask.taskId, executionId: failedTask.executionId, status: 'accepted',
       expectedRevision: failedTask.revision, idempotencyKey: 'idem_owner_transfer_race_retry_accept_01'
@@ -519,6 +521,326 @@ describe('CollaborationService canonical transactions', () => {
       .toEqual([expect.objectContaining({ status: 'active' })])
   })
 
+  it('rolls back writes from Agent actors cached before current-credential revocation or rotation', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const owner = await onboard(service, authentication, 'stale-bearer-owner', 'provider-stale-bearer-owner')
+
+    const revoked = await registerAgent(service, owner.user, 'stalerevoke1')
+    await service.revokeCurrentCredential(revoked.actor, {
+      idempotencyKey: 'idem_stale_bearer_revoke_current_01'
+    })
+    const revokedWriteKey = 'idem_stale_bearer_after_revoke_01'
+    await expect(service.ackInbox(revoked.actor, {
+      throughSequence: 0,
+      idempotencyKey: revokedWriteKey
+    })).rejects.toMatchObject({ code: 'credential_revoked' })
+    await expect(repository.getInboxCursor({ kind: 'agent', id: revoked.agent.agentId })).resolves.toBeNull()
+    await expect(repository.getReceipt(revoked.actor.actorKey, revokedWriteKey)).resolves.toBeNull()
+
+    const rotating = await registerAgent(service, owner.user, 'stalerotate1')
+    const rotated = await service.rotateAgentCredential(owner.user, {
+      agentId: rotating.agent.agentId,
+      expectedRevision: rotating.agent.revision,
+      idempotencyKey: 'idem_stale_bearer_rotate_01'
+    })
+    if (!rotated.deviceCredential) throw new Error('Expected rotated Agent credential')
+    await expect(authentication.resolveBearer(rotated.deviceCredential)).resolves.toMatchObject({
+      kind: 'agent_device',
+      agentId: rotating.agent.agentId,
+      credentialGeneration: rotating.actor.credentialGeneration + 1
+    })
+    const rotatedWriteKey = 'idem_stale_bearer_after_rotate_01'
+    await expect(service.ackInbox(rotating.actor, {
+      throughSequence: 0,
+      idempotencyKey: rotatedWriteKey
+    })).rejects.toMatchObject({ code: 'credential_revoked' })
+    await expect(repository.getInboxCursor({ kind: 'agent', id: rotating.agent.agentId })).resolves.toBeNull()
+    await expect(repository.getReceipt(rotating.actor.actorKey, rotatedWriteKey)).resolves.toBeNull()
+  })
+
+  it('keeps Device-revoked historical Agents offline and unavailable to new User routing', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const identities = new IdentityService({ repository, now })
+    const owner = await onboard(service, authentication, 'device-route-owner', 'provider-device-route-owner')
+    const member = await onboard(service, authentication, 'device-route-member', 'provider-device-route-member')
+    const activeCoordinator = await registerAgent(service, owner.user, 'devroutecoord1')
+    const revokedCoordinator = await registerAgent(service, owner.user, 'devroutecoord2')
+    const activeWorker = await registerAgent(service, member.user, 'devrouteworker1')
+    const revokedWorker = await registerAgent(service, member.user, 'devrouteworker2')
+    const project = await service.createProject(owner.user, {
+      displayName: 'Device availability routing',
+      goal: 'Never route new work to an Agent whose linked Device has been revoked.',
+      memberUserIds: [owner.userId, member.userId],
+      coordinatorAgentId: activeCoordinator.agent.agentId,
+      idempotencyKey: 'idem_device_route_project_01'
+    })
+    const pausedRevokedCoordinatorProject = await service.createProject(owner.user, {
+      displayName: 'Device availability resume',
+      goal: 'A paused Project must not resume through a Coordinator whose Device is later revoked.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: revokedCoordinator.agent.agentId,
+      idempotencyKey: 'idem_device_route_resume_project_01'
+    }).then((created) => service.transitionProject(owner.user, {
+      projectId: created.projectId,
+      status: 'paused',
+      expectedRevision: created.revision,
+      idempotencyKey: 'idem_device_route_resume_pause_01'
+    }))
+    const task = await service.createTask(owner.user, {
+      projectId: project.projectId,
+      assigneeAgentId: activeWorker.agent.agentId,
+      title: 'Existing assignment',
+      objective: 'Provide an existing Task that can be tested for reassignment.',
+      completionCriteria: ['The Task remains assigned to the active Worker.'],
+      dependencyTaskIds: [],
+      expectedProjectRevision: project.revision,
+      idempotencyKey: 'idem_device_route_existing_task_01'
+    })
+
+    await identities.revokeDevice(owner.user, revokedCoordinator.actor.deviceId,
+      'idem_device_route_revoke_coordinator_01')
+    await identities.revokeDevice(member.user, revokedWorker.actor.deviceId,
+      'idem_device_route_revoke_worker_01')
+
+    await expect(repository.getAgent(revokedCoordinator.agent.agentId)).resolves.toMatchObject({
+      status: 'active', connectionStatus: 'online'
+    })
+    await expect(repository.getAgent(revokedWorker.agent.agentId)).resolves.toMatchObject({
+      status: 'active', connectionStatus: 'online'
+    })
+
+    const participant = await repository.getParticipant(owner.userId)
+    if (!participant) throw new Error('Expected owner Participant')
+    await expect(service.selectPrimary(owner.user, {
+      primaryAgentId: revokedCoordinator.agent.agentId,
+      expectedRevision: participant.revision,
+      idempotencyKey: 'idem_device_route_select_primary_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    await expect(service.createProjection(owner.user, {
+      agentId: revokedCoordinator.agent.agentId,
+      humanEndpointId: owner.endpointId,
+      locator: {
+        type: 'provider_locator', provider: 'zulip', realmId: 'realm-hk',
+        containerId: 'device-route-revoked', topicId: 'device-route-revoked'
+      },
+      displayName: 'Rejected revoked projection',
+      allowedSenderUserIds: [],
+      idempotencyKey: 'idem_device_route_rejected_projection_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    await expect(service.createProject(owner.user, {
+      displayName: 'Rejected revoked Coordinator',
+      goal: 'A revoked Device must not coordinate a new Project.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: revokedCoordinator.agent.agentId,
+      idempotencyKey: 'idem_device_route_rejected_project_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected routing Project')
+    await expect(service.transferCoordinator(owner.user, {
+      projectId: project.projectId,
+      coordinatorAgentId: revokedCoordinator.agent.agentId,
+      expectedRevision: currentProject.revision,
+      idempotencyKey: 'idem_device_route_transfer_coordinator_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    await expect(service.transitionProject(owner.user, {
+      projectId: pausedRevokedCoordinatorProject.projectId,
+      status: 'active',
+      expectedRevision: pausedRevokedCoordinatorProject.revision,
+      idempotencyKey: 'idem_device_route_rejected_resume_01'
+    })).rejects.toMatchObject({ code: 'credential_revoked' })
+    await expect(service.createTask(owner.user, {
+      projectId: project.projectId,
+      assigneeAgentId: revokedWorker.agent.agentId,
+      title: 'Rejected new assignment',
+      objective: 'A revoked Device must not receive a new Task.',
+      completionCriteria: ['No Task is created.'],
+      dependencyTaskIds: [],
+      expectedProjectRevision: currentProject.revision,
+      idempotencyKey: 'idem_device_route_rejected_task_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    await expect(service.retryOrReassignTask(owner.user, {
+      taskId: task.taskId,
+      executionId: task.executionId,
+      assigneeAgentId: revokedWorker.agent.agentId,
+      expectedRevision: task.revision,
+      idempotencyKey: 'idem_device_route_rejected_reassign_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const directory = await service.getProjectCapabilityDirectory(owner.user, project.projectId)
+    expect(directory.agents.map((agent) => agent.agentId)).toEqual(expect.arrayContaining([
+      activeCoordinator.agent.agentId, activeWorker.agent.agentId
+    ]))
+    expect(directory.agents.map((agent) => agent.agentId)).not.toContain(revokedCoordinator.agent.agentId)
+    expect(directory.agents.map((agent) => agent.agentId)).not.toContain(revokedWorker.agent.agentId)
+
+    const snapshot = await service.getParticipantSnapshot(owner.user, owner.userId)
+    expect(snapshot.agents).toContainEqual(expect.objectContaining({
+      agentId: revokedCoordinator.agent.agentId,
+      status: 'active',
+      connectionStatus: 'offline'
+    }))
+    await expect(repository.getAgent(revokedCoordinator.agent.agentId)).resolves.toMatchObject({
+      status: 'active', connectionStatus: 'online'
+    })
+  })
+
+  it('linearizes new Agent routing with Device revocation in either lock order', async () => {
+    class DeviceRouteGateRepository extends FakeCollaborationRepository {
+      private gate?: {
+        deviceId: string
+        entered: () => void
+        wait: Promise<void>
+      }
+
+      armDeviceLock(deviceId: string) {
+        let entered!: () => void
+        let release!: () => void
+        const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
+        const wait = new Promise<void>((resolve) => { release = resolve })
+        this.gate = { deviceId, entered, wait }
+        return { entered: enteredPromise, release }
+      }
+
+      async getDeviceForUpdate(deviceId: string) {
+        const gate = this.gate
+        if (gate?.deviceId === deviceId) {
+          this.gate = undefined
+          gate.entered()
+          await gate.wait
+        }
+        return super.getDeviceForUpdate(deviceId)
+      }
+    }
+
+    const repository = new DeviceRouteGateRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const identities = new IdentityService({ repository, now })
+    const owner = await onboard(service, authentication, 'device-route-race-owner', 'provider-device-route-race-owner')
+    const revokeFirst = await registerAgent(service, owner.user, 'devrouterace1')
+    const routeFirst = await registerAgent(service, owner.user, 'devrouterace2')
+
+    const revokeGate = repository.armDeviceLock(revokeFirst.actor.deviceId)
+    const revocation = identities.revokeDevice(owner.user, revokeFirst.actor.deviceId,
+      'idem_device_route_race_revoke_first_01')
+    await revokeGate.entered
+    let revokeFirstRouteSettled = false
+    const rejectedRoute = service.createProject(owner.user, {
+      displayName: 'Revoke-first Project',
+      goal: 'The Device revocation linearizes before this attempted Coordinator route.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: revokeFirst.agent.agentId,
+      idempotencyKey: 'idem_device_route_race_revoke_first_project_01'
+    }).finally(() => { revokeFirstRouteSettled = true })
+    await Promise.resolve()
+    expect(revokeFirstRouteSettled).toBe(false)
+    revokeGate.release()
+    await expect(revocation).resolves.toMatchObject({ device: { status: 'revoked' } })
+    await expect(rejectedRoute).rejects.toMatchObject({ code: 'permission_denied' })
+    expect([...repository.state.projects.values()]
+      .filter((project) => project.displayName === 'Revoke-first Project')).toHaveLength(0)
+
+    const routeGate = repository.armDeviceLock(routeFirst.actor.deviceId)
+    const acceptedRoute = service.createProject(owner.user, {
+      displayName: 'Route-first Project',
+      goal: 'The Coordinator route linearizes before the subsequent Device revocation.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: routeFirst.agent.agentId,
+      idempotencyKey: 'idem_device_route_race_route_first_project_01'
+    })
+    await routeGate.entered
+    let routeFirstRevocationSettled = false
+    const laterRevocation = identities.revokeDevice(owner.user, routeFirst.actor.deviceId,
+      'idem_device_route_race_route_first_revoke_01')
+      .finally(() => { routeFirstRevocationSettled = true })
+    await Promise.resolve()
+    expect(routeFirstRevocationSettled).toBe(false)
+    routeGate.release()
+    await expect(acceptedRoute).resolves.toMatchObject({
+      displayName: 'Route-first Project', coordinatorAgentId: routeFirst.agent.agentId
+    })
+    await expect(laterRevocation).resolves.toMatchObject({ device: { status: 'revoked' } })
+    await expect(service.createProject(owner.user, {
+      displayName: 'Post-revoke Project',
+      goal: 'No new route may commit after Device revocation has completed.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: routeFirst.agent.agentId,
+      idempotencyKey: 'idem_device_route_race_post_revoke_project_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    expect([...repository.state.projects.values()]
+      .filter((project) => project.coordinatorAgentId === routeFirst.agent.agentId)).toHaveLength(1)
+  })
+
+  it('locks every Agent-actor Task route Device in stable order instead of actor-first order', async () => {
+    class DeviceOrderRepository extends FakeCollaborationRepository {
+      readonly deviceLocks: string[] = []
+
+      async getDeviceForUpdate(deviceId: string) {
+        this.deviceLocks.push(deviceId)
+        return super.getDeviceForUpdate(deviceId)
+      }
+    }
+
+    const repository = new DeviceOrderRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const alice = await onboard(service, authentication, 'device-order-alice', 'provider-device-order-alice')
+    const bob = await onboard(service, authentication, 'device-order-bob', 'provider-device-order-bob')
+    const aliceAgent = await registerAgent(service, alice.user, 'devorderalice')
+    const bobAgent = await registerAgent(service, bob.user, 'devorderbob01')
+    const aliceProject = await service.createProject(alice.user, {
+      displayName: 'Alice Device-order Project',
+      goal: 'Exercise Alice-to-Bob Agent routing lock order.',
+      memberUserIds: [alice.userId, bob.userId],
+      coordinatorAgentId: aliceAgent.agent.agentId,
+      idempotencyKey: 'idem_device_order_alice_project_01'
+    })
+    const bobProject = await service.createProject(bob.user, {
+      displayName: 'Bob Device-order Project',
+      goal: 'Exercise Bob-to-Alice Agent routing lock order.',
+      memberUserIds: [alice.userId, bob.userId],
+      coordinatorAgentId: bobAgent.agent.agentId,
+      idempotencyKey: 'idem_device_order_bob_project_01'
+    })
+    const expectedDeviceOrder = [aliceAgent.actor.deviceId, bobAgent.actor.deviceId].sort()
+
+    repository.deviceLocks.length = 0
+    await expect(service.createTask(aliceAgent.actor, {
+      projectId: aliceProject.projectId,
+      assigneeAgentId: bobAgent.agent.agentId,
+      title: 'Alice routes Bob',
+      objective: 'Acquire both Device rows before rejecting the unconfirmed proposal.',
+      completionCriteria: ['No actor-first Device lock is taken.'],
+      dependencyTaskIds: [],
+      expectedProjectRevision: aliceProject.revision,
+      idempotencyKey: 'idem_device_order_alice_task_01'
+    })).rejects.toMatchObject({ code: 'confirmation_required' })
+    expect(repository.deviceLocks).toEqual(expectedDeviceOrder)
+
+    repository.deviceLocks.length = 0
+    await expect(service.createTask(bobAgent.actor, {
+      projectId: bobProject.projectId,
+      assigneeAgentId: aliceAgent.agent.agentId,
+      title: 'Bob routes Alice',
+      objective: 'Acquire the same Device rows in the same order from the opposite actor.',
+      completionCriteria: ['Opposite coordinator direction preserves lock order.'],
+      dependencyTaskIds: [],
+      expectedProjectRevision: bobProject.revision,
+      idempotencyKey: 'idem_device_order_bob_task_01'
+    })).rejects.toMatchObject({ code: 'confirmation_required' })
+    expect(repository.deviceLocks).toEqual(expectedDeviceOrder)
+    expect([...repository.state.tasks.values()]
+      .filter((task) => task.projectId === aliceProject.projectId || task.projectId === bobProject.projectId))
+      .toHaveLength(0)
+  })
+
   it('rejects Device-linked ownership transfer before late Project lock discovery', async () => {
     class LateProjectRepository extends FakeCollaborationRepository {
       lateSpec?: {
@@ -658,6 +980,11 @@ describe('CollaborationService canonical transactions', () => {
     class LockOrderRepository extends FakeCollaborationRepository {
       readonly lockOrder: string[] = []
 
+      async getDeviceForUpdate(deviceId: string) {
+        this.lockOrder.push(`device-lock:${deviceId}`)
+        return super.getDeviceForUpdate(deviceId)
+      }
+
       async getProjectForUpdate(projectId: string) {
         this.lockOrder.push(`project-lock:${projectId}`)
         return super.getProjectForUpdate(projectId)
@@ -666,6 +993,11 @@ describe('CollaborationService canonical transactions', () => {
       async getAgentForUpdate(agentId: string) {
         this.lockOrder.push(`agent-lock:${agentId}`)
         return super.getAgentForUpdate(agentId)
+      }
+
+      async getCredentialForUpdate(credentialId: string) {
+        this.lockOrder.push(`credential-lock:${credentialId}`)
+        return super.getCredentialForUpdate(credentialId)
       }
 
       async updateAgent(agent: Parameters<FakeCollaborationRepository['updateAgent']>[0], expectedRevision: number) {
@@ -684,7 +1016,7 @@ describe('CollaborationService canonical transactions', () => {
     const authentication = new AuthenticationService(repository, now)
     const owner = await onboard(service, authentication, 'lock-order-owner', 'provider-lock-order-owner')
     const coordinator = await registerAgent(service, owner.user, 'lockorder001')
-    const coordinatorActor = fakeAgentActor(coordinator.agent, owner.userId)
+    const coordinatorActor = coordinator.actor
     const project = await service.createProject(owner.user, {
       displayName: 'Lock order Project', goal: 'Keep Project locks ahead of the Agent lock.',
       memberUserIds: [owner.userId], coordinatorAgentId: coordinator.agent.agentId,
@@ -704,10 +1036,13 @@ describe('CollaborationService canonical transactions', () => {
       idempotencyKey: 'idem_lock_order_offline_01'
     })
     expect(repository.lockOrder).toEqual([
+      `device-lock:${coordinator.actor.deviceId}`,
       `project-lock:${project.projectId}`,
       `agent-lock:${coordinator.agent.agentId}`,
       `agent-update:${coordinator.agent.agentId}`,
-      `project-update:${project.projectId}`
+      `project-update:${project.projectId}`,
+      `agent-lock:${coordinator.agent.agentId}`,
+      `credential-lock:${coordinator.actor.credentialId}`
     ])
 
     repository.lockOrder.length = 0
@@ -732,7 +1067,7 @@ describe('CollaborationService canonical transactions', () => {
     const member = await onboard(service, authentication, 'stale-coordinator-member', 'provider-stale-coordinator-member')
     const coordinator = await registerAgent(service, owner.user, 'stalecoord01')
     const worker = await registerAgent(service, member.user, 'staleworker1')
-    const staleCoordinator = fakeAgentActor(coordinator.agent, owner.userId)
+    const staleCoordinator = coordinator.actor
     const project = await service.createProject(owner.user, {
       displayName: 'Stale Coordinator fence', goal: 'Reject governance writes authenticated before revocation.',
       memberUserIds: [owner.userId, member.userId], coordinatorAgentId: coordinator.agent.agentId,
@@ -2431,7 +2766,7 @@ describe('CollaborationService canonical transactions', () => {
     const member = await onboard(service, authentication, 'expiry-view-member', 'provider-expiry-view-member')
     const coordinatorAgent = await registerAgent(service, owner.user, 'expirycoord1')
     const workerAgent = await registerAgent(service, member.user, 'expiryworker1')
-    const worker = fakeAgentActor(workerAgent.agent, member.userId)
+    const worker = workerAgent.actor
     const project = await service.createProject(owner.user, {
       displayName: 'Expiry coordination view', goal: 'Never project a past-due HumanNeeded request as pending.',
       memberUserIds: [owner.userId, member.userId], coordinatorAgentId: coordinatorAgent.agent.agentId,
@@ -2488,7 +2823,7 @@ describe('CollaborationService canonical transactions', () => {
     const initialService = new CollaborationService({ repository, now })
     const owner = await onboard(initialService, authentication, 'inbox-expiry-owner', 'provider-inbox-expiry-owner')
     const agent = await registerAgent(initialService, owner.user, 'inboxexpiry1')
-    const actor = fakeAgentActor(agent.agent, owner.userId)
+    const actor = agent.actor
     const createdAt = now().toISOString()
     await repository.transaction((tx) => tx.appendInbox({
       recipient: { kind: 'agent', id: agent.agent.agentId },
@@ -3231,5 +3566,326 @@ describe('CollaborationService canonical transactions', () => {
     await expect(service.ackInboxMessage(newCoordinator, {
       inboxMessageId: newInbox[3]!.messageId, sequence: 4, idempotencyKey: 'idem_reroute_new_ack_04'
     })).resolves.toMatchObject({ ackedSequence: 4, nextSequence: 5 })
+  })
+
+  it('fans one Orchestrator out to multiple isolated Workers under concurrent budgets and Device revocation', async () => {
+    const repository = new FakeCollaborationRepository()
+    const notifier = new FakeInboxNotifier()
+    const service = new CollaborationService({ repository, notifier, now })
+    const authentication = new AuthenticationService(repository, now)
+    const identities = new IdentityService({ repository, now })
+    const owner = await onboard(service, authentication, 'multi-worker-owner', 'provider-multi-worker-owner')
+    const workerA = await onboard(service, authentication, 'multi-worker-a', 'provider-multi-worker-a')
+    const workerB = await onboard(service, authentication, 'multi-worker-b', 'provider-multi-worker-b')
+    const coordinator = await registerAgent(service, owner.user, 'multiworkercoord')
+    const agentA = await registerAgent(service, workerA.user, 'multiworkera')
+    const agentB = await registerAgent(service, workerB.user, 'multiworkerb')
+
+    const project = await service.createProject(owner.user, {
+      displayName: 'One Orchestrator with multiple Workers',
+      goal: 'Fan independent Tasks out to two different Worker computers without crossing authority or cursors.',
+      memberUserIds: [owner.userId, workerA.userId, workerB.userId],
+      coordinatorAgentId: coordinator.agent.agentId,
+      budgets: { maxTasks: 5, maxTasksPerRound: 2, maxTaskRetries: 1, maxCoordinationRounds: 3 },
+      idempotencyKey: 'idem_multi_worker_project_01'
+    })
+    const directory = await service.getProjectCapabilityDirectory(owner.user, project.projectId)
+    expect(directory.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agentId: agentA.agent.agentId,
+        ownerUserId: workerA.userId,
+        capabilities: ['research.execute'],
+        status: 'online'
+      }),
+      expect.objectContaining({
+        agentId: agentB.agent.agentId,
+        ownerUserId: workerB.userId,
+        capabilities: ['research.execute'],
+        status: 'online'
+      })
+    ]))
+
+    type WorkerRoute = {
+      label: string
+      agent: typeof agentA
+    }
+    const routes: WorkerRoute[] = [
+      { label: 'a', agent: agentA },
+      { label: 'b', agent: agentB }
+    ]
+    const taskInput = (route: WorkerRoute, round: number, expectedProjectRevision: number) => ({
+      projectId: project.projectId,
+      assigneeAgentId: route.agent.agent.agentId,
+      title: `Worker ${route.label.toUpperCase()} round ${round}`,
+      objective: `Return an independently attributable result from Worker ${route.label.toUpperCase()}.`,
+      completionCriteria: [{
+        criterionId: `cri_MultiWorker${route.label.toUpperCase()}${String(round).padStart(2, '0')}`,
+        text: `Worker ${route.label.toUpperCase()} returns its own bounded result.`
+      }],
+      dependencyTaskIds: [],
+      requiredCapabilities: {
+        capabilityIds: ['research.execute'],
+        vpnAccessIds: [],
+        slurmClusterIds: [],
+        requiredResourceRefIds: []
+      },
+      expectedProjectRevision,
+      idempotencyKey: `idem_multi_worker_task_${route.label}_${round}`
+    })
+
+    const createConcurrentRound = async (round: number) => {
+      const before = await repository.getProject(project.projectId)
+      if (!before) throw new Error('Expected multi-Worker Project')
+      const inputs = routes.map((route) => taskInput(route, round, before.revision))
+      const outcomes = await Promise.allSettled(inputs.map((input) => service.createTask(owner.user, input)))
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+      expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+      const tasks = []
+      for (const [index, outcome] of outcomes.entries()) {
+        if (outcome.status === 'fulfilled') {
+          tasks.push(outcome.value)
+          continue
+        }
+        expect(outcome.reason).toMatchObject({ code: 'revision_conflict' })
+        const current = await repository.getProject(project.projectId)
+        if (!current) throw new Error('Expected multi-Worker Project after concurrent Task creation')
+        tasks.push(await service.createTask(owner.user, {
+          ...inputs[index]!,
+          expectedProjectRevision: current.revision
+        }))
+      }
+      return tasks.sort((left, right) => left.assigneeAgentId.localeCompare(right.assigneeAgentId))
+    }
+
+    const roundOneTasks = await createConcurrentRound(1)
+    expect(roundOneTasks.map((task) => task.assigneeUserId).sort()).toEqual(
+      [workerA.userId, workerB.userId].sort()
+    )
+    let currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project after round one')
+    await expect(service.createTask(owner.user, {
+      ...taskInput(routes[0]!, 91, currentProject.revision),
+      idempotencyKey: 'idem_multi_worker_round_one_budget_01'
+    })).rejects.toMatchObject({ code: 'budget_exhausted' })
+
+    currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project before round two')
+    await service.advanceCoordinationRound(coordinator.actor, {
+      projectId: project.projectId,
+      expectedRevision: currentProject.revision,
+      idempotencyKey: 'idem_multi_worker_advance_round_02'
+    })
+    const roundTwoTasks = await createConcurrentRound(2)
+    const firstFourTasks = [...roundOneTasks, ...roundTwoTasks]
+    expect(new Set(firstFourTasks.map((task) => task.taskId)).size).toBe(4)
+    expect(firstFourTasks.filter((task) => task.assigneeAgentId === agentA.agent.agentId)).toHaveLength(2)
+    expect(firstFourTasks.filter((task) => task.assigneeAgentId === agentB.agent.agentId)).toHaveLength(2)
+    expect(new Set(firstFourTasks.map((task) => task.executionId)).size).toBe(4)
+
+    const inboxA = await service.pullInbox(agentA.actor, { afterSequence: 0, limit: 20 })
+    const inboxB = await service.pullInbox(agentB.actor, { afterSequence: 0, limit: 20 })
+    expect(inboxA.messages.map((message) => message.sequence)).toEqual([1, 2])
+    expect(inboxB.messages.map((message) => message.sequence)).toEqual([1, 2])
+    const taskIdsA = new Set(firstFourTasks
+      .filter((task) => task.assigneeAgentId === agentA.agent.agentId)
+      .map((task) => task.taskId))
+    const taskIdsB = new Set(firstFourTasks
+      .filter((task) => task.assigneeAgentId === agentB.agent.agentId)
+      .map((task) => task.taskId))
+    expect(inboxA.messages.every((message) => taskIdsA.has(String(message.payload.taskId)))).toBe(true)
+    expect(inboxA.messages.some((message) => taskIdsB.has(String(message.payload.taskId)))).toBe(false)
+    expect(inboxB.messages.every((message) => taskIdsB.has(String(message.payload.taskId)))).toBe(true)
+    expect(inboxB.messages.some((message) => taskIdsA.has(String(message.payload.taskId)))).toBe(false)
+    expect(notifier.notifications.filter((notification) => (
+      notification.recipient.kind === 'agent' && notification.recipient.id === agentA.agent.agentId
+    )).map((notification) => notification.latestSequence)).toEqual([1, 2])
+    expect(notifier.notifications.filter((notification) => (
+      notification.recipient.kind === 'agent' && notification.recipient.id === agentB.agent.agentId
+    )).map((notification) => notification.latestSequence)).toEqual([1, 2])
+
+    await expect(service.ackInboxMessage(agentA.actor, {
+      inboxMessageId: inboxB.messages[0]!.messageId,
+      sequence: inboxB.messages[0]!.sequence,
+      idempotencyKey: 'idem_multi_worker_cross_ack_rejected_01'
+    })).rejects.toMatchObject({ code: 'not_found' })
+    const ackAll = async (actor: typeof agentA.actor, messages: typeof inboxA.messages, label: string) => {
+      for (const message of messages) {
+        await service.ackInboxMessage(actor, {
+          inboxMessageId: message.messageId,
+          sequence: message.sequence,
+          idempotencyKey: `idem_multi_worker_ack_${label}_${message.sequence}`
+        })
+      }
+    }
+    await ackAll(agentA.actor, inboxA.messages, 'a')
+    expect((await service.pullInbox(agentA.actor, { afterSequence: 0, limit: 20 })).ackedSequence).toBe(2)
+    expect((await service.pullInbox(agentB.actor, { afterSequence: 0, limit: 20 })).ackedSequence).toBe(0)
+    await ackAll(agentB.actor, inboxB.messages, 'b')
+    expect((await service.pullInbox(agentB.actor, { afterSequence: 0, limit: 20 })).ackedSequence).toBe(2)
+
+    const firstA = firstFourTasks.find((task) => task.assigneeAgentId === agentA.agent.agentId)!
+    const firstB = firstFourTasks.find((task) => task.assigneeAgentId === agentB.agent.agentId)!
+    await expect(service.transitionTask(agentA.actor, {
+      taskId: firstB.taskId,
+      executionId: firstB.executionId,
+      status: 'accepted',
+      expectedRevision: firstB.revision,
+      idempotencyKey: 'idem_multi_worker_cross_execution_rejected_01'
+    })).rejects.toMatchObject({ code: 'assignee_mismatch' })
+    await expect(service.transitionTask(agentB.actor, {
+      taskId: firstB.taskId,
+      executionId: firstA.executionId,
+      status: 'accepted',
+      expectedRevision: firstB.revision,
+      idempotencyKey: 'idem_multi_worker_wrong_execution_rejected_01'
+    })).rejects.toMatchObject({ code: 'execution_conflict' })
+    expect(await repository.getTask(firstA.taskId)).toMatchObject({ revision: firstA.revision, status: 'offered' })
+    expect(await repository.getTask(firstB.taskId)).toMatchObject({ revision: firstB.revision, status: 'offered' })
+
+    const runTask = async (task: typeof firstA, actor: typeof agentA.actor, label: string) => {
+      const accepted = await service.transitionTask(actor, {
+        taskId: task.taskId,
+        executionId: task.executionId,
+        status: 'accepted',
+        expectedRevision: task.revision,
+        idempotencyKey: `idem_multi_worker_accept_${label}`
+      })
+      const running = await service.transitionTask(actor, {
+        taskId: task.taskId,
+        executionId: task.executionId,
+        status: 'in_progress',
+        expectedRevision: accepted.revision,
+        idempotencyKey: `idem_multi_worker_run_${label}`
+      })
+      const progress = await service.reportTaskProgress(actor, {
+        taskId: task.taskId,
+        executionId: task.executionId,
+        expectedRevision: running.revision,
+        percent: 60,
+        summary: `Worker ${label} is independently progressing.`,
+        idempotencyKey: `idem_multi_worker_progress_${label}`
+      })
+      const completed = await service.transitionTask(actor, {
+        taskId: task.taskId,
+        executionId: task.executionId,
+        status: 'completed',
+        expectedRevision: progress.revision,
+        result: {
+          summary: `Worker ${label} completed its independently routed Task.`,
+          criterionEvidence: [{
+            criterionId: task.completionCriteria[0]!.criterionId,
+            summary: `Worker ${label} satisfied its own acceptance criterion.`,
+            resourceRefIds: []
+          }],
+          resourceRefIds: [],
+          logSummary: `Worker ${label} returned a bounded execution summary.`
+        },
+        idempotencyKey: `idem_multi_worker_complete_${label}`
+      })
+      if (!completed.resultRecordId) throw new Error('Expected canonical Task result record')
+      const record = await repository.getProjectRecord(completed.resultRecordId)
+      if (!record) throw new Error('Expected canonical Task result record row')
+      expect(record).toMatchObject({
+        authorAgentId: actor.agentId,
+        authorUserId: actor.userId,
+        sourceTaskId: task.taskId,
+        sourceExecutionId: task.executionId,
+        sourceRevision: completed.revision,
+        status: 'candidate'
+      })
+      const acceptedRecord = await service.acceptProjectRecord(owner.user, {
+        projectRecordId: record.projectRecordId,
+        expectedRevision: record.revision,
+        idempotencyKey: `idem_multi_worker_accept_record_${label}`
+      })
+      expect(acceptedRecord).toMatchObject({ status: 'accepted', acceptedByUserId: owner.userId })
+      return { completed, acceptedRecord }
+    }
+
+    const firstFourResults = await Promise.all(firstFourTasks.map((task, index) => runTask(
+      task,
+      task.assigneeAgentId === agentA.agent.agentId ? agentA.actor : agentB.actor,
+      `${task.assigneeAgentId === agentA.agent.agentId ? 'a' : 'b'}_${index + 1}`
+    )))
+    expect(new Set(firstFourResults.map((result) => result.acceptedRecord.sourceTaskId)).size).toBe(4)
+
+    await identities.revokeDevice(workerA.user, agentA.actor.deviceId, 'idem_multi_worker_revoke_a_01')
+    currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project after Worker A revocation')
+    await expect(service.createTask(owner.user, {
+      ...taskInput(routes[0]!, 92, currentProject.revision),
+      idempotencyKey: 'idem_multi_worker_revoked_a_route_01'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+    expect(await repository.getProject(project.projectId)).toMatchObject({ revision: currentProject.revision })
+    const postRevokeDirectory = await service.getProjectCapabilityDirectory(owner.user, project.projectId)
+    expect(postRevokeDirectory.agents.map((entry) => entry.agentId)).not.toContain(agentA.agent.agentId)
+    expect(postRevokeDirectory.agents).toContainEqual(expect.objectContaining({
+      agentId: agentB.agent.agentId,
+      ownerUserId: workerB.userId,
+      status: 'online'
+    }))
+
+    await service.advanceCoordinationRound(coordinator.actor, {
+      projectId: project.projectId,
+      expectedRevision: currentProject.revision,
+      idempotencyKey: 'idem_multi_worker_advance_round_03'
+    })
+    currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project in round three')
+    const finalWorkerBTask = await service.createTask(owner.user, {
+      ...taskInput(routes[1]!, 3, currentProject.revision),
+      idempotencyKey: 'idem_multi_worker_unaffected_b_route_01'
+    })
+    expect(finalWorkerBTask).toMatchObject({
+      assigneeAgentId: agentB.agent.agentId,
+      assigneeUserId: workerB.userId,
+      coordinationRound: 3
+    })
+    currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project at total budget')
+    await expect(service.createTask(owner.user, {
+      ...taskInput(routes[1]!, 93, currentProject.revision),
+      idempotencyKey: 'idem_multi_worker_total_budget_01'
+    })).rejects.toMatchObject({ code: 'budget_exhausted' })
+    expect(notifier.notifications.filter((notification) => (
+      notification.recipient.kind === 'agent' && notification.recipient.id === agentA.agent.agentId
+    )).map((notification) => notification.latestSequence)).toEqual([1, 2])
+    expect(notifier.notifications.filter((notification) => (
+      notification.recipient.kind === 'agent' && notification.recipient.id === agentB.agent.agentId
+    )).map((notification) => notification.latestSequence)).toEqual([1, 2, 3])
+
+    const finalInboxB = await service.pullInbox(agentB.actor, { afterSequence: 2, limit: 20 })
+    expect(finalInboxB.messages).toHaveLength(1)
+    expect(finalInboxB.messages[0]).toMatchObject({
+      sequence: 3,
+      messageType: 'task.offered',
+      payload: { taskId: finalWorkerBTask.taskId, executionId: finalWorkerBTask.executionId }
+    })
+    await service.ackInboxMessage(agentB.actor, {
+      inboxMessageId: finalInboxB.messages[0]!.messageId,
+      sequence: 3,
+      idempotencyKey: 'idem_multi_worker_ack_b_3'
+    })
+    const finalWorkerBResult = await runTask(finalWorkerBTask, agentB.actor, 'b_final')
+    expect(finalWorkerBResult.acceptedRecord).toMatchObject({
+      authorAgentId: agentB.agent.agentId,
+      sourceTaskId: finalWorkerBTask.taskId,
+      status: 'accepted'
+    })
+
+    const acceptedRecords = await repository.listProjectRecords(project.projectId, true)
+    expect(acceptedRecords).toHaveLength(5)
+    expect(new Set(acceptedRecords.map((record) => record.sourceTaskId)).size).toBe(5)
+    expect(await repository.countOpenProjectTasks(project.projectId)).toBe(0)
+    currentProject = await repository.getProject(project.projectId)
+    if (!currentProject) throw new Error('Expected multi-Worker Project before completion')
+    const completedProject = await service.transitionProject(owner.user, {
+      projectId: project.projectId,
+      status: 'completed',
+      expectedRevision: currentProject.revision,
+      finalRecordDigest: stableDigest(acceptedRecords.map((record) => record.projectRecordId).sort()),
+      idempotencyKey: 'idem_multi_worker_complete_project_01'
+    })
+    expect(completedProject).toMatchObject({ status: 'completed', coordinationRound: 3 })
   })
 })

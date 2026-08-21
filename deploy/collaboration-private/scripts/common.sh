@@ -376,6 +376,7 @@ validate_release_bundle() {
   local manifest_provider_mode
   local manifest_identity_edge_network
   local manifest_identity_acceptance_harness_sha256
+  local manifest_multi_worker_acceptance_harness_sha256
   local manifest_edge_caddy_image
   local manifest_edge_backup_script_sha256
   local manifest_edge_backup_restore_verify_script_sha256
@@ -472,6 +473,7 @@ validate_release_bundle() {
   manifest_provider_mode="$(awk -F'"' '$2 == "providerMode" { print $4 }' "$manifest_file")"
   manifest_identity_edge_network="$(awk -F'"' '$2 == "identityEdgeNetwork" { print $4 }' "$manifest_file")"
   manifest_identity_acceptance_harness_sha256="$(awk -F'"' '$2 == "identityAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
+  manifest_multi_worker_acceptance_harness_sha256="$(awk -F'"' '$2 == "multiWorkerAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
   manifest_edge_caddy_image="$(awk -F'"' '$2 == "edgeCaddyImage" { print $4 }' "$manifest_file")"
   manifest_edge_backup_script_sha256="$(awk -F'"' '$2 == "edgeBackupScriptSha256" { print $4 }' "$manifest_file")"
   manifest_edge_backup_restore_verify_script_sha256="$(awk -F'"' '$2 == "edgeBackupRestoreVerifyScriptSha256" { print $4 }' "$manifest_file")"
@@ -567,7 +569,7 @@ validate_release_bundle() {
       ;;
     a-https-oidc-test)
       validate_commit "$manifest_base_commit"
-      [[ "$manifest_schema_version" == 2 \
+      [[ "$manifest_schema_version" == 3 \
           && "$manifest_deployment_boundary" == public-https-oidc-test \
           && "$manifest_hostname" == "$A_HTTPS_OIDC_TEST_HOSTNAME" \
           && "$manifest_identity_hostname" == "$A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME" \
@@ -579,6 +581,7 @@ validate_release_bundle() {
           && "$manifest_provider_mode" == disabled \
           && "$manifest_identity_edge_network" == "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" \
           && "$manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_multi_worker_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
           && "$manifest_edge_caddy_image" == "$A_HTTPS_OIDC_TEST_IMAGE" ]] \
         || die "A HTTPS OIDC test manifest must retain its exact dual-SNI identity boundary."
       validate_fixed_edge_asset "$A_HTTPS_OIDC_TEST_CADDYFILE" \

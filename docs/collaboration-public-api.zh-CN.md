@@ -131,7 +131,7 @@ Authorization: Bearer <credential>
 
 `system` 是服务内部 actor，不属于公共调用方。凭据不得放在 URL、请求 JSON、日志或 ResourceRef 中。
 
-每个部署只配置一个精确 OIDC issuer。A 从该 issuer 的 Discovery/JWKS 按 `kid` 验证 RSA/RS256 签名，要求 `aud` 包含 `sciforge-cloud-api`、`azp` 为 `sciforge-desktop` 或 `sciforge-web-mobile`，并严格检查 `sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。首次成功认证以 `(issuer, sub)` 并发安全地 JIT 创建 User；相同 email 不合并。JWT 验证失败不会回退到旧 opaque User bearer。
+每个部署只配置一个精确 OIDC issuer。A 从该 issuer 的 Discovery/JWKS 按 `kid` 验证 RSA/RS256 签名，要求 `aud` 包含 `sciforge-cloud-api`、`azp` 为 `sciforge-desktop` 或 `sciforge-web-mobile`，并严格检查 `sub/exp/iat/auth_time`；标准可选的 `nbf` 若存在也会严格验证，缺失时以 `iat` 作为有效生效时间。fresh JWKS 中出现未知 `kid` 时只允许受全局冷却约束的一次强制刷新，并发验证共享同一 in-flight 请求，避免不同伪造 `kid` 反复触发 issuer 请求。首次成功认证以 `(issuer, sub)` 并发安全地 JIT 创建 User；相同 email 不合并。JWT 验证失败不会回退到旧 opaque User bearer。
 
 统一身份 REST 面如下；所有 User 路由都要求同一个 OIDC resolver，所有写请求的 `Idempotency-Key` 头必须与 body 完全一致：
 
@@ -147,7 +147,7 @@ Authorization: Bearer <credential>
 | `GET /v1/me/external-identities` | OIDC User | 列出当前 User 的非敏感 Zulip identity |
 | `DELETE /v1/me/external-identities/{externalIdentityId}` | OIDC User，且 `auth_time` 在五分钟内 | 写 REVOKED，并作废同 User/Realm 的待用 code |
 
-`platform`、Ed25519 `publicKeyJwk` 和 `capabilitySummary` 是 Device 属性。随后 `agent.register` 必须引用当前 User 自己的 ACTIVE `deviceId`，只创建或确认 Agent→Device 关联，不创建 Device、不消费 enrollment；Agent 继续单独保存节点 `capabilities`。Device 撤销不会删除历史，但会使该 Device 下的 Agent 认证立即失效。
+`platform`、Ed25519 `publicKeyJwk` 和 `capabilitySummary` 是 Device 属性。随后 `agent.register` 必须引用当前 User 自己的 ACTIVE `deviceId`，只创建或确认 Agent→Device 关联，不创建 Device、不消费 enrollment；Agent 继续单独保存节点 `capabilities`。Device 撤销不会删除历史，但会使该 Device 下的 Agent 认证立即失效；A 也会把这些历史 Agent 排除在新的 primary、Projection、Coordinator、Task 分派和 capability directory 之外，并在 Participant 历史快照中将其派生为 offline。
 
 OIDC issuer 未配置时，服务仍可启动，数据库正常时 `/readyz` 仍可返回 200，但全部 User API fail closed；这不是匿名模式。Zulip confirm 没有已注入的 service-auth adapter 时同样 fail closed。`pairing.begin/redeem` 只保留为上述单一 Zulip binding 状态机的 OIDC User 兼容 command，不匿名创建 User、不签发 User bearer。
 
@@ -185,7 +185,7 @@ Idempotency-Key: idem_project_create_demo_0001
 }
 ```
 
-同一 actor、同一 `Idempotency-Key`、同一业务有效载荷重试时通常返回既有结果；用于关联单次 HTTP 请求的 `requestId` 可以改变，不属于幂等业务有效载荷。同一个 key 对应不同业务有效载荷时返回 `idempotency_conflict`。返回 enrollment nonce、binding code 或 Agent bearer 等一次性材料的操作不会重放明文，重复 key 会返回 `idempotency_conflict`，调用方必须重新开始相应流程。读取操作没有 `idempotencyKey`，也不发送 `Idempotency-Key` 头。
+同一 actor、同一 `Idempotency-Key`、同一业务有效载荷重试时通常返回既有结果；用于关联单次 HTTP 请求的 `requestId` 可以改变，不属于幂等业务有效载荷。同一个 key 对应不同业务有效载荷时返回 `idempotency_conflict`。Device 或外部身份撤销已经成功时，精确重放先返回既有 receipt；recent-auth 只授权尚无 receipt 的首次 mutation，因此成功响应丢失后不会因认证时间推进而失去恢复能力。返回 enrollment nonce、binding code 或 Agent bearer 等一次性材料的操作不会重放明文，重复 key 会返回 `idempotency_conflict`，调用方必须重新开始相应流程。读取操作没有 `idempotencyKey`，也不发送 `Idempotency-Key` 头。
 
 ### Revision 乐观并发
 
@@ -211,6 +211,8 @@ Idempotency-Key: idem_project_create_demo_0001
 | 10. 资源引用 | `resource.create`、`resource.get`、`resource.transition`、`resource.invalidate` | active Project member 的 user 或 agent；Worker 对 Task-scoped 资源的读写必须匹配当前 execution，项目级资源必须被当前 Task 显式引用 | `rest.entity(resource_ref)` | 状态为 `available/unavailable/revoked/invalidated`；只接受无凭据 HTTPS 元数据，不实现 provider 正文或本地文件传输 |
 | 11. 任务路由 | `task.create` 或 `task.retry` 为新 execution 向 assignee 写入唯一 `task.offered`；assignee 用 `inbox.pull`、`task.get` 获取工作 | owner 可直接路由；Coordinator 的治理动作按上述规则携带确认；目标为 active member 所属 active Agent | 更新后的 Task；路由结果为有序 `inbox_message` | retry/reassign 生成新 `executionId`；旧 execution 写入被拒绝；Coordinator 转移时旧收件人的未处理协调消息被 supersede，并向新 Coordinator 重新投递 |
 | 12. 结果回传 | `task.transition(status="succeeded", result=...)`、`project_record.get/accept`；非 `task_result` 的共享事实可用 `project_record.submit` | 成功结果为当前 execution assignee；候选结果由 owner 或 Coordinator 验收 | Task 与唯一候选 `project_record` 在同一事务中产生 | `succeeded` 只表示 Worker 执行完成；候选 `task_result` 对外状态为 `proposed`；普通 `project_record.submit` 禁止自行伪造 `task_result` |
+
+当前 A 合同不提供全局 User/Agent 枚举，也不会为了“找到 Worker”暴露一个可枚举的成员目录。阶段一的明确前置是：Worker 先从 `GET /v1/me` 获取自己的稳定 `userId`，通过受信带外渠道交给 Project owner；owner 将它写入 `project.create.memberUserIds`。Project 创建后，成员再通过 `project.capability_directory.get` 选择该 User 所属的可用 Agent。如果产品要求 Cloud 内建邀请/加入体验，应另行冻结一次性、不可枚举的 invitation 合同，不应默认开放全局目录。
 
 ### Task 执行身份与交换边界
 
@@ -441,6 +443,8 @@ sequenceDiagram
 ```
 
 `GET /v1/events` 必须完成 WebSocket Upgrade，并在握手头中使用 user 或 agent Bearer credential。凭据不得出现在 URL query 中。当前 `human_endpoint` 不使用公共 WebSocket。
+
+服务端连接表只保留认证 actor/credential identity，不保存原始 Bearer；发送 `connection.pong` 或 `inbox.available` 前会重新检查当前本地 User/OIDC identity、Access Token 到期时间，或 Agent credential generation、credential/Device/User 生命周期。检查失败会以策略关闭连接，旧连接不能在 Device 撤销或 credential 轮换后继续作为唤醒通道。业务写入还会在同一 PostgreSQL transaction 的 accepted audit/receipt 之前再次锁定并检查 Device → Agent → credential，WebSocket 检查不能替代该提交栅栏。
 
 服务端消息只有：
 

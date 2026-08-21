@@ -28,22 +28,31 @@ for argument in "${@:3}"; do
       acceptance_mode=provider-zulip
       mode_seen=true
       ;;
+    --a-https-oidc-test)
+      [[ "$mode_seen" == false ]] || die "Only one PostgreSQL restart acceptance mode may be selected."
+      acceptance_mode=a-https-oidc-test
+      mode_seen=true
+      ;;
     *)
-      die "Usage: verify-postgres-restart.sh <approved-40-character-contract-commit> <env-file> --confirm-postgres-restart [--core-only|--provider-zulip]"
+      die "Usage: verify-postgres-restart.sh <approved-40-character-contract-commit> <env-file> --confirm-postgres-restart [--core-only|--provider-zulip|--a-https-oidc-test]"
       ;;
   esac
 done
 [[ -n "$expected_commit" && -n "$env_input" && "$confirmation_seen" == true ]] \
-  || die "Usage: verify-postgres-restart.sh <approved-40-character-contract-commit> <env-file> --confirm-postgres-restart [--core-only|--provider-zulip]"
+  || die "Usage: verify-postgres-restart.sh <approved-40-character-contract-commit> <env-file> --confirm-postgres-restart [--core-only|--provider-zulip|--a-https-oidc-test]"
 
 for command in docker curl grep readlink stat sha256sum tar awk sort date mktemp chmod rm sleep; do
   require_command "$command"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin is unavailable."
 validate_release_bundle "$expected_commit"
-prepare_compose_environment "$expected_commit" "$env_input"
-if [[ "$acceptance_mode" == provider-zulip ]]; then
-  enable_zulip_provider_compose
+if [[ "$acceptance_mode" == a-https-oidc-test ]]; then
+  prepare_a_https_oidc_test_environment "$expected_commit" "$env_input"
+else
+  prepare_compose_environment "$expected_commit" "$env_input"
+  if [[ "$acceptance_mode" == provider-zulip ]]; then
+    enable_zulip_provider_compose
+  fi
 fi
 "${COMPOSE[@]}" config --quiet
 
@@ -107,6 +116,13 @@ if (response.status !== 200 || body?.type !== 'endpoint.catalog' ||
 console.log('Provider catalog verification passed: exactly zulip.')
 NODE
   boundary_summary='the Zulip provider boundary remained active'
+elif [[ "$acceptance_mode" == a-https-oidc-test ]]; then
+  [[ "$provider_mode" == oidc-test-private ]] \
+    || die "A HTTPS OIDC PostgreSQL restart acceptance requires the exact oidc-test-private deployment."
+  validate_a_https_oidc_test_app "$expected_commit"
+  [[ "$A_HTTPS_OIDC_TEST_APP_CONTAINER_ID" == "$app_container_before" ]] \
+    || die "A HTTPS OIDC validation selected an unexpected application container."
+  boundary_summary='the A HTTPS OIDC identity configuration and empty Provider boundary remained active'
 else
   [[ "$provider_mode" == core-only-private ]] \
     || die "Core-only PostgreSQL restart acceptance requires the core-only private deployment."

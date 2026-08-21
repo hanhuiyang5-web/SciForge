@@ -318,6 +318,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().listProjectRecords(projectId, acceptedOnly)
   }
   getResourceRef(id: string): Promise<StoredResourceRef | null> { return this.read().getResourceRef(id) }
+  getCredential(id: string): Promise<StoredCredential | null> { return this.read().getCredential(id) }
   getCredentialByDigest(digest: string): Promise<StoredCredential | null> { return this.read().getCredentialByDigest(digest) }
   getReceipt(actorKey: string, key: string): Promise<StoredReceipt | null> { return this.read().getReceipt(actorKey, key) }
   getReceiptById(receiptId: string): Promise<StoredReceipt | null> { return this.read().getReceiptById(receiptId) }
@@ -684,6 +685,14 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapResourceRef(result.rows[0]) : null
   }
 
+  async getCredential(credentialId: string): Promise<StoredCredential | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.credentials WHERE credential_id = $1`,
+      [credentialId]
+    )
+    return result.rows[0] ? mapCredential(result.rows[0]) : null
+  }
+
   async getCredentialByDigest(tokenDigest: string): Promise<StoredCredential | null> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.credentials WHERE token_digest = $1`, [Buffer.from(tokenDigest, 'hex')])
     return result.rows[0] ? mapCredential(result.rows[0]) : null
@@ -824,6 +833,14 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
       [deviceId]
     )
     return result.rows[0] ? mapDevice(result.rows[0]) : null
+  }
+
+  async getCredentialForUpdate(credentialId: string): Promise<StoredCredential | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.credentials WHERE credential_id=$1 FOR UPDATE`,
+      [credentialId]
+    )
+    return result.rows[0] ? mapCredential(result.rows[0]) : null
   }
 
   async getZulipBindingRequestForUpdate(
@@ -1735,6 +1752,13 @@ function compareSignedIntegerStrings(left: string, right: string): number {
 function translateDatabaseError(error: unknown): unknown {
   if (error instanceof CollaborationServiceError) return error
   const candidate = error as { code?: unknown; constraint?: unknown }
+  if (candidate?.code === '40P01' || candidate?.code === '40001') {
+    return new CollaborationServiceError(
+      'revision_conflict',
+      'Concurrent collaboration routing changed while acquiring write locks.',
+      { retryable: true }
+    )
+  }
   if (candidate?.code === '23505') {
     if (typeof candidate.constraint === 'string') {
       const mapped = IDENTITY_UNIQUE_CONSTRAINT_ERRORS.get(candidate.constraint)

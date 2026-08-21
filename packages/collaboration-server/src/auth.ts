@@ -14,6 +14,7 @@ export type UserActor = {
   issuer: string
   subject: string
   authTime: number
+  expiresAt?: number
   assurance: 'verified' | 'strong'
 }
 export type HumanEndpointActor = {
@@ -30,6 +31,7 @@ export type AgentActor = {
   agentId: string
   deviceId: string
   credentialId: string
+  credentialGeneration: number
   assurance: 'device'
 }
 export type AuthContext = SystemActor | UserActor | HumanEndpointActor | AgentActor
@@ -252,7 +254,44 @@ export class AuthenticationService {
       agentId: agent.agentId,
       deviceId: device.deviceId,
       credentialId: credential.credentialId,
+      credentialGeneration: credential.generation,
       assurance: 'device'
+    }
+  }
+
+  async assertCurrent(actor: UserActor | AgentActor): Promise<void> {
+    if (actor.kind === 'user') {
+      const nowSeconds = Math.floor(this.now().getTime() / 1_000)
+      if (actor.expiresAt !== undefined && actor.expiresAt <= nowSeconds) {
+        fail('authentication_required', 'The OIDC access token has expired.')
+      }
+      const [user, identity] = await Promise.all([
+        this.repository.getUser(actor.userId),
+        this.repository.getOidcIdentity(actor.identityId)
+      ])
+      if (!user || user.status !== 'active' || !identity || identity.status !== 'active' ||
+          identity.userId !== actor.userId || identity.issuer !== actor.issuer || identity.subject !== actor.subject) {
+        fail('credential_revoked', 'The local OIDC identity is no longer active.')
+      }
+      return
+    }
+    const credential = await this.repository.getCredential(actor.credentialId)
+    if (!credential || credential.kind !== 'agent_device' || credential.revokedAt ||
+        (credential.expiresAt !== undefined && credential.expiresAt <= this.now().toISOString()) ||
+        credential.subjectUserId !== actor.userId || credential.subjectAgentId !== actor.agentId ||
+        credential.generation !== actor.credentialGeneration || credential.assurance !== actor.assurance) {
+      fail('credential_revoked', 'The Agent credential is no longer active.')
+    }
+    const [user, agent, device] = await Promise.all([
+      this.repository.getUser(actor.userId),
+      this.repository.getAgent(actor.agentId),
+      this.repository.getDevice(actor.deviceId)
+    ])
+    if (!user || user.status !== 'active' || !agent || agent.status !== 'active' ||
+        agent.ownerUserId !== actor.userId || agent.deviceId !== actor.deviceId ||
+        agent.credentialGeneration !== actor.credentialGeneration || !device || device.status !== 'active' ||
+        device.userId !== actor.userId) {
+      fail('credential_revoked', 'The Agent Device identity is no longer active.')
     }
   }
 

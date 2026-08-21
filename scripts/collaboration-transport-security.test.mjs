@@ -224,6 +224,137 @@ test('8.4 production WebSocket boundary enforces origin, authenticated routing, 
   assert.equal(blockedStatus, 403)
 })
 
+test('8.4 WebSocket continuation closes when its OIDC access token expires', async (t) => {
+  const clock = new FakeClock()
+  const repository = new FakeCollaborationRepository()
+  const identity = await createUnifiedIdentityServerFixture({ repository, now: clock.now })
+  const authentication = identity.authentication
+  const hub = new CollaborationWebSocketHub()
+  const service = new CollaborationService({ repository, notifier: hub, now: clock.now })
+  const user = await identity.createUser('websocket-expiry-user')
+  const server = createCollaborationHttpServer({
+    service,
+    authentication,
+    readiness: async () => true,
+    now: clock.now,
+    basePath: BASE_PATH
+  })
+  hub.attach(server, {
+    authentication,
+    basePath: BASE_PATH,
+    allowedOrigins: ['https://desktop.invalid'],
+    now: clock.now
+  })
+  t.after(async () => {
+    await hub.close()
+    await closeServer(server)
+    await identity.close()
+  })
+  const baseUrl = await listen(server)
+  const webSocket = new WebSocket(`${baseUrl.replace(/^http:/u, 'ws:')}/v1/events`, {
+    origin: 'https://desktop.invalid',
+    headers: { authorization: `${['Bear', 'er'].join('')} ${user.accessToken}` }
+  })
+  const readyMessage = nextMessage(webSocket)
+  await opened(webSocket)
+  assert.equal((await readyMessage).type, 'connection.ready')
+
+  clock.tick(301_000)
+  const closeCode = closed(webSocket)
+  webSocket.send(JSON.stringify({
+    protocolVersion: '1.0',
+    type: 'connection.ping',
+    nonce: 'expired-user-ping',
+    sentAt: clock.now().toISOString()
+  }))
+  assert.equal(await closeCode, 1008)
+})
+
+test('8.4 WebSocket continuation cannot notify after Device revoke or pong after credential rotation', async (t) => {
+  const clock = new FakeClock()
+  const repository = new FakeCollaborationRepository()
+  const identity = await createUnifiedIdentityServerFixture({ repository, now: clock.now })
+  const authentication = identity.authentication
+  const hub = new CollaborationWebSocketHub()
+  const service = new CollaborationService({ repository, notifier: hub, now: clock.now })
+  const user = await identity.createUser('websocket-device-revoke-user')
+  const device = await identity.createDevice(user, 'websocket-device-revoke')
+  const registered = await service.registerAgent(user.actor, {
+    deviceId: device.device.deviceId,
+    displayName: 'WebSocket revocation Agent',
+    nodeType: 'desktop',
+    capabilities: ['agent-runtime'],
+    idempotencyKey: 'idem_websocket_device_revoke_agent'
+  })
+  assert.ok(registered.deviceCredential)
+  const server = createCollaborationHttpServer({
+    service,
+    authentication,
+    identities: identity.identities,
+    readiness: async () => true,
+    now: clock.now,
+    basePath: BASE_PATH
+  })
+  hub.attach(server, {
+    authentication,
+    basePath: BASE_PATH,
+    allowedOrigins: ['https://desktop.invalid'],
+    now: clock.now
+  })
+  t.after(async () => {
+    await hub.close()
+    await closeServer(server)
+    await identity.close()
+  })
+  const baseUrl = await listen(server)
+  const webSocket = new WebSocket(`${baseUrl.replace(/^http:/u, 'ws:')}/v1/events`, {
+    origin: 'https://desktop.invalid',
+    headers: { authorization: `${['Bear', 'er'].join('')} ${registered.deviceCredential}` }
+  })
+  const readyMessage = nextMessage(webSocket)
+  await opened(webSocket)
+  assert.equal((await readyMessage).type, 'connection.ready')
+
+  await identity.identities.revokeDevice(user.actor, device.device.deviceId,
+    'idem_websocket_device_revoke_current')
+  let receivedAfterRevoke = false
+  webSocket.on('message', () => { receivedAfterRevoke = true })
+  const closeCode = closed(webSocket)
+  await hub.notifyInboxAvailable({ kind: 'agent', id: registered.agent.agentId }, 11)
+  assert.equal(await closeCode, 1008)
+  assert.equal(receivedAfterRevoke, false)
+
+  const rotatingDevice = await identity.createDevice(user, 'websocket-credential-rotate')
+  const rotating = await service.registerAgent(user.actor, {
+    deviceId: rotatingDevice.device.deviceId,
+    displayName: 'WebSocket rotation Agent',
+    nodeType: 'desktop',
+    capabilities: ['agent-runtime'],
+    idempotencyKey: 'idem_websocket_credential_rotate_agent'
+  })
+  assert.ok(rotating.deviceCredential)
+  const rotatingSocket = new WebSocket(`${baseUrl.replace(/^http:/u, 'ws:')}/v1/events`, {
+    origin: 'https://desktop.invalid',
+    headers: { authorization: `${['Bear', 'er'].join('')} ${rotating.deviceCredential}` }
+  })
+  const rotatingReady = nextMessage(rotatingSocket)
+  await opened(rotatingSocket)
+  assert.equal((await rotatingReady).type, 'connection.ready')
+  await service.rotateAgentCredential(user.actor, {
+    agentId: rotating.agent.agentId,
+    expectedRevision: rotating.agent.revision,
+    idempotencyKey: 'idem_websocket_credential_rotate_current'
+  })
+  const rotatingCloseCode = closed(rotatingSocket)
+  rotatingSocket.send(JSON.stringify({
+    protocolVersion: '1.0',
+    type: 'connection.ping',
+    nonce: 'rotated-agent-ping',
+    sentAt: clock.now().toISOString()
+  }))
+  assert.equal(await rotatingCloseCode, 1008)
+})
+
 test('2.5 production HTTP keeps a Device-linked Agent with its OIDC owner, redacts denial, and cascades Device revocation', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()

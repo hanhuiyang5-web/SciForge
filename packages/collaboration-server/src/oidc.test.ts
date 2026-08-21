@@ -230,6 +230,51 @@ describe('OIDC RS256 access-token verifier', () => {
       }
     }))
     expect(new Set(failures)).toEqual(new Set(['oidc_key_not_found']))
+    expect(counts).toEqual({ discovery: 1, jwks: 2 })
+  })
+
+  it('bounds sequential unknown-kid refreshes globally and recovers a real rotation after cooldown', async () => {
+    const fixture = await openOidcFixture()
+    expect(() => verifierFor(fixture, { unknownKidRefreshCooldownMs: 99 })).toThrowError(
+      expect.objectContaining({ code: 'oidc_configuration_invalid' })
+    )
+    expect(() => verifierFor(fixture, { unknownKidRefreshCooldownMs: 60_001 })).toThrowError(
+      expect.objectContaining({ code: 'oidc_configuration_invalid' })
+    )
+    let currentTime = NOW.getTime()
+    const counts = { discovery: 0, jwks: 0 }
+    const countingFetch: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url === fixture.discoveryUrl) counts.discovery += 1
+      if (url === fixture.jwksUri) counts.jwks += 1
+      return fetch(input, init)
+    }
+    const verifier = verifierFor(fixture, {
+      fetch: countingFetch,
+      now: () => new Date(currentTime),
+      unknownKidRefreshCooldownMs: 1_000
+    })
+
+    await verifier.verifyAccessToken(fixture.mintToken({ now: NOW_SECONDS }))
+    expect(counts).toEqual({ discovery: 1, jwks: 1 })
+
+    for (let index = 0; index < 100; index += 1) {
+      const unknownKid = fixture.mintToken({
+        now: NOW_SECONDS,
+        header: { kid: `unknown-sequential-${index}` }
+      })
+      await expectOidcCode(verifier.verifyAccessToken(unknownKid), 'oidc_key_not_found')
+    }
+    expect(counts).toEqual({ discovery: 1, jwks: 2 })
+
+    fixture.rotateSigningKey({ keepPrevious: true })
+    const rotatedToken = fixture.mintToken({ now: NOW_SECONDS })
+    await expectOidcCode(verifier.verifyAccessToken(rotatedToken), 'oidc_key_not_found')
+    expect(counts).toEqual({ discovery: 1, jwks: 2 })
+
+    currentTime += 1_001
+    await expect(Promise.all(Array.from({ length: 12 }, () => verifier.verifyAccessToken(rotatedToken))))
+      .resolves.toHaveLength(12)
     expect(counts).toEqual({ discovery: 1, jwks: 3 })
   })
 

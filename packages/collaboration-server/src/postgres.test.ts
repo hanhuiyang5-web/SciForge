@@ -115,6 +115,31 @@ describe('PostgreSQL pool diagnostics', () => {
 })
 
 describe('PostgreSQL production transaction path', () => {
+  it.each(['40P01', '40001'] as const)('rolls back SQLSTATE %s and exposes only a retryable revision conflict', async (code) => {
+    const queries: string[] = []
+    const connection: SqlConnection = {
+      query: async (text) => {
+        queries.push(text)
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+    const sensitive = `POSTGRES_ROUTE_SECRET_${code}`
+
+    const error = await repository.transaction(async () => {
+      throw Object.assign(new Error(sensitive), { code, detail: sensitive })
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'revision_conflict', retryable: true })
+    expect(String(error)).not.toContain(sensitive)
+    expect(queries).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
   it('atomically materializes pending HumanNeeded expiry with revision and timestamp updates', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = []
     const connection: SqlConnection = {
@@ -541,6 +566,58 @@ describe('PostgreSQL production transaction path', () => {
     const lock = queries.find(({ text }) => text.includes('FROM sciforge_collaboration.agent_nodes'))
     expect(lock?.text).toContain('WHERE agent_id = $1 FOR UPDATE')
     expect(lock?.values).toEqual([agentRow.agent_id])
+  })
+
+  it('locks a credential row for transaction-time Agent bearer fencing', async () => {
+    const at = '2026-08-15T02:00:00.000Z'
+    const credentialRow = {
+      credential_id: 'crd_PostgresBearerLock1', kind: 'agent_device',
+      subject_user_id: 'usr_PostgresBearerLock1', subject_agent_id: 'agt_PostgresBearerLock1',
+      token_digest: Buffer.from('ab'.repeat(32), 'hex'), assurance: 'device', generation: 3,
+      created_at: new Date(at), expires_at: null, revoked_at: null
+    }
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const readQueries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('FROM sciforge_collaboration.credentials') && text.includes('FOR UPDATE')) {
+          return { rows: [credentialRow], rowCount: 1 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async (text, values = []) => {
+        readQueries.push({ text, values })
+        if (text.includes('FROM sciforge_collaboration.credentials')) {
+          return { rows: [credentialRow], rowCount: 1 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await expect(repository.getCredential(credentialRow.credential_id)).resolves.toMatchObject({
+      credentialId: credentialRow.credential_id,
+      subjectAgentId: credentialRow.subject_agent_id,
+      generation: credentialRow.generation
+    })
+    await repository.transaction(async (tx) => {
+      await expect(tx.getCredentialForUpdate(credentialRow.credential_id)).resolves.toMatchObject({
+        credentialId: credentialRow.credential_id,
+        subjectAgentId: credentialRow.subject_agent_id,
+        generation: credentialRow.generation
+      })
+    })
+
+    const lock = queries.find(({ text }) => text.includes('FROM sciforge_collaboration.credentials'))
+    expect(readQueries).toEqual([expect.objectContaining({ values: [credentialRow.credential_id] })])
+    expect(readQueries[0]?.text).not.toContain('FOR UPDATE')
+    expect(lock?.text).toContain('WHERE credential_id=$1 FOR UPDATE')
+    expect(lock?.values).toEqual([credentialRow.credential_id])
   })
 
   it('locks a User row before lifecycle and ownership-sensitive writes', async () => {

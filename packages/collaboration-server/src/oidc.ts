@@ -12,6 +12,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 3_000
 const DEFAULT_MAX_RESPONSE_BYTES = 128 * 1024
 const DEFAULT_CACHE_TTL_MS = 60_000
 const DEFAULT_MAX_CACHE_TTL_MS = 5 * 60_000
+const DEFAULT_UNKNOWN_KID_REFRESH_COOLDOWN_MS = 5_000
 const MAX_URL_LENGTH = 2_048
 const MAX_TOKEN_LENGTH = 16 * 1024
 const MAX_HEADER_SEGMENT_LENGTH = 2 * 1024
@@ -69,6 +70,7 @@ export type OidcAccessTokenVerifierOptions = Readonly<{
   maxResponseBytes?: number
   defaultCacheTtlMs?: number
   maxCacheTtlMs?: number
+  unknownKidRefreshCooldownMs?: number
   clockToleranceSeconds?: number
 }>
 
@@ -111,12 +113,14 @@ export class OidcAccessTokenVerifier {
   private readonly maxResponseBytes: number
   private readonly defaultCacheTtlMs: number
   private readonly maxCacheTtlMs: number
+  private readonly unknownKidRefreshCooldownMs: number
   private readonly clockToleranceSeconds: number
   private discoveryCache?: CacheEntry<DiscoveryDocument>
   private discoveryInFlight?: Promise<CacheEntry<DiscoveryDocument>>
   private jwksCache?: CacheEntry<JwksSnapshot>
   private jwksInFlight?: Promise<CacheEntry<JwksSnapshot>>
   private jwksGeneration = 0
+  private unknownKidRefreshAllowedAt = 0
 
   constructor(options: OidcAccessTokenVerifierOptions) {
     this.allowInsecureLoopback = options.allowInsecureLoopback === true
@@ -155,6 +159,12 @@ export class OidcAccessTokenVerifier {
       Math.min(DEFAULT_CACHE_TTL_MS, this.maxCacheTtlMs),
       0,
       this.maxCacheTtlMs
+    )
+    this.unknownKidRefreshCooldownMs = boundedInteger(
+      options.unknownKidRefreshCooldownMs,
+      DEFAULT_UNKNOWN_KID_REFRESH_COOLDOWN_MS,
+      100,
+      60_000
     )
     this.clockToleranceSeconds = boundedInteger(options.clockToleranceSeconds, 0, 0, 60)
   }
@@ -234,7 +244,16 @@ export class OidcAccessTokenVerifier {
     if (options.forceAfterGeneration === undefined && this.jwksCache && this.jwksCache.expiresAt > now) {
       return this.jwksCache
     }
+    // A real rotation refresh already in progress remains shareable. Only a
+    // new forced refresh is delayed, so random sequential kids cannot turn
+    // signature verification into an unbounded JWKS request stream.
     if (this.jwksInFlight) return this.jwksInFlight
+    if (options.forceAfterGeneration !== undefined && this.jwksCache && now < this.unknownKidRefreshAllowedAt) {
+      return this.jwksCache
+    }
+    if (options.forceAfterGeneration !== undefined) {
+      this.unknownKidRefreshAllowedAt = now + this.unknownKidRefreshCooldownMs
+    }
 
     const loading = (async () => {
       const discovery = await this.getDiscovery()
