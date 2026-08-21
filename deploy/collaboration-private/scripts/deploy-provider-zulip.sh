@@ -39,7 +39,7 @@ image_revision="$(docker image inspect --format '{{index .Config.Labels "org.ope
   || die "Runtime image revision label does not match the approved commit."
 
 # Image construction has no app/PostgreSQL side effect. Claim the same
-# one-time isolated-v5 proof as core-only before any live service mutation.
+# one-time current-schema proof (legacy v5 interface name) as core-only before any live service mutation.
 consume_postgres_v5_attestation "$image_id" "$expected_commit"
 
 deployment_complete=false

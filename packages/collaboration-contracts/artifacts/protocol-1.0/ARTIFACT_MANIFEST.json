@@ -170,9 +170,9 @@
       "sha256": "9d699821afa35d96a8e15dd3f3fd0750ad1a037477b862ab41ff1bc135b0fbd9"
     },
     {
-      "bytes": 522926,
+      "bytes": 523094,
       "path": "schemas/responses.schema.json",
-      "sha256": "bc4de12fef06c83237ed0c4ca82a21fed0d6c60eb6f6bebde2c9490cafdc1797"
+      "sha256": "9a1434bf682499933aa9247b7902ff621eaeb4f38b1f2c70495d38456a5e940c"
     },
     {
       "bytes": 19986,

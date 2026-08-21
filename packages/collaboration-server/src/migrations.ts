@@ -2,17 +2,18 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 5
+export const COLLABORATION_SCHEMA_VERSION = 6
 
 const COLLABORATION_MIGRATIONS = [
   '0001_collaboration_schema.sql',
   '0002_resource_refs.sql',
   '0003_task_progress.sql',
   '0004_coordination_contract.sql',
-  '0005_unified_identity_device_bindings.sql'
+  '0005_unified_identity_device_bindings.sql',
+  '0006_provider_identity_inbox.sql'
 ] as const
 
-const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5] as const
+const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6] as const
 
 const REQUIRED_TABLES = [
   'action_confirmations',
@@ -256,7 +257,9 @@ const REQUIRED_CONSTRAINTS = {
     'human_requests_source_valid',
     'human_requests_confirmable_action_shape'
   ],
+  inbox_cursors: ['inbox_cursors_recipient_kind_check'],
   inbox_messages: [
+    'inbox_messages_recipient_kind_check',
     'inbox_messages_disposition_valid',
     'inbox_messages_superseded_timestamp'
   ],
@@ -401,10 +404,12 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
     const constraints = await pool.query<{
       table_name: unknown
       constraint_name: unknown
+      definition: unknown
       update_action: unknown
       delete_action: unknown
     }>(
       `SELECT relation.relname AS table_name, constraint_record.conname AS constraint_name,
+              pg_get_constraintdef(constraint_record.oid, true) AS definition,
               CASE constraint_record.confupdtype
                 WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
                 WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
@@ -430,6 +435,7 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
     )))
     if (!hasRequiredNames(presentConstraints, REQUIRED_CONSTRAINTS) ||
         !hasRequiredNames(presentConstraints, REQUIRED_RELATIONAL_CONSTRAINTS)) return false
+    if (!hasProviderIdentityInboxConstraints(constraints.rows)) return false
     const presentForeignKeyActions = new Set(constraints.rows.map((row) => (
       `${String(row.table_name)}.${String(row.constraint_name)}.${String(row.update_action)}.${String(row.delete_action)}`
     )))
@@ -449,6 +455,26 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
   } catch {
     return false
   }
+}
+
+function hasProviderIdentityInboxConstraints(rows: readonly Readonly<{
+  table_name: unknown
+  constraint_name: unknown
+  definition: unknown
+}>[]): boolean {
+  const required = new Set(['agent', 'human_endpoint', 'provider_identity', 'user'])
+  return [
+    ['inbox_cursors', 'inbox_cursors_recipient_kind_check'],
+    ['inbox_messages', 'inbox_messages_recipient_kind_check']
+  ].every(([tableName, constraintName]) => {
+    const row = rows.find((candidate) => (
+      String(candidate.table_name) === tableName && String(candidate.constraint_name) === constraintName
+    ))
+    if (!row) return false
+    const values = [...String(row.definition).matchAll(/'([^']+)'/gu)].map((match) => match[1]!)
+    return values.length === required.size && new Set(values).size === required.size &&
+      values.every((value) => required.has(value))
+  })
 }
 
 function sameNumbers(actual: readonly number[], expected: readonly number[]): boolean {

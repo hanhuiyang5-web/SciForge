@@ -645,6 +645,10 @@
               "capabilities": {
                 "additionalProperties": false,
                 "properties": {
+                  "directMessages": {
+                    "const": true,
+                    "type": "boolean"
+                  },
                   "eventCursor": {
                     "const": true,
                     "type": "boolean"
@@ -678,7 +682,8 @@
                   "locatorRename",
                   "locatorMove",
                   "locatorDiscovery",
-                  "identityChallenge"
+                  "identityChallenge",
+                  "directMessages"
                 ],
                 "type": "object"
               },

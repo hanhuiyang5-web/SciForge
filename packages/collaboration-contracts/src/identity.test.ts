@@ -124,6 +124,7 @@ describe('strict Device contracts', () => {
     const canonicalBuffer = Buffer.from(canonical)
 
     expect(canonical).toBeInstanceOf(Uint8Array)
+    expect(Buffer.isBuffer(canonical)).toBe(false)
     expect(canonicalBuffer).toEqual(Buffer.from(expected, 'utf8'))
     expect(canonicalBuffer.toString('utf8').split('\n')).toHaveLength(6)
     expect(canonical.at(-1)).not.toBe(0x0a)
@@ -142,6 +143,14 @@ describe('strict Device contracts', () => {
     expect(deviceCreateRequestSchema.safeParse({ ...request, nonce: undefined }).success).toBe(false)
     expect(deviceCreateRequestSchema.safeParse({ ...request, idempotencyKey: undefined }).success).toBe(false)
     expect(deviceCreateRequestSchema.safeParse({ ...request, nonce: 'A'.repeat(42) }).success).toBe(false)
+    expect(deviceCreateRequestSchema.safeParse({
+      ...request,
+      signature: `${'A'.repeat(85)}B`
+    }).success).toBe(false)
+    expect(deviceCreateRequestSchema.safeParse({
+      ...request,
+      publicKeyJwk: { ...request.publicKeyJwk, x: `${'A'.repeat(42)}B` }
+    }).success).toBe(false)
     expect(deviceCreateRequestSchema.safeParse({
       ...request,
       publicKeyJwk: { ...request.publicKeyJwk, d: 'private-material-must-not-cross-contract' }

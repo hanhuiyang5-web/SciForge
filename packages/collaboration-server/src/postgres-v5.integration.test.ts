@@ -27,20 +27,28 @@ const describePostgresV5 = INTEGRATION_ENABLED ? describe : describe.skip
 const NOW = new Date('2026-08-18T12:00:00.000Z')
 const now = () => new Date(NOW)
 const nowEpochSeconds = Math.floor(NOW.getTime() / 1_000)
+const V5_BASELINE_MIGRATIONS = [
+  '0002_resource_refs.sql',
+  '0003_task_progress.sql',
+  '0004_coordination_contract.sql',
+  '0005_unified_identity_device_bindings.sql'
+] as const
 
 type MigrationEvidence = Readonly<{
   postgresVersion: string
   postgresVersionNumber: string
   versionsAtV1: number[]
   versionsAtV5: number[]
+  versionsAtV6: number[]
   readyAtV1: boolean
   readyAtV5: boolean
+  readyAtV6: boolean
   legacyAgentStatus: string
   legacyAgentDeviceId: unknown
   legacyCredentialRevoked: boolean
 }>
 
-describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () => {
+describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', () => {
   let adminPool: SqlPool | undefined
   let databasePool: SqlPool | undefined
   let repository: PostgresCollaborationRepository | undefined
@@ -82,9 +90,13 @@ describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () =
     const versionsAtV1 = await migrationVersions(databasePool)
     const readyAtV1 = await isCollaborationDatabaseReady(databasePool)
 
-    await runCollaborationMigrations(databasePool)
+    await applyMigrationFiles(databasePool, V5_BASELINE_MIGRATIONS)
     const versionsAtV5 = await migrationVersions(databasePool)
     const readyAtV5 = await isCollaborationDatabaseReady(databasePool)
+
+    await runCollaborationMigrations(databasePool)
+    const versionsAtV6 = await migrationVersions(databasePool)
+    const readyAtV6 = await isCollaborationDatabaseReady(databasePool)
     const legacyAgent = await databasePool.query<{
       status: unknown
       device_id: unknown
@@ -105,8 +117,10 @@ describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () =
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
       versionsAtV1,
       versionsAtV5,
+      versionsAtV6,
       readyAtV1,
       readyAtV5,
+      readyAtV6,
       legacyAgentStatus: String(legacy.status),
       legacyAgentDeviceId: legacy.device_id,
       legacyCredentialRevoked: legacy.credential_revoked === true
@@ -116,8 +130,9 @@ describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () =
     collaboration = new CollaborationService({ repository, now })
     authentication = new AuthenticationService(repository, now)
     process.stdout.write(
-      `[postgres-v5-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
-      `postgresVersionNumber=${migrationEvidence.postgresVersionNumber} migrations=${versionsAtV5.join(',')} ready=${String(readyAtV5)}\n`
+      `[postgres-v6-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
+      `postgresVersionNumber=${migrationEvidence.postgresVersionNumber} ` +
+      `v5Baseline=${versionsAtV5.join(',')} migrations=${versionsAtV6.join(',')} ready=${String(readyAtV6)}\n`
     )
   }, 120_000)
 
@@ -143,13 +158,15 @@ describePostgresV5('real PostgreSQL v1 -> v5 unified identity integration', () =
     }
   }, 120_000)
 
-  it('migrates an isolated v1 database to exact v5 readiness and revokes unmapped legacy Agents', async () => {
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(5)
+  it('migrates an isolated v1 database through the v5 baseline to exact v6 readiness', async () => {
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
     expect(migrationEvidence).toMatchObject({
       versionsAtV1: [1],
       versionsAtV5: [1, 2, 3, 4, 5],
+      versionsAtV6: [1, 2, 3, 4, 5, 6],
       readyAtV1: false,
-      readyAtV5: true,
+      readyAtV5: false,
+      readyAtV6: true,
       legacyAgentStatus: 'revoked',
       legacyAgentDeviceId: null,
       legacyCredentialRevoked: true
@@ -527,7 +544,7 @@ function integrationAdminConnectionString(): string {
 }
 
 function temporaryDatabaseName(): string {
-  return `sciforge_identity_v5_it_${process.pid}_${randomBytes(6).toString('hex')}`
+  return `sciforge_identity_v6_it_${process.pid}_${randomBytes(6).toString('hex')}`
 }
 
 function quotedDatabaseIdentifier(value: string): string {
@@ -540,6 +557,13 @@ async function migrationVersions(pool: SqlPool): Promise<number[]> {
     'SELECT version FROM sciforge_collaboration.schema_migrations ORDER BY version'
   )
   return result.rows.map((row) => Number(row.version))
+}
+
+async function applyMigrationFiles(pool: SqlPool, filenames: readonly string[]): Promise<void> {
+  for (const filename of filenames) {
+    const sql = await readFile(new URL(`../migrations/${filename}`, import.meta.url), 'utf8')
+    await pool.query(sql)
+  }
 }
 
 async function seedLegacyV1Agent(pool: SqlPool): Promise<void> {

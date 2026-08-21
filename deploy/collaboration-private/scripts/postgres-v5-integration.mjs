@@ -14,6 +14,14 @@ const PG_INDEX_URL = 'file:///app/node_modules/pg/esm/index.mjs'
 const MIGRATION_V1_URL = new URL(
   'file:///app/node_modules/@sciforge/collaboration-server/migrations/0001_collaboration_schema.sql'
 )
+const V5_BASELINE_MIGRATION_URLS = [
+  '0002_resource_refs.sql',
+  '0003_task_progress.sql',
+  '0004_coordination_contract.sql',
+  '0005_unified_identity_device_bindings.sql'
+].map((filename) => new URL(
+  `file:///app/node_modules/@sciforge/collaboration-server/migrations/${filename}`
+))
 const PASSWORD_FILE_ENV = 'SCIFORGE_POSTGRES_V5_ADMIN_PASSWORD_FILE'
 const SNAPSHOT_PASSWORD_FILE_ENV = 'SCIFORGE_POSTGRES_V5_SNAPSHOT_PASSWORD_FILE'
 const EXPECTED_COMMIT_ENV = 'SCIFORGE_COLLAB_CONTRACT_COMMIT'
@@ -34,7 +42,7 @@ const outcome = supportedInvocation
 
 if (!outcome.ok) {
   process.stderr.write(`${JSON.stringify({
-    event: 'postgres.v5.integration',
+    event: 'postgres.v6.integration',
     status: 'failed',
     stage,
     failureCode: outcome.failureCode
@@ -44,7 +52,7 @@ if (!outcome.ok) {
   process.stdout.write(`${JSON.stringify(outcome.snapshot)}\n`)
 } else {
   process.stdout.write(`${JSON.stringify({
-    event: 'postgres.v5.integration',
+    event: 'postgres.v6.integration',
     status: 'passed',
     node: process.version,
     postgresVersion: outcome.postgresVersion,
@@ -185,10 +193,15 @@ async function run() {
     const versionsAtV1 = await migrationVersions(databasePool)
     const readyAtV1 = await runtime.isCollaborationDatabaseReady(databasePool)
 
-    stage = 'migration_v1_to_v5'
-    await runtime.runCollaborationMigrations(databasePool)
+    stage = 'migration_v1_to_v5_baseline'
+    await applyMigrationUrls(databasePool, V5_BASELINE_MIGRATION_URLS)
     const versionsAtV5 = await migrationVersions(databasePool)
     const readyAtV5 = await runtime.isCollaborationDatabaseReady(databasePool)
+
+    stage = 'migration_v5_to_v6'
+    await runtime.runCollaborationMigrations(databasePool)
+    const versionsAtV6 = await migrationVersions(databasePool)
+    const readyAtV6 = await runtime.isCollaborationDatabaseReady(databasePool)
     const legacyAgent = await databasePool.query(
       `SELECT agent.status, agent.device_id,
               credential.revoked_at IS NOT NULL AS credential_revoked
@@ -200,11 +213,13 @@ async function run() {
     )
     const legacy = legacyAgent.rows[0]
     assert.ok(legacy)
-    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 5)
+    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 6)
     assert.deepEqual(versionsAtV1, [1])
     assert.deepEqual(versionsAtV5, [1, 2, 3, 4, 5])
+    assert.deepEqual(versionsAtV6, [1, 2, 3, 4, 5, 6])
     assert.equal(readyAtV1, false)
-    assert.equal(readyAtV5, true)
+    assert.equal(readyAtV5, false)
+    assert.equal(readyAtV6, true)
     assert.equal(legacy.status, 'revoked')
     assert.equal(legacy.device_id, null)
     assert.equal(legacy.credential_revoked, true)
@@ -232,9 +247,10 @@ async function run() {
     evidence = {
       postgresVersion: String(version.rows[0]?.server_version),
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
-      migrations: versionsAtV5,
+      migrations: versionsAtV6,
       checks: [
-        'v1_to_v5_readiness',
+        'v1_to_v5_to_v6_readiness',
+        'provider_identity_inbox_constraint',
         'legacy_agent_revocation',
         'concurrent_oidc_jit',
         'device_agent_lifecycle',
@@ -594,7 +610,13 @@ function createDeviceFixture(canonicalEnrollmentBytes, overrides) {
 }
 
 function temporaryDatabaseName() {
-  return `sciforge_identity_v5_it_${process.pid}_${randomBytes(6).toString('hex')}`
+  return `sciforge_identity_v6_it_${process.pid}_${randomBytes(6).toString('hex')}`
+}
+
+async function applyMigrationUrls(pool, migrationUrls) {
+  for (const migrationUrl of migrationUrls) {
+    await pool.query(await readFile(migrationUrl, 'utf8'))
+  }
 }
 
 function quotedDatabaseIdentifier(value) {

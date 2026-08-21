@@ -220,7 +220,7 @@ describe('PostgreSQL production transaction path', () => {
     }
   })
 
-  it('runs the ordered collaboration migrations through schema version 5', async () => {
+  it('runs the ordered collaboration migrations through schema version 6', async () => {
     const migrations: string[] = []
     const pool: SqlPool = {
       query: async (text) => { migrations.push(text); return { rows: [], rowCount: 0 } },
@@ -230,8 +230,8 @@ describe('PostgreSQL production transaction path', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(5)
-    expect(migrations).toHaveLength(5)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
+    expect(migrations).toHaveLength(6)
     expect(migrations[1]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.resource_refs')
     expect(migrations[1]).toContain('created_by_user_id text NOT NULL')
     expect(migrations[1]).toContain('CONSTRAINT resource_refs_open_url_safe')
@@ -318,6 +318,10 @@ describe('PostgreSQL production transaction path', () => {
     expect(migrations[4]).toContain("credential.kind = 'agent_device'")
     expect(migrations[4]).toContain("agent.status = 'active'")
     expect(migrations[4]).toContain('VALUES (5)')
+    expect(migrations[5]).toContain('inbox_cursors_recipient_kind_check')
+    expect(migrations[5]).toContain('inbox_messages_recipient_kind_check')
+    expect(migrations[5]).toContain("'provider_identity'")
+    expect(migrations[5]).toContain('VALUES (6)')
   })
 
   it('reconciles representative legacy TaskResult fixtures deterministically', () => {

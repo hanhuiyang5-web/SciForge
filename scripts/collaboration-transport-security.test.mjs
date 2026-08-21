@@ -29,7 +29,8 @@ const FAKE_PROVIDER_DIRECTORY = Object.freeze({
       locatorRename: true,
       locatorMove: true,
       locatorDiscovery: true,
-      identityChallenge: true
+      identityChallenge: true,
+      directMessages: true
     },
     onboarding: { realmLabel: 'Realm', accountLabel: 'Account', containerLabel: 'Container', topicLabel: 'Topic' },
     limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }

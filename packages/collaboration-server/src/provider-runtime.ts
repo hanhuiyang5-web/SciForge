@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import {
   CURRENT_PROTOCOL_VERSION,
   providerDiagnosticSchema,
+  providerDirectRecipientSchema,
   providerLocatorSchema,
   providerSendResultSchema,
   redactCredentials,
@@ -34,7 +35,7 @@ import type { StoredEndpoint, StoredInboxMessage } from './model.js'
 import type { SqlPool } from './postgres.js'
 import type { CollaborationRepository } from './repository.js'
 import { ProviderRuntimeStore, type ProviderDeliveryState } from './provider-runtime-store.js'
-import { CollaborationService } from './service.js'
+import { CollaborationService, providerIdentityInboxId } from './service.js'
 
 const MAX_PROVIDER_CONFIG_BYTES = 256 * 1024
 const MAX_SECRET_BYTES = 64 * 1024
@@ -63,9 +64,14 @@ type ProviderRuntimePersistence = Pick<ProviderRuntimeStore,
   | 'recordDelivery'
   | 'recordDiagnostic'
   | 'listPendingEndpointIds'
+  | 'listPendingProviderIdentityIds'
 >
 
 type ProviderRuntimeService = Pick<CollaborationService,
+  | 'verifyPairingFromProvider'
+  | 'enqueueProviderCommandResult'
+  | 'pullProviderIdentityInbox'
+  | 'ackProviderIdentityInboxMessage'
   | 'acceptPersonalProviderMessage'
   | 'acceptProjectInput'
   | 'answerHumanNeeded'
@@ -236,7 +242,9 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       if (event.type === 'provider.message.created') {
         await this.handleMessageCreated(event, claimEventId)
       } else if (event.type === 'provider.challenge.responded') {
-        await this.rejectLegacyProviderChallenge()
+        await this.rejectLegacyProviderChallenge(event, claimEventId)
+      } else if (event.type === 'provider.challenge.invalid') {
+        await this.rejectLegacyProviderChallenge(event, claimEventId)
       } else if (event.type === 'provider.human_answer.responded') {
         await this.handleHumanAnswerResponded(event, claimEventId)
       } else if (event.type === 'provider.locator.changed') {
@@ -308,9 +316,21 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     })
   }
 
-  private rejectLegacyProviderChallenge(): never {
-    throw new CollaborationServiceError('permission_denied',
+  private async rejectLegacyProviderChallenge(
+    event: Extract<ProviderEvent, { type: 'provider.challenge.responded' | 'provider.challenge.invalid' }>,
+    claimEventId: string
+  ): Promise<void> {
+    const error = new CollaborationServiceError('permission_denied',
       'Legacy Provider identity challenges are disabled; binding confirmation requires a trusted service actor boundary.')
+    await this.service.recordRejectedBoundary({
+      kind: 'system',
+      actorKey: `provider:${event.provider}:${stableDigest(event.eventId)}`
+    }, `provider.${event.type}`, error).catch(() => undefined)
+    await this.service.enqueueProviderCommandResult({
+      identity: event.identity,
+      providerEventId: claimEventId,
+      result: 'invalid_or_expired'
+    })
   }
 
   private async handleHumanAnswerResponded(
@@ -339,6 +359,11 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
           if (signal.aborted) break
           await this.flushEndpoint(endpointId)
         }
+        const directRecipientIds = await this.store.listPendingProviderIdentityIds()
+        for (const recipientId of directRecipientIds) {
+          if (signal.aborted) break
+          await this.flushProviderIdentity(recipientId)
+        }
       } catch (error) {
         if (!signal.aborted) await this.recordRuntimeFailure('gateway', error)
       }
@@ -364,7 +389,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         })
         continue
       }
-      if (request.locator.provider !== endpoint.provider || request.locator.realmId !== endpoint.realmId) {
+      if (!('locator' in request) || request.locator.provider !== endpoint.provider || request.locator.realmId !== endpoint.realmId) {
         await this.recordRuntimeFailure(endpoint.provider,
           new CollaborationServiceError('permission_denied', 'Outbound locator does not match its verified endpoint realm.'))
         return
@@ -386,6 +411,48 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       }
       if (result.type === 'provider.send.succeeded' || !result.retryable) {
         await this.ackDeliveredMessage(actor, message)
+        continue
+      }
+      return
+    }
+  }
+
+  private async flushProviderIdentity(recipientId: string): Promise<void> {
+    const page = await this.service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    for (const message of page.messages) {
+      const request = outboundRequest(message, Number.MAX_SAFE_INTEGER)
+      if (!request || !('recipient' in request) || providerIdentityInboxId(request.recipient) !== recipientId) {
+        await this.recordRuntimeFailure('gateway',
+          new CollaborationServiceError('validation_failed', 'Direct provider outbox target is invalid.'))
+        return
+      }
+      const provider = this.providers.get(request.recipient.provider)
+      if (!provider) return
+      const prior = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
+      if (prior && !deliveryAttemptDue(prior, this.timestamp())) {
+        if (prior.terminal) {
+          await this.service.ackProviderIdentityInboxMessage({
+            recipientId,
+            inboxMessageId: message.messageId,
+            sequence: message.sequence
+          })
+          continue
+        }
+        return
+      }
+      const result = prior?.result.type === 'provider.send.succeeded'
+        ? prior.result
+        : providerSendResultSchema.parse(await provider.send(request))
+      const persisted = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
+      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount && result.type === 'provider.send.failed')) {
+        await this.store.recordDelivery(request.recipient.provider, request.clientMessageId, result)
+      }
+      if (result.type === 'provider.send.succeeded' || !result.retryable) {
+        await this.service.ackProviderIdentityInboxMessage({
+          recipientId,
+          inboxMessageId: message.messageId,
+          sequence: message.sequence
+        })
         continue
       }
       return
@@ -611,6 +678,18 @@ async function providerHttp(request: HumanEndpointProviderHttpRequest): Promise<
 
 function outboundRequest(message: StoredInboxMessage, maxTextLength: number): ProviderSendRequest | undefined {
   const payload = message.payload
+  if (message.messageType === 'provider.command.result.outbound' &&
+      payload.type === 'provider.command.result.outbound' && typeof payload.text === 'string') {
+    const recipient = providerDirectRecipientSchema.safeParse(payload.recipient)
+    if (!recipient.success) return undefined
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.message',
+      recipient: recipient.data,
+      clientMessageId: message.messageId,
+      text: payload.text
+    }
+  }
   if (message.messageType !== 'projection.message.outbound' &&
       message.messageType !== 'provider.notification.outbound') return undefined
   if ((payload.type !== 'projection.message.outbound' && payload.type !== 'provider.notification.outbound') ||
@@ -645,6 +724,7 @@ function eventRealmId(event: ProviderEvent): string | undefined {
     case 'provider.message.deleted':
     case 'provider.message.reaction':
     case 'provider.challenge.responded':
+    case 'provider.challenge.invalid':
     case 'provider.human_answer.responded': return event.identity.realmId
     case 'provider.locator.changed': return event.currentLocator.realmId
     case 'provider.lifecycle.changed': return undefined
@@ -660,6 +740,7 @@ function eventDedupeKey(event: ProviderEvent): string {
     case 'provider.human_answer.responded': return event.providerMessageId
     case 'provider.locator.changed':
     case 'provider.challenge.responded':
+    case 'provider.challenge.invalid':
     case 'provider.lifecycle.changed': return event.eventId
   }
 }

@@ -498,7 +498,7 @@ export type StoredActionConfirmation = {
 }
 
 export type InboxRecipient = {
-  kind: 'user' | 'human_endpoint' | 'agent'
+  kind: 'user' | 'human_endpoint' | 'agent' | 'provider_identity'
   id: string
 }
 

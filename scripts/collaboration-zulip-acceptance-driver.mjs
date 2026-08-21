@@ -35,16 +35,13 @@ export const acceptanceEnvironmentContract = Object.freeze({
     'SCIFORGE_COLLAB_ZULIP_SECRET_OUTPUT_DIR'
   ]),
   optionalCommon: Object.freeze([
-    'SCIFORGE_COLLAB_ZULIP_PAIRING_TOPIC',
     'SCIFORGE_COLLAB_ZULIP_ORIGIN',
     'SCIFORGE_COLLAB_ZULIP_TIMEOUT_MS',
     'SCIFORGE_COLLAB_ZULIP_NEGATIVE_WINDOW_MS'
   ]),
   perParticipant: Object.freeze([
     'SCIFORGE_COLLAB_ZULIP_<SLOT>_EMAIL',
-    'SCIFORGE_COLLAB_ZULIP_<SLOT>_API_KEY or ..._API_KEY_FILE',
-    'SCIFORGE_COLLAB_ZULIP_<SLOT>_PAIRING_STREAM (optional; defaults to the Project stream)',
-    'SCIFORGE_COLLAB_ZULIP_<SLOT>_PAIRING_TOPIC (optional; defaults to the common pairing topic)'
+    'SCIFORGE_COLLAB_ZULIP_<SLOT>_API_KEY or ..._API_KEY_FILE'
   ]),
   optionalExistingBinding: Object.freeze([
     'SCIFORGE_COLLAB_ZULIP_<SLOT>_USER_ID',
@@ -261,7 +258,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
   const realmUrl = normalizedBaseUrl(environment('SCIFORGE_COLLAB_ZULIP_REALM_URL'), 'ACCEPTANCE_CONFIGURATION_MISSING')
   const stream = required(environment('SCIFORGE_COLLAB_ZULIP_STREAM'))
   const botEmail = required(environment('SCIFORGE_COLLAB_ZULIP_BOT_EMAIL')).toLocaleLowerCase('en-US')
-  const pairingTopic = environment('SCIFORGE_COLLAB_ZULIP_PAIRING_TOPIC')?.trim() || 'SciForge 配对'
   const origin = environment('SCIFORGE_COLLAB_ZULIP_ORIGIN')?.trim()
   const timeoutMs = boundedInteger(environment('SCIFORGE_COLLAB_ZULIP_TIMEOUT_MS'), DEFAULT_TIMEOUT_MS, 5_000, 600_000)
   const negativeWindowMs = boundedInteger(
@@ -428,16 +424,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       fail('ACCEPTANCE_STREAM_MEMBERSHIP_INVALID')
     }
     safeReport(report, reportLabel)
-  }
-
-  async function verifyPrivatePairingStream(state) {
-    const currentUserId = await currentZulipUserId(state)
-    await verifyPrivateStream(
-      state,
-      state.pairingStream,
-      [currentUserId],
-      'pairing.stream-private.verified'
-    )
   }
 
   async function verifyZulipSourceMessage(state, topic, providerMessageId) {
@@ -738,33 +724,11 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     ].some((name) => Boolean(environment(name)))
   }
 
-  async function performPairing(slot, common) {
-    const begun = await collaborationCommand(undefined, {
-      type: 'pairing.begin',
-      provider: 'zulip',
-      realmId: realmUrl,
-      requestedDisplayName: `验收用户 ${slot}`,
-      idempotencyKey: idempotency('pairing_begin')
-    })
-    if (begun.type !== 'pairing.begun') fail('COLLABORATION_RESPONSE_INVALID')
-    await sendZulipMessage(
-      common,
-      common.pairingTopic,
-      `sciforge-pair ${begun.challengeId} ${begun.challengeCode}`,
-      common.pairingStream
-    )
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < timeoutMs) {
-      const response = await collaborationCommand(undefined, {
-        type: 'pairing.redeem',
-        pollSecret: begun.pollSecret,
-        idempotencyKey: idempotency('pairing_redeem')
-      })
-      if (response.type === 'pairing.verified') return response
-      if (response.type !== 'pairing.pending') fail('COLLABORATION_RESPONSE_INVALID')
-      await sleep(Math.max(500, response.retryAfterSeconds * 1_000))
-    }
-    fail('PAIRING_TIMEOUT')
+  async function performPairing() {
+    // The unified A service never performs anonymous challenge/redeem or issues
+    // opaque User credentials. Real binding requires an OIDC User plus the
+    // separately authenticated D-to-A confirmation adapter.
+    fail('OIDC_BINDING_REQUIRED')
   }
 
   async function bindExistingParticipant(slot, common) {
@@ -822,9 +786,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
   }
 
   async function bindFreshParticipant(slot, common) {
-    await validateSecretOutputDirectory()
-    await verifyPrivatePairingStream(common)
-    const verified = await performPairing(slot, common)
+    const verified = await performPairing()
     const userCredentialFile = await persistCredential(slot, 'user', 1, verified.userCredential)
     const registered = await collaborationCommand(verified.userCredential, {
       type: 'agent.register',
@@ -880,8 +842,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       slot,
       email: required(environment(`${prefix}_EMAIL`)),
       zulipApiKey: await readSecret(environment, `${prefix}_API_KEY`),
-      pairingStream: environment(`${prefix}_PAIRING_STREAM`)?.trim() || stream,
-      pairingTopic: environment(`${prefix}_PAIRING_TOPIC`)?.trim() || pairingTopic,
       agentInbox: { pullCursor: 0, ackedSequence: 0, ids: new Set(), messages: [], consumed: new Set() },
       userInbox: { pullCursor: 0, ackedSequence: 0, ids: new Set(), messages: [], consumed: new Set() },
       online: false
@@ -1808,10 +1768,8 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     if (!state.revokedCredentials.has('user') || !state.revokedCredentials.has('agent')) {
       fail('CREDENTIAL_RECOVERY_PRECONDITION_FAILED')
     }
-    await validateSecretOutputDirectory()
-    await verifyPrivatePairingStream(state)
     const nextGeneration = state.secretGeneration + 1
-    const verified = await performPairing(participant.slot, state)
+    const verified = await performPairing()
     if (verified.userId !== participant.userId || verified.humanEndpointId !== participant.endpointId) {
       fail('PAIRING_IDENTITY_CHANGED')
     }

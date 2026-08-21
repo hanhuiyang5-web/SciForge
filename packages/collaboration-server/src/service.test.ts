@@ -9,7 +9,7 @@ import { toInboxMessage, toProjectCapabilityDirectory, toTask } from './contract
 import { stableDigest } from './crypto.js'
 import { IdentityService } from './identity-service.js'
 import type { StoredActionConfirmation, StoredConfirmableAction } from './model.js'
-import { CollaborationService } from './service.js'
+import { CollaborationService, providerIdentityInboxId } from './service.js'
 import { createDeviceFixture } from '../../../test-fixtures/collaboration/unified-identity/device-fixture.mjs'
 
 const at = new Date('2026-08-15T02:00:00.000Z')
@@ -159,6 +159,91 @@ function seedApprovedConfirmation(
 }
 
 describe('CollaborationService canonical transactions', () => {
+  it('queues idempotent provider command results without exposing challenge details', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = {
+      type: 'provider_identity' as const,
+      provider: 'zulip',
+      realmId: 'realm-hk',
+      providerUserId: 'provider-direct-user'
+    }
+    // Provider opaque IDs may be shorter than the public command idempotency-key
+    // minimum. The service must derive a bounded key instead of persisting this
+    // upstream identifier verbatim.
+    const input = { identity, providerEventId: 'evt-1', result: 'invalid_or_expired' as const }
+
+    await service.enqueueProviderCommandResult(input)
+    await service.enqueueProviderCommandResult(input)
+
+    const recipient = {
+      kind: 'provider_identity' as const,
+      id: providerIdentityInboxId({
+        type: 'provider_direct_recipient',
+        provider: identity.provider,
+        realmId: identity.realmId,
+        providerUserId: identity.providerUserId
+      })
+    }
+    const messages = await repository.pullInbox(recipient, 0, 20, at.toISOString())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      recipient,
+      messageType: 'provider.command.result.outbound',
+      payload: {
+        type: 'provider.command.result.outbound',
+        result: 'invalid_or_expired',
+        text: '绑定码无效或已失效，请重新生成。',
+        recipient: {
+          type: 'provider_direct_recipient',
+          provider: 'zulip',
+          realmId: 'realm-hk',
+          providerUserId: 'provider-direct-user'
+        }
+      }
+    })
+    expect(JSON.stringify(messages)).not.toContain('challenge')
+    expect(JSON.stringify([...repository.state.receipts.values()])).not.toContain(input.providerEventId)
+  })
+
+  it('pulls provider command results after the durable ack cursor beyond one page', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = {
+      type: 'provider_identity' as const,
+      provider: 'zulip',
+      realmId: 'realm-hk',
+      providerUserId: 'provider-direct-paged-user'
+    }
+    const recipientId = providerIdentityInboxId({
+      type: 'provider_direct_recipient',
+      provider: identity.provider,
+      realmId: identity.realmId,
+      providerUserId: identity.providerUserId
+    })
+    for (let index = 1; index <= 101; index += 1) {
+      await service.enqueueProviderCommandResult({
+        identity,
+        providerEventId: `provider-event-direct-page-${index}`,
+        result: 'invalid_or_expired'
+      })
+    }
+
+    const firstPage = await service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    expect(firstPage.messages).toHaveLength(100)
+    for (const message of firstPage.messages) {
+      await service.ackProviderIdentityInboxMessage({
+        recipientId,
+        inboxMessageId: message.messageId,
+        sequence: message.sequence
+      })
+    }
+
+    const nextPage = await service.pullProviderIdentityInbox({ recipientId, limit: 100 })
+    expect(nextPage.ackedSequence).toBe(100)
+    expect(nextPage.messages.map((message) => message.sequence)).toEqual([101])
+  })
+
   it('binds a provider identity to an OIDC User without opaque credentials and rejects legacy pairing', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

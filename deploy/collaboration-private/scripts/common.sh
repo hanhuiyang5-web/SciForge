@@ -304,20 +304,20 @@ consume_postgres_v5_attestation() {
 
   validate_commit "$expected_commit"
   [[ "$candidate_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] \
-    || die "The PostgreSQL v5 attestation candidate image ID is invalid."
+    || die "The PostgreSQL current-schema attestation candidate image ID is invalid."
   [[ -f "$attestation_path" && ! -L "$attestation_path" \
       && "$(stat -c '%u:%g:%a' "$attestation_path")" == 0:0:600 ]] \
-    || die "A root-only PostgreSQL v5 integration attestation is required before deployment."
+    || die "A root-only PostgreSQL current-schema integration attestation is required before deployment."
   [[ ! -e "$claimed_path" && ! -L "$claimed_path" ]] \
-    || die "The PostgreSQL v5 attestation claim path already exists."
+    || die "The PostgreSQL current-schema attestation claim path already exists."
   mv -- "$attestation_path" "$claimed_path"
   [[ -f "$claimed_path" && ! -L "$claimed_path" \
       && "$(stat -c '%u:%g:%a' "$claimed_path")" == 0:0:600 ]] \
-    || die "The claimed PostgreSQL v5 attestation is unsafe."
+    || die "The claimed PostgreSQL current-schema attestation is unsafe."
 
   mapfile -t lines < "$claimed_path"
   (( ${#lines[@]} == 11 )) \
-    || die "The PostgreSQL v5 attestation has an invalid field set."
+    || die "The PostgreSQL current-schema attestation has an invalid field set."
   [[ "${lines[0]}" == schemaVersion=1 \
       && "${lines[1]}" == status=passed \
       && "${lines[2]}" == "contractCommit=$expected_commit" \
@@ -329,7 +329,7 @@ consume_postgres_v5_attestation() {
       && "${lines[8]}" =~ ^verifierScriptSha256=[0-9a-f]{64}$ \
       && "${lines[9]}" =~ ^verifiedEpoch=[0-9]{10,}$ \
       && "${lines[10]}" =~ ^verifiedAtUtc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-    || die "The PostgreSQL v5 attestation is malformed or belongs to another candidate."
+    || die "The PostgreSQL current-schema attestation is malformed or belongs to another candidate."
 
   release_manifest_digest="$(sha256sum "$BUNDLE_DIR/RELEASE_MANIFEST.json" | awk '{print $1}')"
   bundle_sums_digest="$(sha256sum "$BUNDLE_DIR/SHA256SUMS" | awk '{print $1}')"
@@ -348,12 +348,12 @@ consume_postgres_v5_attestation() {
   now_epoch="$(date -u +%s)"
   expected_utc="$(date -u -d "@$verified_epoch" +%Y-%m-%dT%H:%M:%SZ)"
   [[ "$now_epoch" =~ ^[0-9]{10,}$ && "$expected_utc" == "$verified_utc" ]] \
-    || die "The PostgreSQL v5 attestation time is invalid."
+    || die "The PostgreSQL current-schema attestation time is invalid."
   (( verified_epoch <= now_epoch + 60 && now_epoch - verified_epoch <= 1800 )) \
-    || die "The PostgreSQL v5 attestation is expired or from the future."
+    || die "The PostgreSQL current-schema attestation is expired or from the future."
 
   rm -f -- "$claimed_path"
-  echo "Consumed one-time PostgreSQL v5 integration attestation for $expected_commit."
+  echo "Consumed one-time PostgreSQL current-schema integration attestation for $expected_commit."
 }
 
 validate_release_bundle() {

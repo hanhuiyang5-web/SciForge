@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { isCollaborationDatabaseReady } from './migrations.js'
+import {
+  COLLABORATION_SCHEMA_VERSION,
+  isCollaborationDatabaseReady,
+  runCollaborationMigrations
+} from './migrations.js'
 import type { SqlPool } from './postgres.js'
 
 const REQUIRED_TABLES = [
@@ -117,7 +121,9 @@ const REQUIRED_CONSTRAINTS = {
     'human_requests_source_valid',
     'human_requests_confirmable_action_shape'
   ],
+  inbox_cursors: ['inbox_cursors_recipient_kind_check'],
   inbox_messages: [
+    'inbox_messages_recipient_kind_check',
     'inbox_messages_disposition_valid',
     'inbox_messages_superseded_timestamp'
   ],
@@ -210,6 +216,7 @@ type ColumnRow = { table_name: unknown; column_name: unknown; data_type: unknown
 type ConstraintRow = {
   table_name: unknown
   constraint_name: unknown
+  definition?: unknown
   update_action?: unknown
   delete_action?: unknown
 }
@@ -230,10 +237,10 @@ describe('collaboration database readiness', () => {
   })
 
   it.each([
-    { label: 'a missing migration', versions: [1, 2, 3, 5] },
-    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6] },
-    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 4, 5] },
-    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 'not-a-version'] }
+    { label: 'a missing migration', versions: [1, 2, 3, 4, 5] },
+    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7] },
+    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 5, 6] },
+    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 'not-a-version'] }
   ])('rejects $label', async ({ versions }) => {
     await expect(isCollaborationDatabaseReady(poolFor({ versions }))).resolves.toBe(false)
   })
@@ -278,6 +285,15 @@ describe('collaboration database readiness', () => {
     }
   )
 
+  it('rejects legacy inbox recipient constraints that omit provider_identity', async () => {
+    const constraints = requiredConstraintRows().map((row) => (
+      row.constraint_name === 'inbox_messages_recipient_kind_check'
+        ? { ...row, definition: "CHECK (recipient_kind IN ('user', 'human_endpoint', 'agent'))" }
+        : row
+    ))
+    await expect(isCollaborationDatabaseReady(poolFor({ constraints }))).resolves.toBe(false)
+  })
+
   it.each([
     { tableName: 'tasks', constraintName: 'tasks_assignee_owner_fk', updateAction: 'NO ACTION' },
     { tableName: 'agent_capability_profiles', constraintName: 'agent_capability_profiles_owner_fk', updateAction: 'CASCADE' }
@@ -308,12 +324,35 @@ describe('collaboration database readiness', () => {
   )
 })
 
+describe('collaboration migrations', () => {
+  it('preserves A migrations 1-5 and installs provider-identity inbox support as version 6', async () => {
+    const statements: string[] = []
+    const pool: SqlPool = {
+      query: async (text) => {
+        statements.push(text)
+        return { rows: [], rowCount: 0 }
+      },
+      connect: async () => { throw new Error('Migrations use pool queries directly') },
+      end: async () => undefined
+    }
+
+    await runCollaborationMigrations(pool)
+
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
+    expect(statements).toHaveLength(6)
+    expect(statements[1]).toContain('resource_refs')
+    expect(statements[1]).not.toContain("'provider_identity'")
+    expect(statements[5]).toContain("'provider_identity'")
+    expect(statements[5]).toContain('VALUES (6)')
+  })
+})
+
 function poolFor(state: ReadyState = {}): SqlPool {
   return {
     query: async (text) => {
       if (text.includes('schema_migrations')) {
         if (state.failQuery === 'versions') throw new Error('private migration query detail')
-        const rows = (state.versions ?? [1, 2, 3, 4, 5]).map((version) => ({ version }))
+        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6]).map((version) => ({ version }))
         return { rows, rowCount: rows.length }
       }
       if (text.includes('information_schema.tables')) {
@@ -366,7 +405,11 @@ function requiredConstraintRows(): ConstraintRow[] {
               constraintName as keyof (typeof REQUIRED_FOREIGN_KEY_ACTIONS)[keyof typeof REQUIRED_FOREIGN_KEY_ACTIONS]
             ]
           : undefined
-        return { table_name: tableName, constraint_name: constraintName, ...actions }
+        const definition = constraintName === 'inbox_cursors_recipient_kind_check' ||
+          constraintName === 'inbox_messages_recipient_kind_check'
+          ? "CHECK (recipient_kind IN ('user', 'human_endpoint', 'agent', 'provider_identity'))"
+          : undefined
+        return { table_name: tableName, constraint_name: constraintName, definition, ...actions }
       })
     ))
   ))

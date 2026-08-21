@@ -171,6 +171,8 @@ A 不暴露可枚举的全局 User/Agent 目录。当前阶段的 Project 入组
 
 Zulip 绑定由已登录 OIDC User 调用 `POST /v1/integrations/zulip/bindings` 发起并取得五分钟、一次性的 `bindingCode`，D 负责解析 `/bind CODE` 和验证 Zulip 事件。D 只可通过受信 confirm adapter 把验证后的 Realm/User/event 上下文交给 A；A 从绑定请求取得目标 `userId`，confirm 不接受匿名调用、不创建 User。`pairing.begin/redeem` 仅作为同一状态机的已认证兼容 command，不再匿名 bootstrap，也不返回 User bearer。
 
+Provider runtime 可将绑定命令的安全结果写入 provider-identity durable inbox，并通过 direct-message delivery ledger 执行 retry、reconciliation 和 ACK，不由 Bot parser 旁路发送。在 D→A 受信 confirm adapter 未配置时，runtime 对 legacy `provider.challenge.*` 事件始终 fail closed，只会持久化脱敏失败回复；它不验证 legacy challenge、不创建 User、不签发 opaque User credential。成功绑定仍只能经过上述受信 confirm 边界。
+
 个人 Topic 绑定到固定 projection 与 Agent，顺序 inbox/outbox、receipt 和 provider cursor 都持久化在 PostgreSQL。Topic 整体重命名或移动时，provider adapter 保留稳定 topic identity，云端先排入 revision 更新通知，再继续同一个桌面 Session；歧义、部分移动、冲突或旧 revision 都会 fail closed。
 
 HumanNeeded 通知包含以下无凭据回复模板，云端会再次验证 endpoint、Project binding、目标用户、assurance、revision 与 TTL：

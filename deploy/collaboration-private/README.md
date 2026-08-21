@@ -349,7 +349,7 @@ sudo "$current_edge_release/deploy/collaboration-private/scripts/disable-a-https
 
 `deploy.sh` 和 `deploy-provider-zulip.sh` 都会在任何 app/数据库变更前拒绝仍存在的 edge、任何宿主或 Docker 443 暴露，以及被其他容器污染的 `private-edge` 网络。不得绕过这一步让动态 `app` DNS 提前指向未验证的新候选。
 
-随后使用新 `a-https-test-edge` bundle 运行 PostgreSQL v5 隔离门禁和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
+随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v6 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -394,7 +394,7 @@ external_sha="$(node -e '
 
 该探针通过公共 DNS 精确校验 A/AAAA，直连 `47.76.230.118:443` 验证受信任 TLS、不可缓存的 exact commit 响应头、HTTP 与 WSS 拒绝边界，并从该独立观察点补充验证 80、8080、8787、5432 不可达；ECS 本地门禁同时以宿主 listener 和 Docker PortBindings 证明这些后端端口没有公网绑定，因此不会只依赖外部网络自身的出口策略。它不会声称 OIDC、Provider、成功认证 WSS 或业务 E2E 已完成。首次启动失败后，从该候选所属的 fixed release 运行零参数 `disable-a-https-test-edge.sh` 删除停止的精确候选，再重试。
 
-回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state；若还需回退 app，仅在 schema 兼容已确认后，从目标旧 fixed release 重新运行它自己的 v5 attestation 与 `deploy.sh`。只有当目标旧 release 本身也是 `a-https-test-edge` 且重新通过本地和外部门禁时才可重开 443；旧的 loopback-only release 只能保持 443 关闭。绝不删除 collaboration volume、database network 或固定 ACME state。
+回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state；若还需回退 app，仅在 schema 兼容已确认后，从目标旧 fixed release 重新运行它自己的 release-derived PostgreSQL attestation 与 `deploy.sh`。只有当目标旧 release 本身也是 `a-https-test-edge` 且重新通过本地和外部门禁时才可重开 443；旧的 loopback-only release 只能保持 443 关闭。绝不删除 collaboration volume、database network 或固定 ACME state。
 
 ### 显式启用 `cloud-test` + `login-test` OIDC 测试 edge
 
@@ -406,7 +406,7 @@ external_sha="$(node -e '
 
 A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。它只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络。local verifier 要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
 
-切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的 PostgreSQL v5 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
+切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v6 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -558,9 +558,9 @@ sudo deploy/collaboration-private/scripts/verify-backup-restore.sh \
 
 本地备份只是第一层。每份 dump 和 sidecar 还应复制到加密的异机存储。灾难恢复仍应使用新的 volume；不得直接覆盖唯一生产 volume。
 
-### PostgreSQL v5 隔离业务语义验收
+### PostgreSQL 当前 schema v6 隔离业务语义验收
 
-固定 v5 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收：
+固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。脚本文件名及 attestation/manifest 的 `V5` 标识为兼容既有固定发布接口而保留；门禁实际从 release migration 清单推导当前版本，并在本 release 要求 schema v6：
 
 ```bash
 sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
@@ -571,9 +571,9 @@ sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
 
 脚本与 core/provider 部署共享同一个非阻塞 deploy lock，并在锁内先执行候选 release 的 `docker compose build app`；这一步只构建带固定 revision 的候选 image，不停止或替换当前 app、不启动或重启 PostgreSQL，也不迁移生产库。当前 live app 可以仍是上一固定 commit，脚本会记录它的 container ID、host PID、RestartCount、image 和 revision，并要求前后完全不变。它还要求 PostgreSQL 只连接 `internal=true` 的专用 Compose network 且没有宿主机端口，然后用候选 runtime image 中已经安装的生产 `dist`、migration 和依赖启动一次性非 root runner；不会向 ECS 复制源码、test fixture、Vitest、tsx 或开发依赖。隔离验收通过后再运行 `deploy.sh`；后者会复用候选 image build cache、备份并迁移生产库。
 
-管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v5_it_<pid>_<12位hex>` 的随机临时数据库，在其中验证 v1→v5 readiness、旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，随后在 `finally` 中终止连接并删除该库。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
+管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v6_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 v6、验证 `[1,2,3,4,5,6]` 与 `provider_identity` Inbox CHECK 约束后进入 ready；随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
 
-验收会以生产库当时的实际 migration versions 和实际表集为准（允许它仍是 v3/v4）。前后快照各自在独立的、受限的候选镜像容器内运行，不向 live app 容器注入代码或占用其 cgroup；容器只读挂载单值 `sciforge_collab` 密码文件，不把数据库 URL 或密码放进 Docker env/argv。每次快照使用单个 `REPEATABLE READ READ ONLY` 事务，对每张实际表声明 server-side cursor，并以 `FETCH FORWARD 512` 有界流式计算 row count 和稳定内容 SHA-256；只保留表名、计数及摘要，不输出行内容，并要求运行前后整个快照完全相同。为避免并发业务写入造成误报或掩盖边界，本步骤必须处于无业务写入的维护窗口。live app 的 container ID、host PID、RestartCount、image 和 revision 也必须完全相同。runner 原始日志先保存在 root-only tmpfs 文件中，并同时扫描实际管理员密码、应用数据库密码、认证 URL、连接参数、stack 和 `secretKey`；只有通过扫描后才输出脱敏 pass receipt。注意：`CREATE/DROP DATABASE` 必然写 PostgreSQL 集群 catalog/WAL，但所有业务 fixture 只写随机临时数据库，不写生产 `sciforge_collaboration`。
+验收会以生产库当时的实际 migration versions 和实际表集为准（允许它仍是 v3/v4/v5）。前后快照各自在独立的、受限的候选镜像容器内运行，不向 live app 容器注入代码或占用其 cgroup；容器只读挂载单值 `sciforge_collab` 密码文件，不把数据库 URL 或密码放进 Docker env/argv。每次快照使用单个 `REPEATABLE READ READ ONLY` 事务，对每张实际表声明 server-side cursor，并以 `FETCH FORWARD 512` 有界流式计算 row count 和稳定内容 SHA-256；只保留表名、计数及摘要，不输出行内容，并要求运行前后整个快照完全相同。为避免并发业务写入造成误报或掩盖边界，本步骤必须处于无业务写入的维护窗口。live app 的 container ID、host PID、RestartCount、image 和 revision 也必须完全相同。runner 原始日志先保存在 root-only tmpfs 文件中，并同时扫描实际管理员密码、应用数据库密码、认证 URL、连接参数、stack 和 `secretKey`；只有通过扫描后才输出脱敏 pass receipt。注意：`CREATE/DROP DATABASE` 必然写 PostgreSQL 集群 catalog/WAL，但所有业务 fixture 只写随机临时数据库，不写生产 `sciforge_collaboration`。
 
 完整验收及其清理成功后，脚本以原子改名写入 `/run/sciforge-collaboration-private-postgres-v5.attestation`：文件固定为 `root:root/0600`，绑定获批 commit、候选 image ID、release manifest、bundle checksums、contract commit 文件以及 runner/verifier 脚本摘要，并记录 UTC 时间。证明最多有效 30 分钟且只能使用一次；core-only 的 `deploy.sh` 和 Provider 的 `deploy-provider-zulip.sh` 都会在停止 app、启动 PostgreSQL、备份或迁移之前，通过共享 helper 原子 claim 该文件，重新核对所有绑定值后立即消费。候选 image 重建结果、bundle 或验收脚本发生任何变化，或者证明缺失、失败、过期、来自未来，部署都会拒绝继续。每次重新运行验收都会先安全删除旧证明；若 runner、临时库、tmpfs secret/log 或容器清理失败，刚生成的证明也会被删除，因此失败的验收不能沿用之前的 pass。任何测试失败、残留库、清理失败、生产内容快照变化或 app 身份变化都会阻断部署；这项测试也不能替代正式 Provider、OIDC 或最新版 SciForge 的跨系统 E2E。
 

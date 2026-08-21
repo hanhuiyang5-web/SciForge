@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { DefaultCollaborationProviderRuntime } from './provider-runtime.js'
 import { ProviderRuntimeStore } from './provider-runtime-store.js'
 import { CollaborationServiceError } from './errors.js'
+import { providerIdentityInboxId } from './service.js'
 
 const LOCATOR = {
   type: 'provider_locator' as const,
@@ -253,6 +254,7 @@ describe('provider runtime', () => {
     const ledger = new FakeRuntimeStore()
     let legacyVerificationCalls = 0
     const rejections: Array<{ action: string; code?: string }> = []
+    const commandResults: Array<Record<string, unknown>> = []
     const runtime = new DefaultCollaborationProviderRuntime({
       providers: [provider],
       store: ledger,
@@ -263,6 +265,10 @@ describe('provider runtime', () => {
         verifyPairingFromProvider: async () => {
           legacyVerificationCalls += 1
           throw new Error('legacy verification must remain unreachable')
+        },
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
         },
         recordRejectedBoundary: async (_actor: unknown, action: string, error: unknown) => {
           rejections.push({ action,
@@ -279,14 +285,111 @@ describe('provider runtime', () => {
 
     expect(legacyVerificationCalls).toBe(0)
     expect(rejections).toEqual([expect.objectContaining({ code: 'permission_denied' })])
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-1',
+      result: 'invalid_or_expired'
+    }])
     expect(ledger.completedEvents).toEqual(['event-pairing-1'])
-    expect(ledger.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+    expect(ledger.diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'degraded', details: expect.objectContaining({ errorCode: 'permission_denied' }) })
+    ]))
+    expect(JSON.stringify({ rejections, commandResults, diagnostics: ledger.diagnostics }))
+      .not.toContain('pairing-response-1234')
+  })
+
+  it('replies safely to a malformed private bind without invoking challenge verification', async () => {
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
       provider: 'fake',
-      status: 'degraded',
-      details: expect.objectContaining({ errorCode: 'permission_denied' })
-    })]))
-    expect(JSON.stringify({ rejections, diagnostics: ledger.diagnostics })).not.toContain('pairing-response-1234')
-    expect(JSON.stringify({ rejections, diagnostics: ledger.diagnostics })).not.toContain('remote-user-1')
+      type: 'provider.challenge.invalid',
+      eventId: 'event-pairing-malformed-1',
+      eventCursor: 'cursor-pairing-malformed-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity', provider: 'fake', realmId: 'realm-1', providerUserId: 'remote-user-1'
+      }
+    }
+    const provider = new FakeProvider(event)
+    const ledger = new FakeRuntimeStore()
+    const commandResults: Array<Record<string, unknown>> = []
+    let verificationCount = 0
+    const rejections: Array<{ code?: string }> = []
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: {
+        ...emptyService(),
+        verifyPairingFromProvider: async () => {
+          verificationCount += 1
+          return {}
+        },
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
+        },
+        recordRejectedBoundary: async (_actor: unknown, _action: string, error: unknown) => {
+          rejections.push(typeof error === 'object' && error !== null && 'code' in error &&
+            typeof error.code === 'string' ? { code: error.code } : {})
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-pairing-malformed-1', 1_500)
+    await runtime.stop()
+
+    expect(verificationCount).toBe(0)
+    expect(rejections).toEqual([{ code: 'permission_denied' }])
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-malformed-1',
+      result: 'invalid_or_expired'
+    }])
+  })
+
+  it('emits one safe direct failure result when a duplicate challenge event is invalid', async () => {
+    const event: ProviderEvent = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'fake',
+      type: 'provider.challenge.responded',
+      eventId: 'event-pairing-invalid-1',
+      eventCursor: 'cursor-pairing-invalid-1',
+      occurredAt: '2026-08-15T00:00:00.000Z',
+      identity: {
+        type: 'provider_identity', provider: 'fake', realmId: 'realm-1', providerUserId: 'remote-user-1'
+      },
+      challengeId: 'chl_123456789012',
+      challengeResponse: 'invalid-response-1234'
+    }
+    const provider = new FakeProvider([event, { ...event, eventCursor: 'cursor-pairing-invalid-2' }])
+    const ledger = new FakeRuntimeStore()
+    const commandResults: Array<Record<string, unknown>> = []
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      service: {
+        ...emptyService(),
+        enqueueProviderCommandResult: async (input) => {
+          commandResults.push(input)
+          return {}
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ledger.cursor === 'cursor-pairing-invalid-2', 1_500)
+    await runtime.stop()
+
+    expect(commandResults).toEqual([{
+      identity: event.identity,
+      providerEventId: 'event-pairing-invalid-1',
+      result: 'invalid_or_expired'
+    }])
   })
 
   it('applies a confirmed locator change before checkpointing the provider cursor', async () => {
@@ -573,6 +676,74 @@ describe('provider runtime', () => {
     expect(provider.sendRequests).toHaveLength(sendsAfterDelivery)
   })
 
+  it('retries a direct provider result with a stable client message id and durable ack', async () => {
+    const recipient = {
+      type: 'provider_direct_recipient' as const,
+      provider: 'fake',
+      realmId: 'realm-1',
+      providerUserId: 'remote-user-1'
+    }
+    const recipientId = providerIdentityInboxId(recipient)
+    const retryable: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.failed',
+      clientMessageId: 'msg-direct-1',
+      retryable: true,
+      providerErrorCode: 'provider_unavailable',
+      safeMessage: 'Temporarily unavailable.'
+    }
+    const succeeded: ProviderSendResult = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.send.succeeded',
+      clientMessageId: 'msg-direct-1',
+      providerMessageId: 'remote-direct-1',
+      sentAt: '2026-08-15T00:00:01.000Z'
+    }
+    const provider = new FakeProvider([], [retryable, succeeded])
+    const ledger = new FakeRuntimeStore()
+    let ackedSequence = 0
+    ledger.pendingProviderIdentityIds = () => ackedSequence ? [] : [recipientId]
+    const message = {
+      recipient: { kind: 'provider_identity' as const, id: recipientId },
+      sequence: 1,
+      messageId: 'msg-direct-1',
+      messageType: 'provider.command.result.outbound',
+      payload: {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        type: 'provider.command.result.outbound',
+        recipient,
+        result: 'success',
+        text: '绑定成功'
+      },
+      createdAt: '2026-08-15T00:00:00.000Z',
+      expiresAt: '2026-09-15T00:00:00.000Z'
+    }
+    const runtime = new DefaultCollaborationProviderRuntime({
+      providers: [provider],
+      store: ledger,
+      repository: emptyRepository(),
+      authentication: { resolveProviderIdentity: async () => { throw new Error('not used') } },
+      outboxPollMs: 20,
+      service: {
+        ...emptyService(),
+        pullProviderIdentityInbox: async () => ({ messages: ackedSequence ? [] : [message], ackedSequence, nextSequence: 2 }),
+        ackProviderIdentityInboxMessage: async () => {
+          ackedSequence = 1
+          return { ackedSequence, nextSequence: 2 }
+        }
+      }
+    })
+
+    await runtime.start()
+    await waitUntil(() => ackedSequence === 1, 1_500)
+    await runtime.stop()
+
+    expect(provider.sendRequests).toEqual([
+      expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient }),
+      expect.objectContaining({ clientMessageId: 'msg-direct-1', recipient })
+    ])
+  })
+
   it('bounds a HumanNeeded notification to provider limits without truncating its reply command', async () => {
     const sent: ProviderSendResult = { protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.send.succeeded', clientMessageId: 'msg-human-long',
@@ -654,7 +825,8 @@ class FakeProvider implements HumanEndpointProvider {
       locatorRename: false,
       locatorMove: false,
       locatorDiscovery: false,
-      identityChallenge: true as const
+      identityChallenge: true as const,
+      directMessages: true
     },
     onboarding: {
       realmLabel: 'Realm',
@@ -747,6 +919,7 @@ class FakeRuntimeStore {
     terminal: boolean
   }>()
   pendingEndpointIds: () => string[] = () => []
+  pendingProviderIdentityIds: () => string[] = () => []
 
   constructor(
     private readonly initiallyInProgressEventId?: string,
@@ -802,6 +975,7 @@ class FakeRuntimeStore {
   }
   async recordDiagnostic(diagnostic: ProviderDiagnostic) { this.diagnostics.push(diagnostic) }
   async listPendingEndpointIds() { return this.pendingEndpointIds() }
+  async listPendingProviderIdentityIds() { return this.pendingProviderIdentityIds() }
 }
 
 function messageEvent(eventId: string, eventCursor: string, providerMessageId: string): ProviderEvent {
@@ -847,6 +1021,9 @@ function emptyRepository() {
 function emptyService() {
   return {
     verifyPairingFromProvider: async () => ({}),
+    enqueueProviderCommandResult: async () => ({}),
+    pullProviderIdentityInbox: async () => ({ messages: [], ackedSequence: 0, nextSequence: 1 }),
+    ackProviderIdentityInboxMessage: async () => ({ ackedSequence: 0, nextSequence: 1 }),
     acceptPersonalProviderMessage: async () => ({}),
     acceptProjectInput: async () => ({}) as never,
     answerHumanNeeded: async () => ({}) as never,
