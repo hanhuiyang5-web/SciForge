@@ -144,7 +144,7 @@ Secret reference 必须是安全 basename，不能包含路径分隔符。运行
 
 - `GET /healthz`：纯 liveness，只表示进程可响应，不披露环境、数据库或 provider 信息。
 - `GET /readyz`：检查 PostgreSQL 可访问且 schema version 已到当前版本；它不表示 OIDC/JWKS 或 Zulip confirm adapter 已配置。
-- `GET /console/`：A-only 同源网页控制台；Bearer 仅保存在页面内存中，用于 Owner 确认、状态查询和 Inbox 操作。
+- `GET /console/`：A-only 同源网页控制台；Bearer 仅保存在页面内存中，用于 Owner 状态查询、Inbox 操作和正式 `human.answer` 审批。控制台不会自动 ACK HumanNeeded Inbox 消息。
 - `GET /v1/me` 与 `/v1/me/*`：严格 OIDC User 的本人身份、Device 与外部身份查询/撤销。
 - `POST /v1/device-enrollments`、`POST /v1/devices`：OIDC User 发起 enrollment，并以 Ed25519 持钥证明创建 Device。
 - `POST /v1/integrations/zulip/bindings`：OIDC User 发起绑定；`.../confirm` 只接受注入 adapter 验证后的 service actor。
@@ -173,7 +173,9 @@ Zulip 绑定由已登录 OIDC User 调用 `POST /v1/integrations/zulip/bindings`
 
 个人 Topic 绑定到固定 projection 与 Agent，顺序 inbox/outbox、receipt 和 provider cursor 都持久化在 PostgreSQL。Topic 整体重命名或移动时，provider adapter 保留稳定 topic identity，云端先排入 revision 更新通知，再继续同一个桌面 Session；歧义、部分移动、冲突或旧 revision 都会 fail closed。
 
-HumanNeeded 通知包含以下无凭据回复模板，云端会再次验证 endpoint、Project binding、目标用户、assurance、revision 与 TTL：
+HumanNeeded 的正式回答入口是 canonical `human.answer` command。启用受信 Provider adapter 时可继续使用注入的 HumanEndpoint actor；未启用 Provider 时，当前严格验证的 OIDC User 也可回答只发给自己的请求。A 会在同一事务边界内把 `(issuer, sub)` 收敛为唯一的持久化 OIDC HumanEndpoint（`provider=oidc`、assurance 固定为 `verified`），并再次验证 endpoint、Project binding、目标用户、assurance、revision 与 TTL。该入口不恢复匿名 pairing、不把 OIDC endpoint 注册为外部 Provider，也不能批准要求 `strong` assurance 的请求。
+
+Provider 通知仍可包含以下无凭据回复模板；模板只负责传递 request ID、revision 与答案，不能绕过受信 actor 验证：
 
 ```text
 sciforge-answer <humanRequestId> <requestRevision> <answer>

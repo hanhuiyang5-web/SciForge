@@ -321,10 +321,21 @@ async function resolveActor(
   options: CollaborationHttpOptions
 ): Promise<AuthContext | null> {
   if (isAnonymousBootstrapCommand(command)) return null
-  if (command.type === 'project.input.create' || command.type === 'human.answer') {
+  if (command.type === 'project.input.create') {
     const providerActor = await options.resolveProviderActor?.(request, command)
     if (providerActor) return providerActor
     throw new CollaborationServiceError('permission_denied', 'This command is accepted only from the verified provider gateway.')
+  }
+  if (command.type === 'human.answer') {
+    const providerActor = await options.resolveProviderActor?.(request, command)
+    if (providerActor) return providerActor
+    const authorization = firstHeader(request.headers.authorization)
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+    const actor = await options.authentication.resolveBearer(token)
+    if (actor.kind !== 'user') {
+      throw new CollaborationServiceError('permission_denied', 'HumanAnswer requires a verified human identity.')
+    }
+    return requiredIdentityService(options).resolveOidcHumanEndpoint(actor)
   }
   const authorization = firstHeader(request.headers.authorization)
   const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined

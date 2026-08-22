@@ -248,14 +248,7 @@ describe('production HTTP authentication boundary', () => {
       projectId: project.projectId, kind: 'observation', summary: 'A bounded API-visible observation.',
       idempotencyKey: 'idem_api_project_record_submit_01'
     })
-    const ownerEndpoint = [...repository.state.endpoints.values()]
-      .find((endpoint: { userId: string }) => endpoint.userId === owner.userId)
-    if (!ownerEndpoint) throw new Error('Expected verified Owner Human Endpoint')
-    const server = createCollaborationHttpServer({ service, identities, authentication, readiness: async () => true, now,
-      resolveProviderActor: async (_request, command) => command.type === 'human.answer'
-        ? { kind: 'human_endpoint', actorKey: `endpoint:${ownerEndpoint.humanEndpointId}`,
-          userId: owner.userId, humanEndpointId: ownerEndpoint.humanEndpointId, assurance: 'verified' }
-        : null })
+    const server = createCollaborationHttpServer({ service, identities, authentication, readiness: async () => true, now })
     servers.push(server)
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -267,27 +260,50 @@ describe('production HTTP authentication boundary', () => {
     const coordinatorSourceMessage = (repository.state.inboxes.get(`agent:${ownerAgent.agent.agentId}`) ?? [])
       .find((message: { messageType: string }) => message.messageType === 'project.started')
     if (!coordinatorSourceMessage) throw new Error('Expected a Project-started Coordinator inbox message')
+    const approvedTaskProposal = {
+      projectId: project.projectId,
+      assigneeAgentId: workerAgent.agent.agentId,
+      title: 'Confirmed follow-up task',
+      objective: 'Consume the exact one-time Owner confirmation.',
+      completionCriteria: [{ criterionId: 'cri_ApiConfirmedTask01', text: 'The confirmation is consumed once.' }],
+      dependencyTaskIds: [],
+      requiredCapabilities: { capabilityIds: [], vpnAccessIds: [], slurmClusterIds: [], requiredResourceRefIds: [] },
+      resourceRefIds: [],
+      authorizationRequirements: []
+    }
+    const governedProposalDigest = stableDigest(approvedTaskProposal)
     const humanNeededResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiCoordinatorHuman1', type: 'human.needed.create',
       idempotencyKey: 'idem_api_coordinator_human_01', projectId: project.projectId,
       sourceKind: 'coordinator', sourceInboxMessageId: coordinatorSourceMessage.messageId,
       targetUserId: owner.userId, requiredAssurance: 'verified',
       prompt: 'Approve the immutable follow-up proposal?',
-      confirmableAction: { kind: 'tasks.create', projectId: project.projectId, proposalDigest: 'a'.repeat(64) },
+      confirmableAction: { kind: 'tasks.create', projectId: project.projectId, proposalDigest: governedProposalDigest },
       expiresAt: '2026-08-15T03:00:00.000Z'
     }, ownerAgent.deviceCredential)
     expect(humanNeededResponse.status).toBe(200)
     const humanNeeded = await humanNeededResponse.json() as { entity: { humanRequestId: string; revision: number } }
     expect(humanNeeded).toMatchObject({ entity: { sourceKind: 'coordinator', taskId: null,
       sourceInboxMessageId: coordinatorSourceMessage.messageId } })
+    const crossUserAnswer = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_ApiHumanWrongUser01', type: 'human.answer',
+      idempotencyKey: 'idem_api_human_wrong_user_01', humanRequestId: humanNeeded.entity.humanRequestId,
+      requestRevision: humanNeeded.entity.revision, answer: 'Attempted cross-user approval.', decision: 'approve'
+    }, worker.userToken)
+    expect(crossUserAnswer.status).toBe(403)
+    await expect(crossUserAnswer.json()).resolves.toMatchObject({ error: { code: 'permission_denied' } })
+
     const humanAnswerResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiHumanApproval001', type: 'human.answer',
       idempotencyKey: 'idem_api_human_approval_01', humanRequestId: humanNeeded.entity.humanRequestId,
       requestRevision: humanNeeded.entity.revision, answer: 'Approved for this exact proposal.', decision: 'approve'
-    })
+    }, owner.userToken)
     expect(humanAnswerResponse.status).toBe(200)
     const humanAnswer = await humanAnswerResponse.json() as { entity: { confirmationId: string } }
     expect(humanAnswer.entity.confirmationId).toMatch(/^cnf_[A-Za-z0-9]{12,64}$/u)
+    expect([...repository.state.endpoints.values()].filter((endpoint: { userId: string; provider: string }) =>
+      endpoint.userId === owner.userId && endpoint.provider === 'oidc'
+    )).toHaveLength(1)
     const confirmationResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiConfirmationGet1', type: 'confirmation.get',
       confirmationId: humanAnswer.entity.confirmationId
@@ -295,8 +311,46 @@ describe('production HTTP authentication boundary', () => {
     expect(confirmationResponse.status).toBe(200)
     await expect(confirmationResponse.json()).resolves.toMatchObject({ entity: {
       type: 'action_confirmation', confirmationId: humanAnswer.entity.confirmationId,
-      status: 'approved', action: { kind: 'tasks.create', proposalDigest: 'a'.repeat(64) }
+      status: 'approved', action: { kind: 'tasks.create', proposalDigest: governedProposalDigest }
     } })
+    const currentProjectRevision = repository.state.projects.get(project.projectId)?.revision
+    if (!currentProjectRevision) throw new Error('Expected current Project revision')
+    const confirmedTaskResponse = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_ApiConfirmedTask001', type: 'task.create',
+      idempotencyKey: 'idem_api_confirmed_task_create_01', expectedRevision: currentProjectRevision,
+      confirmationId: humanAnswer.entity.confirmationId,
+      ...approvedTaskProposal
+    }, ownerAgent.deviceCredential)
+    expect(confirmedTaskResponse.status).toBe(200)
+    await expect(confirmedTaskResponse.json()).resolves.toMatchObject({ entity: {
+      type: 'task', title: approvedTaskProposal.title, status: 'offered'
+    } })
+    const consumedConfirmation = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_ApiConfirmationGet2', type: 'confirmation.get',
+      confirmationId: humanAnswer.entity.confirmationId
+    }, owner.userToken)
+    expect(consumedConfirmation.status).toBe(200)
+    await expect(consumedConfirmation.json()).resolves.toMatchObject({ entity: {
+      type: 'action_confirmation', confirmationId: humanAnswer.entity.confirmationId, status: 'consumed'
+    } })
+
+    const strongNeededResponse = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_ApiStrongHumanNeed1', type: 'human.needed.create',
+      idempotencyKey: 'idem_api_strong_human_needed_01', projectId: project.projectId,
+      sourceKind: 'coordinator', sourceInboxMessageId: coordinatorSourceMessage.messageId,
+      targetUserId: owner.userId, requiredAssurance: 'strong',
+      prompt: 'Require a separately frozen strong human endpoint.',
+      expiresAt: '2026-08-15T03:00:00.000Z'
+    }, ownerAgent.deviceCredential)
+    expect(strongNeededResponse.status).toBe(200)
+    const strongNeeded = await strongNeededResponse.json() as { entity: { humanRequestId: string; revision: number } }
+    const strongAnswer = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_ApiStrongHumanAnswer1', type: 'human.answer',
+      idempotencyKey: 'idem_api_strong_human_answer_01', humanRequestId: strongNeeded.entity.humanRequestId,
+      requestRevision: strongNeeded.entity.revision, answer: 'Ordinary OIDC must not satisfy strong assurance.'
+    }, owner.userToken)
+    expect(strongAnswer.status).toBe(403)
+    await expect(strongAnswer.json()).resolves.toMatchObject({ error: { code: 'assurance_insufficient' } })
 
     const inboxPageResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiWorkerInboxPage1', type: 'inbox.pull',
@@ -305,8 +359,14 @@ describe('production HTTP authentication boundary', () => {
     expect(inboxPageResponse.status).toBe(200)
     const inboxPage = await inboxPageResponse.json() as { ackedSequence: number; nextSequence: number;
       messages: Array<{ inboxMessageId: string; sequence: number; disposition: string; payload: { executionId: string } }> }
-    expect(inboxPage).toMatchObject({ type: 'rest.inbox_page', ackedSequence: 0, nextSequence: 2,
-      messages: [{ sequence: 1, disposition: 'active', payload: { executionId: task.executionId } }] })
+    expect(inboxPage).toMatchObject({ type: 'rest.inbox_page', ackedSequence: 0, nextSequence: 3 })
+    expect(inboxPage.messages).toHaveLength(2)
+    expect(inboxPage.messages[0]).toMatchObject({
+      sequence: 1, disposition: 'active', payload: { executionId: task.executionId }
+    })
+    expect(inboxPage.messages[1]).toMatchObject({
+      sequence: 2, disposition: 'active', payload: { type: 'task.offered' }
+    })
     const mismatchedInbox = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiInboxMismatch1', type: 'inbox.pull',
       recipientType: 'user', afterSequence: 0, limit: 20
@@ -329,7 +389,7 @@ describe('production HTTP authentication boundary', () => {
     }, workerAgent.deviceCredential)
     const gapAckBody = await gapAckResponse.json()
     expect({ status: gapAckResponse.status, body: gapAckBody }).toMatchObject({ status: 409, body: { error: {
-      code: 'inbox_ack_gap', ackedSequence: 0, nextSequence: 3
+      code: 'inbox_ack_gap', ackedSequence: 0, nextSequence: 4
     } } })
     const ackResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiWorkerInboxAck01', type: 'inbox.ack',
@@ -337,13 +397,13 @@ describe('production HTTP authentication boundary', () => {
       sequence: inboxPage.messages[0]?.sequence
     }, workerAgent.deviceCredential)
     expect(ackResponse.status).toBe(200)
-    await expect(ackResponse.json()).resolves.toMatchObject({ type: 'inbox.acked', ackedSequence: 1, nextSequence: 3 })
+    await expect(ackResponse.json()).resolves.toMatchObject({ type: 'inbox.acked', ackedSequence: 1, nextSequence: 4 })
     const cursorAckResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiWorkerCursorAck1', type: 'inbox.ack',
       idempotencyKey: 'idem_api_worker_cursor_ack_01', throughSequence: 1
     }, workerAgent.deviceCredential)
     expect(cursorAckResponse.status).toBe(200)
-    await expect(cursorAckResponse.json()).resolves.toMatchObject({ type: 'inbox.acked', ackedSequence: 1, nextSequence: 3 })
+    await expect(cursorAckResponse.json()).resolves.toMatchObject({ type: 'inbox.acked', ackedSequence: 1, nextSequence: 4 })
     const acknowledgedPageResponse = await postCommand(baseUrl, {
       protocolVersion: '1.0', requestId: 'req_ApiWorkerInboxAfterAck1', type: 'inbox.pull',
       recipientType: 'agent', afterSequence: 0, limit: 20
@@ -356,7 +416,8 @@ describe('production HTTP authentication boundary', () => {
         ackedSequence: 1,
         messages: [
           { sequence: 1, status: 'acknowledged', disposition: 'active' },
-          { sequence: 2, status: 'pending', disposition: 'active' }
+          { sequence: 2, status: 'pending', disposition: 'active' },
+          { sequence: 3, status: 'pending', disposition: 'active' }
         ]
       }
     })
@@ -452,7 +513,7 @@ describe('production HTTP authentication boundary', () => {
     const capability = JSON.parse(capabilityText) as { entity: { type: string; projectId: string;
       projectRevision: number; agents: Array<{ agentId: string; ownerUserId: string; lastSeenAt: string }> } }
     expect(capability.entity).toMatchObject({ type: 'project_capability_directory', projectId: project.projectId,
-      projectRevision: project.revision + 2 })
+      projectRevision: project.revision + 3 })
     expect(capability.entity.agents).toEqual(expect.arrayContaining([
       expect.objectContaining({ agentId: ownerAgent.agent.agentId, ownerUserId: owner.userId,
         lastSeenAt: now().toISOString() }),

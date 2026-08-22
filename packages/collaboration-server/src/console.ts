@@ -171,7 +171,7 @@ const CONSOLE_HTML = `<!doctype html>
 
       <section class="ledger-section" aria-labelledby="inbox-title">
         <div class="section-heading"><span>04</span><div><h2 id="inbox-title">User 持久信箱</h2><p>按 sequence 拉取、检查 HumanNeeded，并逐条 ACK。</p></div></div>
-        <div class="split-grid">
+        <div class="three-grid">
           <form class="command-form" data-command="inbox-pull">
             <h3>拉取 User Inbox <em>当前 User</em></h3>
             <input name="recipientType" type="hidden" value="user">
@@ -185,8 +185,17 @@ const CONSOLE_HTML = `<!doctype html>
             <label>sequence<input name="sequence" type="number" min="1" required></label>
             <button class="button" type="submit">ACK</button>
           </form>
+          <form class="command-form warning-form" data-command="human-answer">
+            <h3>正式 HumanNeeded 审批 <em>目标 OIDC User</em></h3>
+            <p class="permission-note">只回答发给当前 User 的 pending 请求；approve 会生成绑定精确动作的一次性 confirmation。此操作不会 ACK Inbox。</p>
+            <label>Human Request ID<input name="humanRequestId" required placeholder="hrq_…" spellcheck="false"></label>
+            <label>Request expectedRevision<input name="requestRevision" type="number" min="1" required></label>
+            <label>审批意见<textarea name="answer" required rows="3"></textarea></label>
+            <label>决定<select name="decision"><option value="approve">approve</option><option value="reject">reject</option></select></label>
+            <button class="button danger-line" type="submit">提交正式审批</button>
+          </form>
         </div>
-        <div class="result-panel inbox-output" data-output="inbox" aria-live="polite"><p>不会自动回答 HumanNeeded；答案仍须从已验证的人类入口进入。</p></div>
+        <div class="result-panel inbox-output" data-output="inbox" aria-live="polite"><p>先拉取并核对 HumanNeeded，再由当前目标 OIDC User 显式审批；控制台不会自动回答或 ACK。</p></div>
       </section>
 
       <section class="ledger-section" aria-labelledby="record-title">
@@ -562,6 +571,10 @@ const CONSOLE_JS = `(() => {
   }))
   bindCommand('[data-command="inbox-ack"]', 'inbox', (form) => ({
     ...envelope('inbox.ack', true), inboxMessageId: value(form, 'inboxMessageId'), sequence: integerValue(form, 'sequence')
+  }))
+  bindCommand('[data-command="human-answer"]', 'inbox', (form) => ({
+    ...envelope('human.answer', true), humanRequestId: value(form, 'humanRequestId'),
+    requestRevision: integerValue(form, 'requestRevision'), answer: value(form, 'answer'), decision: value(form, 'decision')
   }))
   bindCommand('[data-command="record-get"]', 'record', (form) => ({
     ...envelope('project_record.get', false), projectRecordId: value(form, 'projectRecordId')

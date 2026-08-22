@@ -26,6 +26,7 @@ describe('collaboration console assets', () => {
   })
 
   it('uses only canonical same-origin commands and supplies write idempotency headers', () => {
+    const html = getCollaborationConsoleAsset('/console')?.body ?? ''
     const script = getCollaborationConsoleAsset('/console/app.js')?.body ?? ''
     const expectedCommands = [
       'credential.revoke_current',
@@ -40,6 +41,7 @@ describe('collaboration console assets', () => {
       'task.retry',
       'inbox.pull',
       'inbox.ack',
+      'human.answer',
       'project_record.get',
       'project_record.accept',
       'resource.get'
@@ -52,7 +54,8 @@ describe('collaboration console assets', () => {
     for (const command of expectedCommands) expect(script).toContain(command)
     expect(script).not.toContain('task.list')
     expect(script).not.toContain('project.list')
-    expect(script).not.toContain('human.answer')
+    expect(script).toContain("...envelope('human.answer', true)")
+    expect(html).toContain('此操作不会 ACK Inbox')
   })
 
   it('contains no B, C, D, or E module execution surfaces', () => {

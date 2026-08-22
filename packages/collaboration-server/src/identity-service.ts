@@ -26,7 +26,7 @@ import {
   type ZulipBindingConfirmResponse
 } from '@sciforge/collaboration-contracts'
 
-import type { UserActor } from './auth.js'
+import type { HumanEndpointActor, UserActor } from './auth.js'
 import { newId, safeAuditMetadata, stableDigest } from './crypto.js'
 import { CollaborationServiceError, fail } from './errors.js'
 import {
@@ -39,6 +39,7 @@ import type {
   StoredAuditEvent,
   StoredDevice,
   StoredExternalIdentity,
+  StoredEndpoint,
   StoredOidcIdentity,
   StoredParticipant,
   StoredReceipt,
@@ -160,6 +161,68 @@ export class IdentityService {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     })
+  }
+
+  async resolveOidcHumanEndpoint(actor: UserActor): Promise<HumanEndpointActor> {
+    const at = this.timestamp()
+    const endpoint = await this.repository.transaction(async (tx) => {
+      await tx.lockOidcIdentity(actor.issuer, actor.subject)
+      const identity = await tx.getOidcIdentityByIssuerSubjectForUpdate(actor.issuer, actor.subject)
+      const user = identity ? await tx.getUserForUpdate(identity.userId) : null
+      if (!identity || !user || identity.identityId !== actor.identityId || identity.userId !== actor.userId ||
+          identity.status !== 'active' || user.status !== 'active') {
+        fail('credential_revoked', 'The local OIDC identity is not active.')
+      }
+
+      const matching = (await tx.listEndpointsForUser(actor.userId)).filter((candidate) =>
+        candidate.provider === 'oidc' && candidate.realmId === actor.issuer &&
+        candidate.providerUserId === actor.subject
+      )
+      if (matching.length > 1) {
+        fail('identity_conflict', 'The OIDC HumanEndpoint identity is not unique.')
+      }
+      const existing = matching[0]
+      if (existing) {
+        if (existing.status !== 'active' || existing.assurance !== 'verified') {
+          fail('credential_revoked', 'The OIDC HumanEndpoint is not active.')
+        }
+        return existing
+      }
+
+      const created: StoredEndpoint = {
+        humanEndpointId: newId('hep'),
+        userId: actor.userId,
+        provider: 'oidc',
+        realmId: actor.issuer,
+        providerUserId: actor.subject,
+        displayName: user.displayName,
+        assurance: 'verified',
+        status: 'active',
+        revision: 1,
+        verifiedAt: at,
+        updatedAt: at
+      }
+      await tx.insertEndpoint(created)
+      await tx.insertAudit({
+        auditEventId: newId('audit'),
+        actorKind: 'oidc',
+        actorUserId: actor.userId,
+        action: 'oidc.human_endpoint.create',
+        resourceKind: 'human_endpoint',
+        resourceId: created.humanEndpointId,
+        outcome: 'accepted',
+        metadata: { provider: 'oidc' },
+        createdAt: at
+      })
+      return created
+    })
+    return {
+      kind: 'human_endpoint',
+      actorKey: `endpoint:${endpoint.humanEndpointId}:revision:${endpoint.revision}`,
+      userId: endpoint.userId,
+      humanEndpointId: endpoint.humanEndpointId,
+      assurance: 'verified'
+    }
   }
 
   async createDeviceEnrollment(

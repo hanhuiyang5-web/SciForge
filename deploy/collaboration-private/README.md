@@ -2,7 +2,7 @@
 
 本目录为 SciForge Cloud ECS 上 `@sciforge/collaboration-server` 的最小 Docker Compose 预发布层。默认仍是 core-only loopback；只有显式叠加 `compose.provider-zulip.yml` 时才启用私有 Zulip Provider。另有两个互斥、显式的公网模式：`a-https-test-edge` 只发布 core-only `cloud-test`，`a-https-oidc-test` 则由 A 的同一固定 Caddy 同时终止 `cloud-test` 与 `login-test` TLS，并把后者仅转发到 Keycloak 同学提供的专用 identity-edge endpoint。
 
-core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已配置固定 issuer、双 SNI ingress、Discovery/JWKS 和 fail-closed confirm。只有独立公网探针再加真实 Token 的 A acceptance harness 通过后，才能宣告 A 自己的身份/业务闭环；仍不能宣告 Keycloak 管理、Desktop、Zulip `/bind` 或全产品 E2E 已完成。
+core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已配置固定 issuer、双 SNI ingress、Discovery/JWKS，以及外部 Zulip binding confirm 继续 fail closed。OIDC Owner 对自己 HumanNeeded 的正式 `human.answer` 是独立的 A 原生入口，不依赖 Provider overlay。只有独立公网探针再加真实 Token 的 A acceptance harness 通过后，才能宣告 A 自己的身份/业务闭环；仍不能宣告 Keycloak 管理、Desktop、Zulip `/bind` 或全产品 E2E 已完成。
 
 | 层面 | 本目录能证明 | 本目录不能单独证明 |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已�
 - 运行镜像只安装固定 commit 生成的三个 npm tarball：contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述显式 `private-test`、`team-private-acceptance`、`a-https-test-edge` 或 `a-https-oidc-test` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
 - 默认是 **core-only**：`compose.yml` 不注入 Provider 配置或 secret。`deploy-provider-zulip.sh` 才会显式加载只作用于 app 的 overlay；migrate 始终看不到 Provider 配置和 secret。
 - `compose.yml` 只透传严格 OIDC 的非秘密配置。普通私有/core-only 模式的 issuer 为空，所有 User、Device 与 binding 入口 fail closed；`a-https-oidc-test` 唯一允许 `https://login-test.sciforge.cn/realms/SciForge`。Audience 固定为 `sciforge-cloud-api`，授权方固定为 `sciforge-desktop,sciforge-web-mobile`，insecure loopback 永远为 `false`。这不是匿名身份模式，也不恢复 opaque User bearer。
+- OIDC 模式下，已验证的 Owner User 可用 canonical `human.answer` 回答只发给自己的 HumanNeeded；A 将 exact `(issuer, sub)` 收敛为 assurance=`verified` 的持久化 OIDC HumanEndpoint，并继续校验目标 User、Project、revision、TTL 和 assurance。它不能回答他人的请求或 `strong` 请求，也不会启用 Provider catalog、Zulip binding confirm、bot event loop 或匿名 pairing。
 - 原生入口是 `POST /v1/commands`、WebSocket `/v1/events` 和 A-only 网页控制台 `/console/`；没有 `/v1/meta`，也没有旧实验服务的 `/v1/ws`。
 - 应用在容器内监听 `0.0.0.0:8787`，但 Docker 只向 ECS `127.0.0.1:${SCIFORGE_COLLAB_HOST_PORT}` 发布。PostgreSQL 不发布宿主机端口。
 - 默认与 Provider 私有模式不开放 80/443。两个显式 HTTPS 模式都只用固定 digest 的独立 Caddy Compose 项目发布 TCP 443→容器 8443；不公开 80、UDP 443、8080、8787 或 PostgreSQL，也不加入任一数据库网络。OIDC 模式额外只加入 `sciforge-keycloak_identity-edge`，该网络只能有 A edge 和别名为 `keycloak` 的 Keycloak app；Keycloak 数据库不得加入。
@@ -625,4 +626,4 @@ deploy/collaboration-private/scripts/static-policy-test.sh
 
 默认运行上限：PostgreSQL 1.5 CPU/2 GiB/256 PID，app 1 CPU/768 MiB/256 PID；所有容器使用有界 `json-file` 日志。app 为只读 root filesystem、空 capability set、`no-new-privileges`，并以 Node 镜像的非 root 用户运行。
 
-A 的简易网页控制台已经由同一 server bundle 在 `/console/` 提供，并与 API 共用同源安全边界；它在 loopback 可做 A 内部验收，但在正式入口与链路完成评审和真实端到端验证前不向成员宣称正式可用。B–E 私有模块仍不属于 A。若显式选择 Zulip 做候选 conformance，它也只属于该次验收；不得通过放开 8787、5432、让最新版 SciForge 使用临时 HTTP tunnel 或复制旧实验部署代码来抢先冻结产品链路。
+A 的简易网页控制台已经由同一 server bundle 在 `/console/` 提供，并与 API 共用同源安全边界；它在 loopback 可做 A 内部验收。Owner Bearer 只保存在页面内存中，可提交正式 `human.answer` approve/reject，且不会自动 ACK 对应 Inbox 消息。公网 OIDC edge 仍要求 `/console/` 返回 404，因此应经 SSH Tunnel 使用；在正式入口与链路完成评审和真实端到端验证前不向成员宣称正式可用。B–E 私有模块仍不属于 A。若显式选择 Zulip 做候选 conformance，它也只属于该次验收；不得通过放开 8787、5432、让最新版 SciForge 使用临时 HTTP tunnel 或复制旧实验部署代码来抢先冻结产品链路。

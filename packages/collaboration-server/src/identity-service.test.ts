@@ -40,6 +40,50 @@ async function expectServiceCode(work: () => Promise<unknown>, code: string) {
 }
 
 describe('A unified identity Service', () => {
+  it('materializes one verified OIDC HumanEndpoint and fails closed after endpoint revocation', async () => {
+    const clock = new FakeClock('2026-08-18T12:00:00.000Z')
+    const repository = new FakeCollaborationRepository()
+    const identities = new IdentityService({ repository, now: clock.now })
+    const actor = await identities.resolveOidcUser(verifiedIdentity(clock, {
+      subject: 'oidc-human-approval-owner'
+    }))
+
+    const resolved = await Promise.all(Array.from({ length: 16 }, () =>
+      identities.resolveOidcHumanEndpoint(actor)
+    ))
+    expect(new Set(resolved.map((endpoint) => endpoint.humanEndpointId)).size).toBe(1)
+    expect(resolved[0]).toMatchObject({
+      kind: 'human_endpoint',
+      userId: actor.userId,
+      assurance: 'verified'
+    })
+    expect(repository.state.endpoints.size).toBe(1)
+    const stored = repository.state.endpoints.get(resolved[0].humanEndpointId)
+    expect(stored).toMatchObject({
+      provider: 'oidc',
+      realmId: actor.issuer,
+      providerUserId: actor.subject,
+      status: 'active',
+      assurance: 'verified'
+    })
+    expect(repository.state.auditEvents.filter((event: { action: string }) =>
+      event.action === 'oidc.human_endpoint.create'
+    )).toHaveLength(1)
+
+    if (!stored) throw new Error('Expected persisted OIDC HumanEndpoint')
+    await repository.transaction((tx) => tx.updateEndpoint({
+      ...stored,
+      status: 'revoked',
+      revision: stored.revision + 1,
+      revokedAt: clock.now().toISOString(),
+      updatedAt: clock.now().toISOString()
+    }, stored.revision))
+    await expect(identities.resolveOidcHumanEndpoint(actor)).rejects.toMatchObject({
+      code: 'credential_revoked'
+    })
+    expect(repository.state.endpoints.size).toBe(1)
+  })
+
   it('converges concurrent first OIDC login and never merges equal email across subjects', async () => {
     const clock = new FakeClock('2026-08-18T12:00:00.000Z')
     const repository = new FakeCollaborationRepository()
