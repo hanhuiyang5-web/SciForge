@@ -23,6 +23,7 @@ import {
   type DomainMainPrincipalProvider,
   type PrincipalContextSnapshot
 } from '@sciforge/domain-sdk/principal'
+import type { DomainMainInternalServiceHost } from '@sciforge/domain-sdk/host'
 import type { CapabilityJsonValue } from '../../shared/capability-broker'
 import { CapabilityBroker } from './broker'
 import {
@@ -253,6 +254,7 @@ function identityBrokerFixture(root: string) {
     getUserDataDir: () => root,
     getDeviceId: () => 'device-integration-1',
     packageSecrets: memorySecrets(),
+    internalServices: memoryInternalServices(),
     defineCapability: (options) => defineCapability(
       options as DefineCapabilityOptions<z.ZodType, z.ZodType>
     )
@@ -474,6 +476,28 @@ function memorySecrets() {
     },
     remove: async (key: string) => {
       values.delete(key)
+    }
+  }
+}
+
+function memoryInternalServices(): DomainMainInternalServiceHost {
+  const services = new Map<string, Readonly<{
+    contractVersion: string
+    service: object
+  }>>()
+  return {
+    register: (registration) => {
+      services.set(registration.serviceId, {
+        contractVersion: registration.contractVersion,
+        service: registration.service
+      })
+    },
+    acquire: <Service extends object>(serviceId: string, contractVersion: string): Service => {
+      const registration = services.get(serviceId)
+      if (!registration || registration.contractVersion !== contractVersion) {
+        throw new Error(`Internal service ${serviceId} is unavailable.`)
+      }
+      return registration.service as Service
     }
   }
 }

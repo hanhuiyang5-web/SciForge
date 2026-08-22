@@ -457,6 +457,8 @@ async function createProductionCrashComposition(
   let capabilityInvokers: ReturnType<typeof createMainSystemCapabilityInvokerFactory> | undefined
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
+    getAppVersion: () => '0.1.0-test',
+    getDeviceId: () => 'device-host-crash-replay',
     textSanitizer: { sanitizeText: (value) => value },
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: (owner) => Object.freeze({

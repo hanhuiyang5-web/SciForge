@@ -45,7 +45,7 @@ import {
   toPortableArtifactReference,
   toPortableContentContainerReference,
   toPortableContentFileReference
-} from '../packages/domains/content-space/src/contract.ts'
+} from '@sciforge/domain-content-space/contract'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(scriptDirectory, '..')
