@@ -1,16 +1,27 @@
 import { z } from 'zod'
 import {
+  agentIdSchema,
+  assuranceLevelSchema,
+  credentialVersionSchema,
+  deviceIdSchema,
   displayNameSchema,
   entityMetadataShape,
   humanEndpointIdSchema,
   idempotencyKeySchema,
   installationIdSchema,
+  protocolEnvelopeShape,
+  protocolVersionSchema,
   providerOpaqueIdSchema,
+  requestIdSchema,
   revisionSchema,
   schemaVersionSchema,
   timestampSchema,
-  userIdSchema
+  userIdSchema,
+  type DeviceId
 } from './core.js'
+import { providerIdentitySchema } from './provider.js'
+
+export { deviceIdSchema, type DeviceId }
 
 const opaqueSuffix = '[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])'
 
@@ -33,13 +44,11 @@ function isBase64UrlBytes(value: string, expectedBytes: number | { min: number }
 
 export const oidcIdentityIdSchema = opaqueId('oid')
 export const deviceEnrollmentIdSchema = opaqueId('enr')
-export const deviceIdSchema = opaqueId('dev')
 export const zulipBindingRequestIdSchema = opaqueId('zbr')
 export const externalIdentityIdSchema = opaqueId('xid')
 
 export type OidcIdentityId = z.infer<typeof oidcIdentityIdSchema>
 export type DeviceEnrollmentId = z.infer<typeof deviceEnrollmentIdSchema>
-export type DeviceId = z.infer<typeof deviceIdSchema>
 export type ZulipBindingRequestId = z.infer<typeof zulipBindingRequestIdSchema>
 export type ExternalIdentityId = z.infer<typeof externalIdentityIdSchema>
 
@@ -367,3 +376,282 @@ export const identityEntitySchema = z.discriminatedUnion('type', [
   externalIdentitySchema
 ])
 export type IdentityEntity = z.infer<typeof identityEntitySchema>
+
+/**
+ * AC-internal verified claims are intentionally separate from A's frozen
+ * public issuer projection. Public REST response schemas above remain byte-for-
+ * byte compatible, while verified token material is normalized before use as
+ * an identity key.
+ */
+export const oidcAudienceSchema = z.string().trim().min(1).max(512)
+export const identityEmailSchema = z.string().trim().email().max(320)
+
+function canNormalizeIssuer(value: string): boolean {
+  try {
+    normalizeOidcIssuer(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function normalizeOidcIssuer(value: string): string {
+  const issuer = new URL(value.trim())
+  const isLoopbackHttp = issuer.protocol === 'http:' && (
+    issuer.hostname === 'localhost' || issuer.hostname === '127.0.0.1' || issuer.hostname === '[::1]'
+  )
+  if (
+    (issuer.protocol !== 'https:' && !isLoopbackHttp) ||
+    issuer.username ||
+    issuer.password ||
+    issuer.search ||
+    issuer.hash
+  ) {
+    throw new TypeError(
+      'OIDC issuer must use HTTPS, except for loopback HTTP during local development, and contain no credentials, query, or fragment.'
+    )
+  }
+  issuer.pathname = issuer.pathname.replace(/\/+$/u, '') || '/'
+  return issuer.toString().replace(/\/$/u, '')
+}
+
+const verifiedOidcIssuerSchema = z.string().trim().min(1).max(2_048)
+  .refine(canNormalizeIssuer, 'OIDC issuer must be a canonical HTTPS URL or a loopback HTTP development URL')
+  .transform(normalizeOidcIssuer)
+
+export const verifiedOidcClaimsSchema = z.object({
+  type: z.literal('verified_oidc_claims'),
+  issuer: verifiedOidcIssuerSchema,
+  subject: oidcSubjectSchema,
+  audiences: z.array(oidcAudienceSchema).min(1).max(32)
+    .refine(uniqueStrings, 'OIDC audiences must be unique'),
+  issuedAt: timestampSchema,
+  expiresAt: timestampSchema,
+  email: identityEmailSchema.optional(),
+  emailVerified: z.boolean().optional(),
+  displayName: displayNameSchema.optional()
+}).strict().superRefine((claims, context) => {
+  if (Date.parse(claims.expiresAt) <= Date.parse(claims.issuedAt)) {
+    context.addIssue({ code: 'custom', path: ['expiresAt'], message: 'OIDC token must expire after it is issued' })
+  }
+})
+export type VerifiedOidcClaims = z.infer<typeof verifiedOidcClaimsSchema>
+
+export const oidcExternalIdentitySchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('oidc_external_identity'),
+  externalIdentityId: externalIdentityIdSchema,
+  userId: userIdSchema,
+  issuer: verifiedOidcIssuerSchema,
+  subject: oidcSubjectSchema,
+  emailAtLinkTime: identityEmailSchema.optional(),
+  status: oidcIdentityStatusSchema,
+  verifiedAt: timestampSchema,
+  revokedAt: timestampSchema.optional()
+}).strict().superRefine((identity, context) => {
+  if ((identity.status === 'revoked') !== (identity.revokedAt !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['revokedAt'], message: 'Only revoked OIDC identity requires revokedAt' })
+  }
+})
+export type OidcExternalIdentity = z.infer<typeof oidcExternalIdentitySchema>
+
+const identityUserPrincipalSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('user_principal'),
+  userId: userIdSchema,
+  displayName: displayNameSchema,
+  status: z.enum(['active', 'suspended', 'revoked'])
+}).strict()
+
+const identityHumanEndpointBindingSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('human_endpoint_binding'),
+  humanEndpointId: humanEndpointIdSchema,
+  userId: userIdSchema,
+  identity: providerIdentitySchema,
+  displayName: displayNameSchema,
+  assurance: assuranceLevelSchema.exclude(['basic']),
+  status: z.enum(['active', 'suspended', 'revoked']),
+  verifiedAt: timestampSchema,
+  lastSeenAt: timestampSchema.optional(),
+  revokedAt: timestampSchema.optional()
+}).strict().superRefine((binding, context) => {
+  if ((binding.status === 'revoked') !== (binding.revokedAt !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['revokedAt'], message: 'Only revoked endpoint may set revokedAt' })
+  }
+})
+
+const identityAgentNodeSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('agent_node'),
+  agentId: agentIdSchema,
+  deviceId: deviceIdSchema.nullable().optional(),
+  ownerUserId: userIdSchema,
+  displayName: displayNameSchema,
+  nodeType: z.enum(['desktop', 'server']),
+  capabilities: z.array(deviceCapabilitySchema).max(256)
+    .refine(uniqueStrings, 'Capabilities must be unique'),
+  lifecycleStatus: z.enum(['active', 'revoked']),
+  connectionStatus: z.enum(['online', 'offline']),
+  credentialVersion: credentialVersionSchema,
+  lastSeenAt: timestampSchema.optional(),
+  revokedAt: timestampSchema.optional()
+}).strict().superRefine((agent, context) => {
+  if (agent.lifecycleStatus === 'active' && agent.deviceId == null) {
+    context.addIssue({ code: 'custom', path: ['deviceId'], message: 'Active Agent requires an associated Device' })
+  }
+  if (agent.lifecycleStatus === 'revoked' && agent.revokedAt === undefined) {
+    context.addIssue({ code: 'custom', path: ['revokedAt'], message: 'Revoked Agent requires revokedAt' })
+  }
+  if (agent.lifecycleStatus === 'revoked' && agent.connectionStatus !== 'offline') {
+    context.addIssue({ code: 'custom', path: ['connectionStatus'], message: 'Revoked Agent must be offline' })
+  }
+  if (agent.lifecycleStatus === 'active' && agent.revokedAt !== undefined) {
+    context.addIssue({ code: 'custom', path: ['revokedAt'], message: 'Active Agent cannot have revokedAt' })
+  }
+})
+
+// The OIDC access token belongs in the Authorization header. Exchanging it
+// never mints or returns a legacy opaque User credential.
+export const oidcExchangeRequestSchema = z.object({
+  ...protocolEnvelopeShape,
+  type: z.literal('oidc.exchange')
+}).strict()
+export type OidcExchangeRequest = z.infer<typeof oidcExchangeRequestSchema>
+
+export const oidcExchangeResponseSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  requestId: requestIdSchema,
+  type: z.literal('oidc.exchanged'),
+  user: identityUserPrincipalSchema,
+  identity: oidcExternalIdentitySchema
+}).strict()
+export type OidcExchangeResponse = z.infer<typeof oidcExchangeResponseSchema>
+
+export const currentUserResponseSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  requestId: requestIdSchema,
+  type: z.literal('identity.me'),
+  user: identityUserPrincipalSchema,
+  identity: oidcExternalIdentitySchema
+}).strict().superRefine((response, context) => {
+  if (response.user.userId !== response.identity.userId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['identity', 'userId'],
+      message: 'OIDC identity must belong to the returned SciForge user'
+    })
+  }
+})
+export type CurrentUserResponse = z.infer<typeof currentUserResponseSchema>
+
+export const deviceEnrollmentStartSchema = z.object({
+  installationId: installationIdSchema
+}).strict()
+export type DeviceEnrollmentStart = z.infer<typeof deviceEnrollmentStartSchema>
+
+export const deviceEnrollmentChallengeSchema = z.object({
+  ...protocolEnvelopeShape,
+  type: z.literal('device.enrollment.challenge'),
+  enrollmentId: deviceEnrollmentIdSchema,
+  userId: userIdSchema,
+  installationId: installationIdSchema,
+  nonce: enrollmentNonceSchema,
+  expiresAt: timestampSchema
+}).strict()
+export type DeviceEnrollmentChallenge = z.infer<typeof deviceEnrollmentChallengeSchema>
+
+export const devicePossessionProofSchema = z.object({
+  alg: z.literal('EdDSA'),
+  signature: ed25519SignatureSchema
+}).strict()
+export type DevicePossessionProof = z.infer<typeof devicePossessionProofSchema>
+
+export const desktopDeviceRegistrationSchema = z.object({
+  enrollmentId: deviceEnrollmentIdSchema,
+  installationId: installationIdSchema,
+  displayName: displayNameSchema,
+  platform: devicePlatformSchema,
+  publicKey: ed25519PublicJwkSchema,
+  capabilities: z.array(deviceCapabilitySchema).max(256)
+    .refine(uniqueStrings, 'Capabilities must be unique'),
+  proof: devicePossessionProofSchema
+}).strict()
+export type DesktopDeviceRegistration = z.infer<typeof desktopDeviceRegistrationSchema>
+
+export const legacyDeviceStatusSchema = z.enum(['pending', 'active', 'revoked'])
+export const deviceRecordSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('device'),
+  deviceId: deviceIdSchema,
+  userId: userIdSchema,
+  installationId: installationIdSchema,
+  displayName: displayNameSchema,
+  platform: devicePlatformSchema,
+  publicKey: ed25519PublicJwkSchema,
+  status: legacyDeviceStatusSchema,
+  activatedAt: timestampSchema.optional(),
+  revokedAt: timestampSchema.optional()
+}).strict().superRefine((device, context) => {
+  if ((device.status !== 'pending') !== (device.activatedAt !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['activatedAt'], message: 'Activated or revoked Device requires activatedAt' })
+  }
+  if ((device.status === 'revoked') !== (device.revokedAt !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['revokedAt'], message: 'Only revoked Device requires revokedAt' })
+  }
+})
+export type DeviceRecord = z.infer<typeof deviceRecordSchema>
+
+export const deviceAgentLinkSchema = z.object({
+  deviceId: deviceIdSchema,
+  agentId: agentIdSchema
+}).strict()
+export type DeviceAgentLink = z.infer<typeof deviceAgentLinkSchema>
+
+export const collaborationIdentitySnapshotSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  requestId: requestIdSchema,
+  type: z.literal('identity.snapshot'),
+  user: identityUserPrincipalSchema,
+  oidcIdentities: z.array(oidcExternalIdentitySchema).max(32),
+  humanEndpoints: z.array(identityHumanEndpointBindingSchema).max(100),
+  devices: z.array(deviceRecordSchema).max(100),
+  deviceAgentLinks: z.array(deviceAgentLinkSchema).max(100),
+  agents: z.array(identityAgentNodeSchema).max(100)
+}).strict()
+export type CollaborationIdentitySnapshot = z.infer<typeof collaborationIdentitySnapshotSchema>
+
+export const currentDevicesResponseSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  requestId: requestIdSchema,
+  type: z.literal('identity.devices'),
+  devices: z.array(deviceRecordSchema).max(100)
+}).strict()
+export type CurrentDevicesResponse = z.infer<typeof currentDevicesResponseSchema>
+
+export const identityAuditSourceSchema = z.enum(['oidc', 'desktop', 'system'])
+export const identityAuditActionSchema = z.enum([
+  'oidc.exchanged',
+  'oidc.revoked',
+  'device.enrollment.started',
+  'device.registered',
+  'device.revoked',
+  'agent.registered',
+  'agent.revoked'
+])
+export const identityAuditEventSchema = z.object({
+  requestId: requestIdSchema,
+  actorUserId: userIdSchema,
+  source: identityAuditSourceSchema,
+  action: identityAuditActionSchema,
+  externalIdentityId: externalIdentityIdSchema.optional(),
+  humanEndpointId: humanEndpointIdSchema.optional(),
+  deviceId: deviceIdSchema.optional(),
+  agentId: agentIdSchema.optional(),
+  occurredAt: timestampSchema
+}).strict()
+export type IdentityAuditEvent = z.infer<typeof identityAuditEventSchema>
+
+export function oidcIdentityKey(identity: Pick<OidcExternalIdentity, 'issuer' | 'subject'>): string {
+  return normalizeOidcIssuer(identity.issuer) + '\u0000' + identity.subject
+}

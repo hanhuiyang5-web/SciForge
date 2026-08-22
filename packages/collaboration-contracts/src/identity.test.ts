@@ -24,10 +24,15 @@ import {
   externalIdentityRevokeRequestSchema,
   externalIdentitySchema,
   meResponseSchema,
+  oidcExchangeRequestSchema,
+  oidcExchangeResponseSchema,
+  oidcExternalIdentitySchema,
+  oidcIdentityKey,
   oidcIssuerSchema,
   oidcUserActorSchema,
   serviceActorSchema,
   trustedZulipConfirmContextSchema,
+  verifiedOidcClaimsSchema,
   zulipBindingBeginRequestSchema,
   zulipBindingBeginResponseSchema,
   zulipBindingConfirmRequestSchema,
@@ -100,6 +105,108 @@ describe('strict OIDC and me contracts', () => {
     expect(meResponseSchema.parse(me)).toEqual(me)
     expect(meResponseSchema.safeParse({ ...me, accessToken: 'not-allowed' }).success).toBe(false)
     expect(meResponseSchema.safeParse({ ...me, claims: { sub: 'not-public' } }).success).toBe(false)
+  })
+})
+
+describe('AC OIDC helpers without legacy User credentials', () => {
+  const issuedAt = '2026-08-18T02:00:00.000Z'
+  const expiresAt = '2026-08-18T03:00:00.000Z'
+
+  function verifiedClaims(overrides: Record<string, unknown> = {}) {
+    return verifiedOidcClaimsSchema.parse({
+      type: 'verified_oidc_claims',
+      issuer: 'https://login.sciforge.example/realms/SciForge',
+      subject: 'keycloak-user-001',
+      audiences: ['sciforge-cloud-api'],
+      issuedAt,
+      expiresAt,
+      email: 'researcher@example.invalid',
+      emailVerified: true,
+      displayName: 'Researcher One',
+      ...overrides
+    })
+  }
+
+  it('normalizes the verified issuer identity without using email as the key', () => {
+    const firstClaims = verifiedClaims({
+      issuer: 'https://login.sciforge.example/realms/SciForge/'
+    })
+    const changedEmail = verifiedClaims({ email: 'renamed@example.invalid' })
+    const identity = oidcExternalIdentitySchema.parse({
+      schemaVersion: 1,
+      type: 'oidc_external_identity',
+      externalIdentityId: 'xid_Identity000001',
+      userId: 'usr_User00000001',
+      issuer: firstClaims.issuer,
+      subject: firstClaims.subject,
+      status: 'active',
+      verifiedAt: issuedAt,
+      revision: 1,
+      createdAt: issuedAt,
+      updatedAt: issuedAt
+    })
+    expect(firstClaims.issuer).toBe(changedEmail.issuer)
+    expect(oidcIdentityKey(identity)).toBe(
+      oidcIdentityKey({ ...identity, issuer: changedEmail.issuer, subject: changedEmail.subject })
+    )
+  })
+
+  it('rejects insecure verified issuers, invalid times, and token material in exchange JSON', () => {
+    expect(verifiedOidcClaimsSchema.safeParse({
+      ...verifiedClaims(),
+      issuer: 'http://127.0.0.1:8080/realms/SciForge'
+    }).success).toBe(true)
+    expect(verifiedOidcClaimsSchema.safeParse({
+      ...verifiedClaims(),
+      issuer: 'http://login.sciforge.example/realms/SciForge'
+    }).success).toBe(false)
+    expect(verifiedOidcClaimsSchema.safeParse({
+      ...verifiedClaims(),
+      expiresAt: issuedAt
+    }).success).toBe(false)
+    expect(oidcExchangeRequestSchema.safeParse({
+      protocolVersion: '1.0',
+      requestId: 'req_OidcExchange01',
+      type: 'oidc.exchange',
+      accessToken: 'must-not-enter-json'
+    }).success).toBe(false)
+  })
+
+  it('keeps the OIDC exchange response strict and credential-free', () => {
+    const identity = oidcExternalIdentitySchema.parse({
+      schemaVersion: 1,
+      type: 'oidc_external_identity',
+      externalIdentityId: 'xid_Identity000001',
+      userId: 'usr_User00000001',
+      issuer: 'https://login.sciforge.example/realms/SciForge',
+      subject: 'keycloak-user-001',
+      status: 'active',
+      verifiedAt: issuedAt,
+      revision: 1,
+      createdAt: issuedAt,
+      updatedAt: issuedAt
+    })
+    const response = {
+      protocolVersion: '1.0',
+      requestId: 'req_OidcExchange01',
+      type: 'oidc.exchanged',
+      user: {
+        schemaVersion: 1,
+        type: 'user_principal',
+        userId: identity.userId,
+        displayName: 'Researcher One',
+        status: 'active',
+        revision: 1,
+        createdAt: issuedAt,
+        updatedAt: issuedAt
+      },
+      identity
+    } as const
+    expect(oidcExchangeResponseSchema.safeParse(response).success).toBe(true)
+    expect(oidcExchangeResponseSchema.safeParse({
+      ...response,
+      userCredential: 'legacy-user-credential-must-not-exist'
+    }).success).toBe(false)
   })
 })
 
