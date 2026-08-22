@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   canonicalEnrollmentBytes,
   collaborationErrorSchema,
+  computeTaskCreateProposalDigest,
   deviceCreateRequestSchema,
   deviceEnrollmentCreateRequestSchema,
   deviceEnrollmentCreateResponseSchema,
@@ -18,6 +19,7 @@ import {
   externalIdentityRevokeRequestSchema,
   inboxMessageSchema,
   meResponseSchema,
+  portableResourceReferenceCarrierSchema,
   restEntitySchema,
   restRequestSchema,
   restResponseSchema,
@@ -26,6 +28,10 @@ import {
   zulipBindingConfirmRequestSchema,
   zulipBindingConfirmResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+  TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR
+} from '../packages/collaboration-contracts/src/testing.ts'
 import {
   ARTIFACT_DIRECTORY,
   COMMIT_PLACEHOLDER,
@@ -61,6 +67,31 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   assert.equal(manifest.acceptance.formalProductTransport.status, 'not-selected')
   assert.ok(manifest.acceptance.coreOnly.proves.includes('device-enrollment-signing-vector'))
   assert.ok(manifest.files.some((entry) => entry.path === 'fixtures/device-enrollment-signing-v1.json'))
+  assert.equal(manifest.packages['@sciforge/collaboration-contracts'], '0.2.0')
+  assert.equal(manifest.packages['@sciforge/domain-sdk'], '0.2.2')
+  assert.equal(manifest.packages['@sciforge/domain-content-space'], '1.0.0')
+  assert.equal(manifest.databaseSchemaVersion, 8)
+  assert.equal(manifest.portableResourceCarrier.schemaVersion, '1.0.0')
+  assert.equal(manifest.portableResourceCarrier.upstreamCommit,
+    'e58ed48e94812d0c56da48ab7387f53135439cc5')
+  assert.equal(manifest.portableResourceCarrier.validationAuthority,
+    '@sciforge/domain-sdk/portable-resource-references')
+  assert.equal(manifest.portableResourceCarrier.contentSpaceContractSourceSha256,
+    '27a21e4f515f3c9eacc8fae81fc7b065aa602e5decf3c713d20b9670caa3eb67')
+  assert.deepEqual(manifest.portableResourceCarrier.kinds, [
+    'content-space.file-reference',
+    'content-space.container-reference',
+    'content-space.artifact-reference'
+  ])
+  assert.equal(manifest.portableResourceCarrier.openUrlRequired, false)
+  const algorithms = JSON.parse(files.get('algorithms.json'))
+  assert.equal(algorithms.deviceEnrollmentSigning.helperExport, 'canonicalEnrollmentBytes')
+  assert.equal(algorithms.deviceEnrollmentSigning.domain, 'SCIFORGE-DEVICE-ENROLLMENT-V1')
+  assert.deepEqual(algorithms.deviceEnrollmentSigning.fieldOrder,
+    ['domain', 'enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'])
+  assert.equal(algorithms.taskCreateProposalDigest.normalizeExport, 'normalizeTaskCreateProposal')
+  assert.equal(algorithms.taskCreateProposalDigest.digestExport, 'computeTaskCreateProposalDigest')
+  assert.equal(algorithms.taskCreateProposalDigest.algorithm, 'sha256-canonical-json-v1')
   assert.equal(manifest.files.length, files.size - 1)
   for (const entry of manifest.files) {
     const content = files.get(entry.path)
@@ -112,6 +143,17 @@ test('Device enrollment golden vector freezes canonical bytes and verifies with 
   assert.equal(signature.toString('base64url'), fixture.expected.signatureBase64url)
   assert.equal(verify(null, canonical, createPublicKey({ key: publicKeyJwk, format: 'jwk' }), signature), true)
   assert.equal(/"(?:d|privateKey|privateKeyJwk|seed|secret)"\s*:/iu.test(JSON.stringify(fixture)), false)
+})
+
+test('integrated portable parser remains byte-identical to E pinned commit provenance', async () => {
+  const source = await readFile(join(
+    ARTIFACT_DIRECTORY,
+    '../../../domain-sdk/src/portable-resource-references.ts'
+  ))
+  assert.equal(
+    createHash('sha256').update(source).digest('hex'),
+    'af402fbb108a02588c9af7a684146ff12fe0bf48f35b534c4b5f3f233e5d650d'
+  )
 })
 
 test('JSON Schemas expose the complete strict public roots and actor table', () => {
@@ -386,7 +428,10 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
     'idempotency-conflict',
     'execution-conflict',
     'confirmation-conflict',
-    'credential-revoke'
+    'credential-revoke',
+    'algorithm-vector',
+    'portable-round-trip',
+    'portable-rejection'
   ]))
   for (const fixture of fixtures) {
     assert.equal(fixture.protocolVersion, '1.0')
@@ -422,6 +467,33 @@ test('fixtures cover required compatibility and ordering scenarios with valid pu
     subsequentUseErrorCode: 'credential_revoked',
     successReceiptStatus: 'succeeded'
   })
+  const enrollmentVector = fixtures.find((fixture) => fixture.id === 'device-enrollment-signing-vector')
+  assert.deepEqual(enrollmentVector.expectations.facts, DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR.facts)
+  assert.equal(
+    Buffer.from(canonicalEnrollmentBytes(enrollmentVector.expectations.facts)).toString('base64url'),
+    enrollmentVector.expectations.canonicalBase64Url
+  )
+  assert.equal(enrollmentVector.expectations.signature, DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR.signature)
+  const proposalVector = fixtures.find((fixture) => fixture.id === 'task-create-proposal-digest-vector')
+  assert.deepEqual(proposalVector.expectations.proposal, TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR.proposal)
+  assert.equal(
+    computeTaskCreateProposalDigest(proposalVector.expectations.proposal),
+    proposalVector.expectations.digest
+  )
+  const portableRoundTrips = fixtures.filter((fixture) => fixture.category === 'portable-round-trip')
+  assert.equal(portableRoundTrips.length, 6)
+  for (const fixture of portableRoundTrips) {
+    const create = fixture.documents.find((document) => document.role === 'create-request').value
+    const fetched = fixture.documents.find((document) => document.role === 'get-response').value.entity
+    assert.equal('openUrl' in create, false, fixture.id)
+    assert.equal(fetched.openUrl, null, fixture.id)
+    assert.deepEqual(fetched.portableReference, create.portableReference, fixture.id)
+  }
+  const rejected = fixtures.find((fixture) => fixture.category === 'portable-rejection')
+  for (const request of rejected.expectations.rejectedRequests) {
+    assert.equal(portableResourceReferenceCarrierSchema.safeParse(request.portableReference).success, false)
+    assert.equal(restRequestSchema.safeParse(request).success, false)
+  }
 })
 
 test('release generation can inject one fixed commit without changing the source artifact set', () => {

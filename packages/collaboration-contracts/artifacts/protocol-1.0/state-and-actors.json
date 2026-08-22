@@ -156,6 +156,55 @@
       "actors": [
         "user"
       ],
+      "availability": "provider-dependent",
+      "command": "managed_container.archive",
+      "condition": "The authenticated user must own the active Human Endpoint and managed Provider container."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "provider-dependent",
+      "command": "managed_container.ensure",
+      "condition": "The authenticated user must own the active Human Endpoint and managed Provider container."
+    },
+    {
+      "actors": [
+        "user",
+        "agent"
+      ],
+      "availability": "provider-dependent",
+      "command": "managed_container.get",
+      "condition": "The credential userId must equal the managed Provider container owner userId."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "provider-dependent",
+      "command": "managed_container.inspect",
+      "condition": "The authenticated user must own the active Human Endpoint and managed Provider container."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "provider-dependent",
+      "command": "managed_container.list",
+      "condition": "The authenticated user must own the active Human Endpoint and managed Provider container."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "provider-dependent",
+      "command": "managed_container.reconcile",
+      "condition": "The authenticated user must own the active Human Endpoint and managed Provider container."
+    },
+    {
+      "actors": [
+        "user"
+      ],
       "availability": "current",
       "command": "pairing.begin",
       "condition": "The OIDC User adapter uses the authoritative Zulip binding state and never creates a User or issues a User credential."

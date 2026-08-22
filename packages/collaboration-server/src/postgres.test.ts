@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import {
+  serializePortableResourceReferenceCarrier
+} from '@sciforge/collaboration-contracts'
+// @ts-expect-error Test-only E contract bridge is runtime-typed by its source package.
+import { toPortableContentFileReference } from '../../../test-fixtures/collaboration/e-content-space-portable.mjs'
+
 import { COLLABORATION_SCHEMA_VERSION, runCollaborationMigrations } from './migrations.js'
 import type {
   StoredActionConfirmation,
@@ -115,6 +121,43 @@ describe('PostgreSQL pool diagnostics', () => {
 })
 
 describe('PostgreSQL production transaction path', () => {
+  it('transfers endpoint ownership through a CAS path that also accepts external-identity-backed rows', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        return { rows: [], rowCount: 1 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+    const updatedAt = '2026-08-15T02:00:00.000Z'
+
+    await repository.transaction((tx) => tx.transferEndpointOwnership({
+      humanEndpointId: 'hep_PostgresTransfer01',
+      sourceUserId: 'usr_PostgresTransferSource01',
+      targetUserId: 'usr_PostgresTransferTarget01',
+      expectedRevision: 3,
+      updatedAt
+    }))
+
+    const transfer = queries.find(({ text }) => text.includes('SET user_id=$2,revision=revision+1'))
+    expect(transfer?.text).toContain('WHERE human_endpoint_id=$1 AND user_id=$4 AND revision=$5')
+    expect(transfer?.text).not.toContain('external_identity_id IS NULL')
+    expect(transfer?.values).toEqual([
+      'hep_PostgresTransfer01',
+      'usr_PostgresTransferTarget01',
+      updatedAt,
+      'usr_PostgresTransferSource01',
+      3
+    ])
+    expect(queries.at(-1)?.text).toBe('COMMIT')
+  })
+
   it('fences stale managed-container completions by claim attempt inside one transaction', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = []
     const connection: SqlConnection = {
@@ -264,7 +307,7 @@ describe('PostgreSQL production transaction path', () => {
     }
   })
 
-  it('runs the ordered collaboration migrations through schema version 7', async () => {
+  it('runs the ordered collaboration migrations through schema version 8', async () => {
     const migrations: string[] = []
     const pool: SqlPool = {
       query: async (text) => { migrations.push(text); return { rows: [], rowCount: 0 } },
@@ -274,8 +317,8 @@ describe('PostgreSQL production transaction path', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(7)
-    expect(migrations).toHaveLength(7)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(8)
+    expect(migrations).toHaveLength(8)
     expect(migrations[1]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.resource_refs')
     expect(migrations[1]).toContain('created_by_user_id text NOT NULL')
     expect(migrations[1]).toContain('CONSTRAINT resource_refs_open_url_safe')
@@ -366,10 +409,15 @@ describe('PostgreSQL production transaction path', () => {
     expect(migrations[5]).toContain('inbox_messages_recipient_kind_check')
     expect(migrations[5]).toContain("'provider_identity'")
     expect(migrations[5]).toContain('VALUES (6)')
-    expect(migrations[6]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_containers')
-    expect(migrations[6]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_container_jobs')
-    expect(migrations[6]).toContain('managed_provider_container_jobs_claim_idx')
+    expect(migrations[6]).toContain('ADD COLUMN IF NOT EXISTS portable_reference text')
+    expect(migrations[6]).toContain('ALTER COLUMN open_url DROP NOT NULL')
+    expect(migrations[6]).toContain('resource_refs_portable_reference_safe')
+    expect(migrations[6]).toContain("'content-space.file-reference'")
     expect(migrations[6]).toContain('VALUES (7)')
+    expect(migrations[7]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_containers')
+    expect(migrations[7]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_container_jobs')
+    expect(migrations[7]).toContain('managed_provider_container_jobs_claim_idx')
+    expect(migrations[7]).toContain('VALUES (8)')
   })
 
   it('reconciles representative legacy TaskResult fixtures deterministically', () => {
@@ -766,12 +814,16 @@ describe('PostgreSQL production transaction path', () => {
 
   it('maps and revision-guards ResourceRef metadata in PostgreSQL', async () => {
     const at = '2026-08-15T02:00:00.000Z'
+    const portableReference = toPortableContentFileReference({
+      providerInstanceRef: 'opencontent.postgres',
+      fileId: 'postgres-document-42'
+    })
     const resource: StoredResourceRef = {
       resourceRefId: 'rrf_Postgres0012', projectId: 'prj_Postgres0012', taskId: 'tsk_Postgres0012',
       executionId: 'exe_Postgres0012', taskRevision: 3, createdByUserId: 'usr_PostgresUser1',
       createdByAgentId: 'agt_PostgresWork1',
-      provider: 'example-content', externalId: 'postgres-document-42', kind: 'shared_document',
-      name: 'PostgreSQL ResourceRef', openUrl: 'https://content.example.invalid/postgres-document-42',
+      provider: 'opencontent', externalId: 'postgres-document-42', kind: 'content-space.file-reference',
+      name: 'PostgreSQL ResourceRef', portableReference,
       version: '1', status: 'available', revision: 1, createdAt: at, updatedAt: at
     }
     const writes: Array<{ text: string; values: readonly unknown[] }> = []
@@ -786,7 +838,9 @@ describe('PostgreSQL production transaction path', () => {
             task_id: resource.taskId, execution_id: resource.executionId, task_revision: resource.taskRevision,
             created_by_user_id: resource.createdByUserId, created_by_agent_id: resource.createdByAgentId,
             provider: resource.provider, external_id: resource.externalId,
-            kind: resource.kind, name: resource.name, open_url: resource.openUrl, provider_version: resource.version,
+            kind: resource.kind, name: resource.name, open_url: null,
+            portable_reference: serializePortableResourceReferenceCarrier(portableReference),
+            provider_version: resource.version,
             status: resource.status, status_reason_code: null, unavailable_at: null, revoked_at: null,
             invalidated_at: null, revision: resource.revision,
             created_at: new Date(at), updated_at: new Date(at) }], rowCount: 1 }
@@ -809,7 +863,8 @@ describe('PostgreSQL production transaction path', () => {
     const update = writes.find(({ text }) => text.includes('UPDATE sciforge_collaboration.resource_refs'))
     expect(insert?.values).toEqual([resource.resourceRefId, resource.projectId, resource.taskId,
       resource.executionId, resource.taskRevision, resource.createdByUserId, resource.createdByAgentId, resource.provider,
-      resource.externalId, resource.kind, resource.name, resource.openUrl, resource.version,
+      resource.externalId, resource.kind, resource.name, null,
+      serializePortableResourceReferenceCarrier(portableReference), resource.version,
       'available', null, null, null, null, 1, at, at])
     expect(update?.values).toEqual([resource.resourceRefId, 'invalidated', null, null, null, at, 2, at, 1])
   })

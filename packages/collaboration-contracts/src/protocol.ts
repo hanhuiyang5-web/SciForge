@@ -59,9 +59,6 @@ import {
   remoteSessionProjectionSchema,
   taskSchema,
   taskCriterionEvidenceSchema,
-  taskCriterionSchema,
-  workerRequirementSchema,
-  authorizationRequirementSchema,
   structuredTaskResultSchema,
   taskSafeFailureCodeSchema,
   taskStatusSchema,
@@ -81,6 +78,7 @@ import {
   providerLocatorSchema,
   providerManagedContainerPolicySchema
 } from './provider.js'
+import { taskCreateProposalInputSchema } from './task-proposal.js'
 
 export const PAIRING_BIND_CODE_VERSION = 'SF1' as const
 export const pairingBindCodeSchema = z.string().regex(/^SF1\.[a-f0-9]{32}\.[A-Za-z0-9_-]{12}$/u)
@@ -500,16 +498,8 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.bind'), projectId: projectIdSchema, locator: providerLocatorSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.update'), projectEndpointBindingId: projectEndpointBindingIdSchema, expectedRevision: revisionSchema, locator: providerLocatorSchema.optional(), locatorRevision: revisionSchema.optional(), status: z.enum(['active', 'closed']).optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.endpoint.get'), projectId: projectIdSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('task.create'), projectId: projectIdSchema,
-    expectedRevision: revisionSchema, assigneeAgentId: agentIdSchema,
-    title: z.string().trim().min(1).max(200), objective: nonEmptyTextSchema,
-    completionCriteria: z.array(z.union([taskCriterionSchema, z.string().trim().min(1).max(2_000)])).min(1).max(100),
-    dependencyTaskIds: z.array(taskIdSchema).max(1_000),
-    requiredCapabilities: workerRequirementSchema.default({
-      capabilityIds: [], vpnAccessIds: [], slurmClusterIds: [], requiredResourceRefIds: []
-    }),
-    resourceRefIds: z.array(resourceRefIdSchema).max(1_000).default([]),
-    authorizationRequirements: z.array(authorizationRequirementSchema).max(100).default([]),
+  z.object({ ...writeCommandShape, ...taskCreateProposalInputSchema.shape,
+    type: z.literal('task.create'), expectedRevision: revisionSchema,
     confirmationId: confirmationIdSchema.optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('task.get'), taskId: taskIdSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('task.retry'), taskId: taskIdSchema,

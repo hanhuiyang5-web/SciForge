@@ -347,6 +347,15 @@ ResourceRef 使用稳定 ID 与安全 HTTPS 元数据；长期 secret、短期�
 
 `/healthz` 只说明进程存活，`/readyz` 只说明 canonical PostgreSQL 可用。Provider catalog、启动诊断和身份/pairing 是否可用必须作为独立业务前置检查，不得由 `/readyz=200` 推断。
 
+### R0.1 公共算法与 portable carrier 跟进
+
+R0.1 不改变既有身份、Task 或 ResourceRef 状态机，只消除跨模块复制算法的风险：Device
+enrollment canonical bytes 与 Task proposal digest 都由 `@sciforge/collaboration-contracts@0.2.0`
+作为唯一实现和固定向量发布。Server 通过该包消费相同 helper；C/B 只需消费公共合同，不要求 A
+修改其实现。portable carrier 的新增证据使用隔离真实 PostgreSQL 和 E 已有公开 codec/parser，
+不把 E 逻辑复制进 Cloud runtime。部署产物必须从最终 commit 单独生成
+`team-private-acceptance` bundle，不能把仅证明合同消费的旧 Release 改名复用。
+
 在 core-only 模式下，预期 Provider catalog 为空，只能验收 Tunnel、health/readiness、匿名协议错误和不依赖身份的合同面；不得宣称真实 pairing、Agent 注册或 Project 闭环已经开放。正式 Human Provider、Zulip 与最新版 SciForge 的连接方式、身份前置、测试组织和开放时间仍待团队方案确认，A 的内核合同不得提前把其中任一条候选链路冻结为唯一生产拓扑。
 
 ## 8. 候选 Zulip Provider 的职责与边界

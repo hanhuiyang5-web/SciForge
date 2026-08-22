@@ -1,0 +1,129 @@
+{
+  "category": "algorithm-vector",
+  "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+  "contractStatus": "current",
+  "documents": [],
+  "expectations": {
+    "algorithm": "sha256-canonical-json-v1",
+    "canonicalJson": "{\"assigneeAgentId\":\"agt_ProposalWorker01\",\"authorizationRequirements\":[{\"description\":\"Confirm access to the portable input.\",\"id\":\"auth_ProposalRequirement01\",\"kind\":\"resource_access\",\"targetRefId\":\"rrf_ProposalResource01\"},{\"description\":\"Confirm the bounded result return.\",\"id\":\"auth_ProposalRequirement02\",\"kind\":\"data_egress\"}],\"completionCriteria\":[{\"text\":\"Return a portable artifact reference.\"},{\"criterionId\":\"cri_ProposalCriterion01\",\"text\":\"Preserve the artifact SHA-256 digest.\"}],\"dependencyTaskIds\":[\"tsk_ProposalDependency01\"],\"objective\":\"Validate the full Task proposal digest across A and B.\",\"projectId\":\"prj_ProposalVector01\",\"requiredCapabilities\":{\"capabilityIds\":[\"research.execute\",\"content-space.read\"],\"minGpuMemoryGB\":16,\"minimumEvidenceLevel\":\"verified\",\"osFamilies\":[\"linux\",\"macos\"],\"requireLogSummary\":true,\"requiredResourceRefIds\":[\"rrf_ProposalResource01\"],\"slurmClusterIds\":[\"slurm_main\"],\"vpnAccessIds\":[\"vpn_lab\"]},\"resourceRefIds\":[\"rrf_ProposalResource01\",\"rrf_ProposalResource02\"],\"title\":\"Produce the R0.1 portable result\"}",
+    "digest": "0f01d88e8befc4f645493c8137275a659ec8952cc82a53d2c7d205edef4adaa8",
+    "digestExport": "computeTaskCreateProposalDigest",
+    "normalizedProposal": {
+      "assigneeAgentId": "agt_ProposalWorker01",
+      "authorizationRequirements": [
+        {
+          "description": "Confirm access to the portable input.",
+          "id": "auth_ProposalRequirement01",
+          "kind": "resource_access",
+          "targetRefId": "rrf_ProposalResource01"
+        },
+        {
+          "description": "Confirm the bounded result return.",
+          "id": "auth_ProposalRequirement02",
+          "kind": "data_egress"
+        }
+      ],
+      "completionCriteria": [
+        {
+          "text": "Return a portable artifact reference."
+        },
+        {
+          "criterionId": "cri_ProposalCriterion01",
+          "text": "Preserve the artifact SHA-256 digest."
+        }
+      ],
+      "dependencyTaskIds": [
+        "tsk_ProposalDependency01"
+      ],
+      "objective": "Validate the full Task proposal digest across A and B.",
+      "projectId": "prj_ProposalVector01",
+      "requiredCapabilities": {
+        "capabilityIds": [
+          "research.execute",
+          "content-space.read"
+        ],
+        "minGpuMemoryGB": 16,
+        "minimumEvidenceLevel": "verified",
+        "osFamilies": [
+          "linux",
+          "macos"
+        ],
+        "requiredResourceRefIds": [
+          "rrf_ProposalResource01"
+        ],
+        "requireLogSummary": true,
+        "slurmClusterIds": [
+          "slurm_main"
+        ],
+        "vpnAccessIds": [
+          "vpn_lab"
+        ]
+      },
+      "resourceRefIds": [
+        "rrf_ProposalResource01",
+        "rrf_ProposalResource02"
+      ],
+      "title": "Produce the R0.1 portable result"
+    },
+    "normalizeExport": "normalizeTaskCreateProposal",
+    "proposal": {
+      "assigneeAgentId": "agt_ProposalWorker01",
+      "authorizationRequirements": [
+        {
+          "description": "  Confirm access to the portable input.  ",
+          "id": "auth_ProposalRequirement01",
+          "kind": "resource_access",
+          "targetRefId": "rrf_ProposalResource01"
+        },
+        {
+          "description": "  Confirm the bounded result return.  ",
+          "id": "auth_ProposalRequirement02",
+          "kind": "data_egress"
+        }
+      ],
+      "completionCriteria": [
+        "  Return a portable artifact reference.  ",
+        {
+          "criterionId": "cri_ProposalCriterion01",
+          "text": "  Preserve the artifact SHA-256 digest.  "
+        }
+      ],
+      "dependencyTaskIds": [
+        "tsk_ProposalDependency01"
+      ],
+      "objective": "  Validate the full Task proposal digest across A and B.  ",
+      "projectId": "prj_ProposalVector01",
+      "requiredCapabilities": {
+        "capabilityIds": [
+          "research.execute",
+          "content-space.read"
+        ],
+        "minGpuMemoryGB": 16,
+        "minimumEvidenceLevel": "verified",
+        "osFamilies": [
+          "linux",
+          "macos"
+        ],
+        "requiredResourceRefIds": [
+          "rrf_ProposalResource01"
+        ],
+        "requireLogSummary": true,
+        "slurmClusterIds": [
+          "slurm_main"
+        ],
+        "vpnAccessIds": [
+          "vpn_lab"
+        ]
+      },
+      "resourceRefIds": [
+        "rrf_ProposalResource01",
+        "rrf_ProposalResource02"
+      ],
+      "title": "  Produce the R0.1 portable result  "
+    },
+    "verifies": true
+  },
+  "fixtureVersion": 1,
+  "id": "task-create-proposal-digest-vector",
+  "protocolVersion": "1.0"
+}

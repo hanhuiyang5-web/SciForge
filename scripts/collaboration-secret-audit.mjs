@@ -10,7 +10,7 @@ const fragments = {
   aws: ['(?:AK', 'IA|AS', 'IA)'].join(''),
   github: ['gh', '[pousr]_'].join(''),
   slack: ['xo', 'x[baprs]-'].join(''),
-  model: ['s', 'k-'].join('')
+  model: ['(?:^|[^A-Za-z0-9])s', 'k-'].join('')
 }
 
 const detectors = [

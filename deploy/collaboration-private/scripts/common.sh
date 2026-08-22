@@ -407,6 +407,7 @@ validate_release_bundle() {
   local bundle_entries=()
   local bundle_entry
   local tarballs=()
+  local domain_sdk_packages=0
   local contract_packages=0
   local provider_packages=0
   local server_packages=0
@@ -440,11 +441,12 @@ validate_release_bundle() {
   shopt -s nullglob
   tarballs=("$BUNDLE_DIR"/*.tgz)
   shopt -u nullglob
-  (( ${#tarballs[@]} == 3 )) || die "Bundle must contain exactly three tarballs."
+  (( ${#tarballs[@]} == 4 )) || die "Bundle must contain exactly four tarballs."
   for tarball in "${tarballs[@]}"; do
     [[ -f "$tarball" && ! -L "$tarball" ]] || die "Tarball must be a regular, non-symlink file."
     basename="$(basename "$tarball")"
     case "$basename" in
+      sciforge-domain-sdk-*.tgz) ((domain_sdk_packages += 1)) ;;
       sciforge-collaboration-contracts-*.tgz) ((contract_packages += 1)) ;;
       sciforge-collaboration-provider-zulip-*.tgz) ((provider_packages += 1)) ;;
       sciforge-collaboration-server-*.tgz) ((server_packages += 1)) ;;
@@ -454,8 +456,8 @@ validate_release_bundle() {
       || die "Tarball does not contain package/package.json: $basename"
     allowed_files["$basename"]=1
   done
-  (( contract_packages == 1 && provider_packages == 1 && server_packages == 1 )) \
-    || die "Bundle must contain one contracts, one Zulip provider, and one server tarball."
+  (( domain_sdk_packages == 1 && contract_packages == 1 && provider_packages == 1 && server_packages == 1 )) \
+    || die "Bundle must contain one domain SDK, one contracts, one Zulip provider, and one server tarball."
 
   manifest_schema_version="$(awk '$1 == "\"schemaVersion\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
   manifest_artifact="$(awk -F'"' '$2 == "artifact" { print $4 }' "$manifest_file")"
@@ -623,8 +625,8 @@ validate_release_bundle() {
       ;;
     *) die "RELEASE_MANIFEST.json contains an unsupported release mode." ;;
   esac
-  (( ${#manifest_filenames[@]} == 3 )) \
-    || die "RELEASE_MANIFEST.json must describe exactly three packages."
+  (( ${#manifest_filenames[@]} == 4 )) \
+    || die "RELEASE_MANIFEST.json must describe exactly four packages."
   for manifest_filename in "${manifest_filenames[@]}"; do
     [[ -n "${allowed_files[$manifest_filename]:-}" ]] \
       || die "RELEASE_MANIFEST.json references an unexpected package archive."
@@ -668,7 +670,7 @@ validate_release_bundle() {
     [[ -z "${seen_files[$filename]:-}" ]] || die "SHA256SUMS contains a duplicate file entry."
     seen_files["$filename"]=1
   done < "$BUNDLE_DIR/SHA256SUMS"
-  (( line_count == 7 && ${#seen_files[@]} == 7 )) || die "SHA256SUMS must cover exactly all seven release inputs."
+  (( line_count == 8 && ${#seen_files[@]} == 8 )) || die "SHA256SUMS must cover exactly all eight release inputs."
   for filename in "${!allowed_files[@]}"; do
     [[ -n "${seen_files[$filename]:-}" ]] || die "SHA256SUMS does not cover every release input."
   done

@@ -134,6 +134,13 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   consumeChallenge(challengeId: string, consumedAt: string): Promise<boolean>
   insertEndpoint(endpoint: StoredEndpoint): Promise<void>
   updateEndpoint(endpoint: StoredEndpoint, expectedRevision: number): Promise<void>
+  transferEndpointOwnership(input: {
+    humanEndpointId: string
+    sourceUserId: string
+    targetUserId: string
+    expectedRevision: number
+    updatedAt: string
+  }): Promise<void>
   insertAgent(agent: StoredAgent): Promise<void>
   updateAgent(agent: StoredAgent, expectedRevision: number): Promise<void>
   upsertAgentCapabilityProfile(profile: StoredAgentCapabilityProfile, expectedRevision: number | null): Promise<void>

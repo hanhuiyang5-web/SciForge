@@ -37,6 +37,136 @@ export const TEST_TIMESTAMP = '2026-08-15T08:00:00.000Z'
 export const TEST_LATER_TIMESTAMP = '2026-08-15T08:01:00.000Z'
 export const TEST_HASH = 'a'.repeat(64)
 
+export const DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR = Object.freeze({
+  algorithm: 'Ed25519' as const,
+  domain: 'SCIFORGE-DEVICE-ENROLLMENT-V1' as const,
+  facts: Object.freeze({
+    enrollmentId: 'enr_Vector0000001',
+    nonce: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+    userId: 'usr_Vector0000001',
+    installationId: 'ins_Vector0000001',
+    expiresAt: '2026-08-19T12:05:00.000Z'
+  }),
+  canonicalUtf8: [
+    'SCIFORGE-DEVICE-ENROLLMENT-V1',
+    'enr_Vector0000001',
+    'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+    'usr_Vector0000001',
+    'ins_Vector0000001',
+    '2026-08-19T12:05:00.000Z'
+  ].join('\n'),
+  canonicalBase64Url:
+    'U0NJRk9SR0UtREVWSUNFLUVOUk9MTE1FTlQtVjEKZW5yX1ZlY3RvcjAwMDAwMDEKQUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOAp1c3JfVmVjdG9yMDAwMDAwMQppbnNfVmVjdG9yMDAwMDAwMQoyMDI2LTA4LTE5VDEyOjA1OjAwLjAwMFo',
+  publicKeyJwk: Object.freeze({
+    kty: 'OKP' as const,
+    crv: 'Ed25519' as const,
+    alg: 'EdDSA' as const,
+    use: 'sig' as const,
+    kid: 'device-enrollment-vector-01',
+    x: 'A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg'
+  }),
+  signature: 'MZGCHrdaZJaArrdyAOmbFIIthXnxXebx-618S4T__NuYbmkDs8GGjyYLEjBr7YKQf5TLwLTNvyZeX8PEkuqHDw'
+})
+
+export const TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR = Object.freeze({
+  algorithm: 'sha256-canonical-json-v1' as const,
+  proposal: Object.freeze({
+    projectId: 'prj_ProposalVector01',
+    assigneeAgentId: 'agt_ProposalWorker01',
+    title: '  Produce the R0.1 portable result  ',
+    objective: '  Validate the full Task proposal digest across A and B.  ',
+    completionCriteria: Object.freeze([
+      '  Return a portable artifact reference.  ',
+      Object.freeze({
+        criterionId: 'cri_ProposalCriterion01',
+        text: '  Preserve the artifact SHA-256 digest.  '
+      })
+    ]),
+    dependencyTaskIds: Object.freeze(['tsk_ProposalDependency01']),
+    requiredCapabilities: Object.freeze({
+      osFamilies: Object.freeze(['linux' as const, 'macos' as const]),
+      capabilityIds: Object.freeze(['research.execute', 'content-space.read']),
+      minimumEvidenceLevel: 'verified' as const,
+      minGpuMemoryGB: 16,
+      vpnAccessIds: Object.freeze(['vpn_lab']),
+      slurmClusterIds: Object.freeze(['slurm_main']),
+      requiredResourceRefIds: Object.freeze(['rrf_ProposalResource01']),
+      requireLogSummary: true
+    }),
+    resourceRefIds: Object.freeze(['rrf_ProposalResource01', 'rrf_ProposalResource02']),
+    authorizationRequirements: Object.freeze([
+      Object.freeze({
+        id: 'auth_ProposalRequirement01',
+        kind: 'resource_access' as const,
+        targetRefId: 'rrf_ProposalResource01',
+        description: '  Confirm access to the portable input.  '
+      }),
+      Object.freeze({
+        id: 'auth_ProposalRequirement02',
+        kind: 'data_egress' as const,
+        description: '  Confirm the bounded result return.  '
+      })
+    ])
+  }),
+  normalizedProposal: Object.freeze({
+    projectId: 'prj_ProposalVector01',
+    assigneeAgentId: 'agt_ProposalWorker01',
+    title: 'Produce the R0.1 portable result',
+    objective: 'Validate the full Task proposal digest across A and B.',
+    completionCriteria: Object.freeze([
+      Object.freeze({ text: 'Return a portable artifact reference.' }),
+      Object.freeze({
+        criterionId: 'cri_ProposalCriterion01',
+        text: 'Preserve the artifact SHA-256 digest.'
+      })
+    ]),
+    dependencyTaskIds: Object.freeze(['tsk_ProposalDependency01']),
+    requiredCapabilities: Object.freeze({
+      osFamilies: Object.freeze(['linux' as const, 'macos' as const]),
+      capabilityIds: Object.freeze(['research.execute', 'content-space.read']),
+      minimumEvidenceLevel: 'verified' as const,
+      minGpuMemoryGB: 16,
+      vpnAccessIds: Object.freeze(['vpn_lab']),
+      slurmClusterIds: Object.freeze(['slurm_main']),
+      requiredResourceRefIds: Object.freeze(['rrf_ProposalResource01']),
+      requireLogSummary: true
+    }),
+    resourceRefIds: Object.freeze(['rrf_ProposalResource01', 'rrf_ProposalResource02']),
+    authorizationRequirements: Object.freeze([
+      Object.freeze({
+        id: 'auth_ProposalRequirement01',
+        kind: 'resource_access' as const,
+        targetRefId: 'rrf_ProposalResource01',
+        description: 'Confirm access to the portable input.'
+      }),
+      Object.freeze({
+        id: 'auth_ProposalRequirement02',
+        kind: 'data_egress' as const,
+        description: 'Confirm the bounded result return.'
+      })
+    ])
+  }),
+  canonicalJson: [
+    '{"assigneeAgentId":"agt_ProposalWorker01","authorizationRequirements":[',
+    '{"description":"Confirm access to the portable input.","id":"auth_ProposalRequirement01",',
+    '"kind":"resource_access","targetRefId":"rrf_ProposalResource01"},',
+    '{"description":"Confirm the bounded result return.","id":"auth_ProposalRequirement02",',
+    '"kind":"data_egress"}],"completionCriteria":[',
+    '{"text":"Return a portable artifact reference."},',
+    '{"criterionId":"cri_ProposalCriterion01","text":"Preserve the artifact SHA-256 digest."}],',
+    '"dependencyTaskIds":["tsk_ProposalDependency01"],',
+    '"objective":"Validate the full Task proposal digest across A and B.",',
+    '"projectId":"prj_ProposalVector01","requiredCapabilities":{',
+    '"capabilityIds":["research.execute","content-space.read"],"minGpuMemoryGB":16,',
+    '"minimumEvidenceLevel":"verified","osFamilies":["linux","macos"],',
+    '"requireLogSummary":true,"requiredResourceRefIds":["rrf_ProposalResource01"],',
+    '"slurmClusterIds":["slurm_main"],"vpnAccessIds":["vpn_lab"]},',
+    '"resourceRefIds":["rrf_ProposalResource01","rrf_ProposalResource02"],',
+    '"title":"Produce the R0.1 portable result"}'
+  ].join(''),
+  digest: '0f01d88e8befc4f645493c8137275a659ec8952cc82a53d2c7d205edef4adaa8'
+})
+
 export const TEST_IDS = Object.freeze({
   userId: 'usr_User00000001',
   secondUserId: 'usr_User00000002',
@@ -330,6 +460,7 @@ export const resourceRefFixture = resourceRefSchema.parse({
   kind: 'shared_document',
   name: '模型分析记录',
   openUrl: 'https://content.example.invalid/resources/document-42',
+  portableReference: null,
   version: '1',
   status: 'available',
   statusReasonCode: null,

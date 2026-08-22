@@ -1,0 +1,41 @@
+{
+  "artifactVersion": 1,
+  "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
+  "deviceEnrollmentSigning": {
+    "delimiter": "LF",
+    "domain": "SCIFORGE-DEVICE-ENROLLMENT-V1",
+    "encoding": "utf-8",
+    "factsSchemaExport": "enrollmentSigningFactsSchema",
+    "factsTypeExport": "EnrollmentSigningFacts",
+    "fieldOrder": [
+      "domain",
+      "enrollmentId",
+      "nonce",
+      "userId",
+      "installationId",
+      "expiresAt"
+    ],
+    "helperExport": "canonicalEnrollmentBytes",
+    "signatureAlgorithm": "Ed25519",
+    "trailingDelimiter": false,
+    "vectorFixture": "fixtures/device-enrollment-signing-vector.json"
+  },
+  "protocolVersion": "1.0",
+  "taskCreateProposalDigest": {
+    "algorithm": "sha256-canonical-json-v1",
+    "canonicalJson": {
+      "arrays": "order-preserving",
+      "objectKeys": "lexicographic",
+      "omitUndefinedObjectProperties": true,
+      "stringEncoding": "json-utf-8"
+    },
+    "digest": {
+      "algorithm": "SHA-256",
+      "encoding": "lowercase-hex"
+    },
+    "digestExport": "computeTaskCreateProposalDigest",
+    "inputSchemaExport": "taskCreateProposalInputSchema",
+    "normalizeExport": "normalizeTaskCreateProposal",
+    "vectorFixture": "fixtures/task-create-proposal-digest-vector.json"
+  }
+}

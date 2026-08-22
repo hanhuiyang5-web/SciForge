@@ -9,6 +9,9 @@ import { z } from 'zod'
 
 import {
   STATE_TRANSITIONS,
+  DEVICE_ENROLLMENT_SIGNING_DOMAIN,
+  PORTABLE_RESOURCE_CARRIER_SCHEMA_VERSION,
+  TASK_CREATE_PROPOSAL_DIGEST_ALGORITHM,
   canonicalEnrollmentBytes,
   collaborationErrorSchema,
   createCollaborationError,
@@ -31,6 +34,18 @@ import {
   zulipBindingConfirmRequestSchema,
   zulipBindingConfirmResponseSchema
 } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+  TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR
+} from '../packages/collaboration-contracts/src/testing.ts'
+import {
+  ARTIFACT_REFERENCE_KIND,
+  CONTENT_CONTAINER_REFERENCE_KIND,
+  CONTENT_FILE_REFERENCE_KIND,
+  toPortableArtifactReference,
+  toPortableContentContainerReference,
+  toPortableContentFileReference
+} from '../packages/domains/content-space/src/contract.ts'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(scriptDirectory, '..')
@@ -41,6 +56,18 @@ export const ARTIFACT_DIRECTORY = join(
 export const COMMIT_PLACEHOLDER = '__SCIFORGE_COLLABORATION_COMMIT__'
 const PROTOCOL_VERSION = '1.0'
 const JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema'
+const COLLABORATION_CONTRACTS_PACKAGE_VERSION = '0.2.0'
+const DOMAIN_SDK_PACKAGE_VERSION = '0.2.2'
+const CONTENT_SPACE_PACKAGE_VERSION = '1.0.0'
+const DATABASE_SCHEMA_VERSION = 8
+const PORTABLE_REFERENCE_UPSTREAM_COMMIT = 'e58ed48e94812d0c56da48ab7387f53135439cc5'
+const PORTABLE_REFERENCE_PARSER_SHA256 = 'af402fbb108a02588c9af7a684146ff12fe0bf48f35b534c4b5f3f233e5d650d'
+const CONTENT_SPACE_CONTRACT_SHA256 = '27a21e4f515f3c9eacc8fae81fc7b065aa602e5decf3c713d20b9670caa3eb67'
+const PORTABLE_CONTENT_SPACE_REFERENCE_KINDS = Object.freeze([
+  CONTENT_FILE_REFERENCE_KIND,
+  CONTENT_CONTAINER_REFERENCE_KIND,
+  ARTIFACT_REFERENCE_KIND
+])
 const TEST_TIMESTAMP = '2026-08-15T08:00:00.000Z'
 const DEVICE_ENROLLMENT_SIGNING_VECTOR = Object.freeze({
   input: Object.freeze({
@@ -173,6 +200,11 @@ const permissionGroups = [
   permission(['participant.get', 'participant.update_primary'], ['user'],
     'The credential userId must equal the Participant userId.'),
   permission(['endpoint.locator.list'], ['user'], 'The user must own the active Human Endpoint.', 'provider-dependent'),
+  permission(['managed_container.ensure', 'managed_container.list', 'managed_container.inspect',
+    'managed_container.reconcile', 'managed_container.archive'], ['user'],
+  'The authenticated user must own the active Human Endpoint and managed Provider container.', 'provider-dependent'),
+  permission(['managed_container.get'], ['user', 'agent'],
+    'The credential userId must equal the managed Provider container owner userId.', 'provider-dependent'),
   permission(['projection.create', 'projection.get', 'projection.list', 'projection.update'], ['user'],
     'The user must own the projection and all referenced endpoints/agents.'),
   permission(['projection.message.publish'], ['agent'], 'The Agent must own the active projection.'),
@@ -560,7 +592,171 @@ function buildFixtures() {
     nextSequence: 14
   })
 
+  const portableCases = [
+    {
+      id: 'portable-input-file-reference',
+      label: 'R0 input file',
+      externalId: 'opencontent_input_file_001',
+      envelope: toPortableContentFileReference({
+        providerInstanceRef: 'opencontent.owner-input',
+        fileId: 'opencontent_input_file_001'
+      })
+    },
+    {
+      id: 'portable-output-container-reference',
+      label: 'R0 output container',
+      externalId: 'opencontent_output_container_001',
+      envelope: toPortableContentContainerReference({
+        providerInstanceRef: 'opencontent.worker-output',
+        containerId: 'opencontent_output_container_001'
+      })
+    },
+    {
+      id: 'portable-uploaded-mutable-file-reference',
+      label: 'R0 uploaded mutable file',
+      externalId: 'opencontent_uploaded_mutable_file_001',
+      envelope: toPortableContentFileReference({
+        providerInstanceRef: 'opencontent.worker-output',
+        fileId: 'opencontent_uploaded_mutable_file_001'
+      })
+    },
+    {
+      id: 'portable-artifact-digest-boundary',
+      label: 'R0 immutable artifact',
+      externalId: 'opencontent_uploaded_artifact_001',
+      envelope: toPortableArtifactReference({
+        providerInstanceRef: 'opencontent.worker-output',
+        fileId: 'opencontent_uploaded_artifact_001',
+        immutableVersionId: 'immutable_version_001',
+        digest: { algorithm: 'sha256', value: 'f'.repeat(64) }
+      })
+    },
+    {
+      id: 'portable-reference-without-open-url',
+      label: 'R0 reference with no deep link',
+      externalId: 'opencontent_no_open_url_001',
+      envelope: toPortableContentFileReference({
+        providerInstanceRef: 'opencontent.no-deep-link',
+        fileId: 'opencontent_no_open_url_001'
+      })
+    },
+    {
+      id: 'portable-reference-maximum-length',
+      label: 'R0 maximum reference boundary',
+      externalId: `f${'b'.repeat(255)}`,
+      envelope: toPortableContentFileReference({
+        providerInstanceRef: `p${'a'.repeat(255)}`,
+        fileId: `f${'b'.repeat(255)}`
+      })
+    }
+  ].map((value, index) => {
+    const resourceRefId = `rrf_PortableR0${String(index + 1).padStart(2, '0')}`
+    const create = restRequestSchema.parse({
+      protocolVersion: PROTOCOL_VERSION,
+      requestId: requestId(`portable${index + 1}`),
+      type: 'resource.create',
+      idempotencyKey: idempotencyKey(value.id),
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      expectedTaskRevision: 3,
+      provider: 'opencontent',
+      externalId: value.externalId,
+      kind: value.envelope.kind,
+      name: value.label,
+      portableReference: value.envelope,
+      version: '1'
+    })
+    const entity = restEntitySchema.parse({
+      schemaVersion: 1,
+      type: 'resource_ref',
+      resourceRefId,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      taskRevision: 3,
+      createdByUserId: TEST_IDS.secondUserId,
+      createdByAgentId: TEST_IDS.secondAgentId,
+      provider: 'opencontent',
+      externalId: value.externalId,
+      kind: value.envelope.kind,
+      name: value.label,
+      openUrl: null,
+      portableReference: value.envelope,
+      version: '1',
+      status: 'available',
+      statusReasonCode: null,
+      unavailableAt: null,
+      revokedAt: null,
+      invalidatedAt: null,
+      revision: 1,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_TIMESTAMP
+    })
+    const created = restResponseSchema.parse({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'rest.entity',
+      requestId: create.requestId,
+      entity
+    })
+    const get = restRequestSchema.parse({
+      protocolVersion: PROTOCOL_VERSION,
+      requestId: requestId(`portableget${index + 1}`),
+      type: 'resource.get',
+      resourceRefId
+    })
+    const fetched = restResponseSchema.parse({
+      ...created,
+      requestId: get.requestId
+    })
+    return fixture(value.id, 'portable-round-trip', [
+      document('create-request', 'command', create),
+      document('create-response', 'response', created),
+      document('get-request', 'command', get),
+      document('get-response', 'response', fetched)
+    ], {
+      accepted: true,
+      openUrl: null,
+      canonicalPortableReference: value.envelope,
+      losslessAfterCreateGet: true
+    })
+  })
+
+  const validPortable = portableCases[0].expectations.canonicalPortableReference
+  const invalidPortableRequest = {
+    protocolVersion: PROTOCOL_VERSION,
+    requestId: requestId('portablebad'),
+    type: 'resource.create',
+    idempotencyKey: idempotencyKey('portable-invalid'),
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    expectedTaskRevision: 3,
+    provider: 'opencontent',
+    externalId: 'invalid-portable-reference',
+    kind: 'content-space.file-reference',
+    name: 'Rejected portable reference',
+    version: '1'
+  }
+  const portableRejectionResponse = errorResponse(
+    { requestId: invalidPortableRequest.requestId },
+    'validation_error',
+    'The portable resource reference is invalid.'
+  )
+
   return [
+    fixture('device-enrollment-signing-vector', 'algorithm-vector', [], {
+      helperExport: 'canonicalEnrollmentBytes',
+      factsTypeExport: 'EnrollmentSigningFacts',
+      ...DEVICE_ENROLLMENT_SIGNING_TEST_VECTOR,
+      verifies: true
+    }),
+    fixture('task-create-proposal-digest-vector', 'algorithm-vector', [], {
+      normalizeExport: 'normalizeTaskCreateProposal',
+      digestExport: 'computeTaskCreateProposalDigest',
+      ...TASK_CREATE_PROPOSAL_DIGEST_TEST_VECTOR,
+      verifies: true
+    }),
     fixture('normal-task-offer', 'normal', [
       document('request', 'command', taskCreate),
       document('response', 'response', normalResponse),
@@ -647,6 +843,20 @@ function buildFixtures() {
       subsequentUseErrorCode: 'credential_revoked',
       oidcUserTokenRevoked: false,
       credentialMaterialDisclosed: false
+    }),
+    ...portableCases,
+    fixture('portable-invalid-version-kind', 'portable-rejection', [
+      document('response', 'response', portableRejectionResponse)
+    ], {
+      accepted: false,
+      expectedErrorCode: 'validation_error',
+      rejectedRequests: [
+        { ...invalidPortableRequest, portableReference: { ...validPortable, contractVersion: 2 } },
+        { ...invalidPortableRequest, portableReference: {
+          ...validPortable,
+          kind: 'content-space.unknown-reference'
+        } }
+      ]
     })
   ]
 }
@@ -776,6 +986,37 @@ export function generateContractArtifactFiles(commitInput) {
     permissions: permissionRows,
     stateTransitions: STATE_TRANSITIONS
   }))
+  files.set('algorithms.json', stringify({
+    artifactVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
+    contractCommit: commit,
+    deviceEnrollmentSigning: {
+      helperExport: 'canonicalEnrollmentBytes',
+      factsTypeExport: 'EnrollmentSigningFacts',
+      factsSchemaExport: 'enrollmentSigningFactsSchema',
+      domain: DEVICE_ENROLLMENT_SIGNING_DOMAIN,
+      fieldOrder: ['domain', 'enrollmentId', 'nonce', 'userId', 'installationId', 'expiresAt'],
+      encoding: 'utf-8',
+      delimiter: 'LF',
+      trailingDelimiter: false,
+      signatureAlgorithm: 'Ed25519',
+      vectorFixture: 'fixtures/device-enrollment-signing-vector.json'
+    },
+    taskCreateProposalDigest: {
+      normalizeExport: 'normalizeTaskCreateProposal',
+      digestExport: 'computeTaskCreateProposalDigest',
+      inputSchemaExport: 'taskCreateProposalInputSchema',
+      algorithm: TASK_CREATE_PROPOSAL_DIGEST_ALGORITHM,
+      canonicalJson: {
+        objectKeys: 'lexicographic',
+        arrays: 'order-preserving',
+        omitUndefinedObjectProperties: true,
+        stringEncoding: 'json-utf-8'
+      },
+      digest: { algorithm: 'SHA-256', encoding: 'lowercase-hex' },
+      vectorFixture: 'fixtures/task-create-proposal-digest-vector.json'
+    }
+  }))
   for (const value of buildFixtures()) {
     files.set(`fixtures/${value.id}.json`, stringify(injectCommit(value, commit)))
   }
@@ -793,7 +1034,25 @@ export function generateContractArtifactFiles(commitInput) {
     contractCommit: commit,
     commitInjectionPlaceholder: COMMIT_PLACEHOLDER,
     jsonSchemaDialect: JSON_SCHEMA_DIALECT,
-    source: 'packages/collaboration-contracts/src strict public exports',
+    source: 'packages/collaboration-contracts/src strict public Zod exports',
+    packages: {
+      '@sciforge/collaboration-contracts': COLLABORATION_CONTRACTS_PACKAGE_VERSION,
+      '@sciforge/domain-sdk': DOMAIN_SDK_PACKAGE_VERSION,
+      '@sciforge/domain-content-space': CONTENT_SPACE_PACKAGE_VERSION
+    },
+    databaseSchemaVersion: DATABASE_SCHEMA_VERSION,
+    portableResourceCarrier: {
+      schemaVersion: PORTABLE_RESOURCE_CARRIER_SCHEMA_VERSION,
+      upstreamRepository: 'SCU-areszhang/SciForge_Loop',
+      upstreamCommit: PORTABLE_REFERENCE_UPSTREAM_COMMIT,
+      upstreamParserPath: 'packages/domain-sdk/src/portable-resource-references.ts',
+      parserSourceSha256: PORTABLE_REFERENCE_PARSER_SHA256,
+      contentSpaceContractPath: 'packages/domains/content-space/src/contract.ts',
+      contentSpaceContractSourceSha256: CONTENT_SPACE_CONTRACT_SHA256,
+      validationAuthority: '@sciforge/domain-sdk/portable-resource-references',
+      kinds: PORTABLE_CONTENT_SPACE_REFERENCE_KINDS,
+      openUrlRequired: false
+    },
     files: describedFiles,
     acceptance: {
       coreOnly: {

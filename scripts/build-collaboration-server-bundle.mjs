@@ -26,6 +26,7 @@ const defaultRepositoryRoot = resolve(scriptDirectory, '..')
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git'
 const manifestFilename = 'RELEASE_MANIFEST.json'
+const domainSdkPackageName = '@sciforge/domain-sdk'
 const collaborationContractsPackageName = '@sciforge/collaboration-contracts'
 const contractArtifactPrefix = 'artifacts/protocol-1.0/'
 const contractArtifactManifestFilename = 'ARTIFACT_MANIFEST.json'
@@ -140,6 +141,22 @@ const aHttpsOidcTestAssets = Object.freeze({
 
 export const COLLABORATION_RELEASE_PACKAGES = Object.freeze([
   Object.freeze({
+    directory: 'packages/domain-sdk',
+    name: domainSdkPackageName,
+    buildScript: 'build',
+    requiredFiles: Object.freeze([
+      'package.json',
+      'portable-resource-provenance.json',
+      'dist/contract.js',
+      'dist/contract.d.ts',
+      'dist/principal.js',
+      'dist/principal.d.ts',
+      'dist/portable-resource-references.js',
+      'dist/portable-resource-references.d.ts'
+    ]),
+    requiredPrefixes: Object.freeze(['dist/'])
+  }),
+  Object.freeze({
     directory: 'packages/collaboration-contracts',
     name: collaborationContractsPackageName,
     requiredFiles: Object.freeze([
@@ -173,6 +190,7 @@ function usage() {
     '  --team-private-acceptance  TEAM-ONLY: clean descendant for loopback/tunnel acceptance.',
     '  --a-https-test-edge      A-ONLY: clean descendant for cloud-test HTTPS/WSS edge.',
     '  --a-https-oidc-test      A-ONLY: cloud-test API plus login-test OIDC ingress.',
+    '  --cross-team-r0-contract  PUBLIC CONTRACT: clean descendant for R0 machine consumers.',
     '  -h, --help              Show this help.',
     ''
   ].join('\n')
@@ -184,7 +202,8 @@ export function parseArguments(argv) {
     aHttpsTestEdge: false,
     help: false,
     privateTestRelease: false,
-    teamPrivateAcceptance: false
+    teamPrivateAcceptance: false,
+    crossTeamR0Contract: false
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
@@ -220,6 +239,13 @@ export function parseArguments(argv) {
       result.aHttpsOidcTest = true
       continue
     }
+    if (argument === '--cross-team-r0-contract') {
+      if (result.crossTeamR0Contract) {
+        throw new Error('--cross-team-r0-contract may only be provided once.')
+      }
+      result.crossTeamR0Contract = true
+      continue
+    }
     if (argument !== '--commit' && argument !== '--output') {
       throw new Error(`Unknown argument: ${argument}`)
     }
@@ -236,10 +262,11 @@ export function parseArguments(argv) {
     result.privateTestRelease,
     result.teamPrivateAcceptance,
     result.aHttpsTestEdge,
-    result.aHttpsOidcTest
+    result.aHttpsOidcTest,
+    result.crossTeamR0Contract
   ].filter(Boolean).length
   if (selectedSpecialModes > 1) {
-    throw new Error('Private, team acceptance, and A HTTPS release modes are mutually exclusive.')
+    throw new Error('Feature release modes are mutually exclusive.')
   }
   return result
 }
@@ -301,6 +328,7 @@ export function createImmutableSnapshotChildArguments(arguments_, approvedCommit
   if (arguments_.teamPrivateAcceptance) childArguments.push('--team-private-acceptance')
   if (arguments_.aHttpsTestEdge) childArguments.push('--a-https-test-edge')
   if (arguments_.aHttpsOidcTest) childArguments.push('--a-https-oidc-test')
+  if (arguments_.crossTeamR0Contract) childArguments.push('--cross-team-r0-contract')
   return Object.freeze(childArguments)
 }
 
@@ -877,6 +905,41 @@ async function stageCollaborationContractsPackage({
   return packageDirectory
 }
 
+async function stageDomainSdkPackage({ repositoryRoot, stagingDirectory }) {
+  const sourceDirectory = join(repositoryRoot, 'packages/domain-sdk')
+  const sourcePackageJson = parseJson(
+    await readFile(join(sourceDirectory, 'package.json')),
+    `${domainSdkPackageName} package.json`
+  )
+  const packageDirectory = join(stagingDirectory, '.domain-sdk-package')
+  await mkdir(packageDirectory)
+  await cp(join(sourceDirectory, 'dist'), join(packageDirectory, 'dist'), { recursive: true })
+  await copyFile(
+    join(sourceDirectory, 'portable-resource-provenance.json'),
+    join(packageDirectory, 'portable-resource-provenance.json')
+  )
+  await writeJson(join(packageDirectory, 'package.json'), {
+    name: sourcePackageJson.name,
+    version: sourcePackageJson.version,
+    license: sourcePackageJson.license,
+    type: 'module',
+    description: sourcePackageJson.description,
+    exports: {
+      './portable-resource-references': {
+        types: './dist/portable-resource-references.d.ts',
+        import: './dist/portable-resource-references.js'
+      },
+      './principal': {
+        types: './dist/principal.d.ts',
+        import: './dist/principal.js'
+      }
+    },
+    files: ['dist', 'portable-resource-provenance.json', 'package.json'],
+    dependencies: { zod: sourcePackageJson.dependencies.zod }
+  })
+  return packageDirectory
+}
+
 async function defaultRunCommand({ command, args, cwd, environment, inheritOutput = false }) {
   return await new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
@@ -1006,6 +1069,7 @@ export async function buildCollaborationServerBundle({
   outputDirectory,
   privateTestRelease = false,
   teamPrivateAcceptance = false,
+  crossTeamR0Contract = false,
   repositoryRoot = defaultRepositoryRoot,
   runCommand = defaultRunCommand
 } = {}) {
@@ -1021,19 +1085,24 @@ export async function buildCollaborationServerBundle({
   if (typeof teamPrivateAcceptance !== 'boolean') {
     throw new Error('teamPrivateAcceptance must be an explicit boolean.')
   }
+  if (typeof crossTeamR0Contract !== 'boolean') {
+    throw new Error('crossTeamR0Contract must be an explicit boolean.')
+  }
   const selectedSpecialModes = [
     privateTestRelease,
     teamPrivateAcceptance,
     aHttpsTestEdge,
-    aHttpsOidcTest
+    aHttpsOidcTest,
+    crossTeamR0Contract
   ].filter(Boolean).length
   if (selectedSpecialModes > 1) {
-    throw new Error('Private, team acceptance, and A HTTPS release modes are mutually exclusive.')
+    throw new Error('Feature release modes are mutually exclusive.')
   }
   if (typeof generateContractArtifactFiles !== 'function') {
     throw new Error('generateContractArtifactFiles must be a function.')
   }
-  const featureRelease = privateTestRelease || teamPrivateAcceptance || aHttpsTestEdge || aHttpsOidcTest
+  const featureRelease = privateTestRelease || teamPrivateAcceptance || aHttpsTestEdge ||
+    aHttpsOidcTest || crossTeamR0Contract
   const root = resolve(repositoryRoot)
   const head = await readRepositoryHead(root, runCommand)
   const approvedCommit = assertFullCommit(commit ?? head)
@@ -1059,6 +1128,8 @@ export async function buildCollaborationServerBundle({
       throw new Error(
         `${aHttpsTestEdge || aHttpsOidcTest
           ? 'A HTTPS test release'
+          : crossTeamR0Contract
+          ? 'Cross-team R0 contract release'
           : teamPrivateAcceptance
             ? 'Team private acceptance'
             : 'Private test release'} HEAD must descend from the current origin/gui commit.`,
@@ -1090,6 +1161,9 @@ export async function buildCollaborationServerBundle({
     } else if (aHttpsTestEdge) {
       log('*** A-ONLY HTTPS TEST EDGE: cloud-test.sciforge.cn core-only boundary; not a product login or Provider deployment. ***')
       log(`Verified clean A HTTPS edge commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
+    } else if (crossTeamR0Contract) {
+      log('*** CROSS-TEAM R0 CONTRACT: public machine contract; not a production deployment approval. ***')
+      log(`Verified clean R0 contract commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
     } else if (teamPrivateAcceptance) {
       log('*** TEAM-PRIVATE ACCEPTANCE: loopback + SSH tunnel only; never publish as production. ***')
       log(`Verified clean team acceptance commit ${approvedCommit} descends from origin/gui ${baseCommit}.`)
@@ -1114,7 +1188,7 @@ export async function buildCollaborationServerBundle({
       await rm(join(root, specification.directory, 'dist'), { recursive: true, force: true })
       await runCommand({
         command: npmCommand,
-        args: ['--workspace', specification.name, 'run', 'build'],
+        args: ['--workspace', specification.name, 'run', specification.buildScript ?? 'build'],
         cwd: root
       })
     }
@@ -1126,12 +1200,18 @@ export async function buildCollaborationServerBundle({
       repositoryRoot: root,
       stagingDirectory
     })
+    const domainSdkPackageDirectory = await stageDomainSdkPackage({
+      repositoryRoot: root,
+      stagingDirectory
+    })
 
     for (const { packageJson, specification } of workspacePackages) {
       log(`Packing ${specification.name}.`)
       const packageTarget = specification.name === collaborationContractsPackageName
         ? [contractsPackageDirectory]
-        : ['--workspace', specification.name]
+        : specification.name === domainSdkPackageName
+          ? [domainSdkPackageDirectory]
+          : ['--workspace', specification.name]
       const packResult = await runCommand({
         command: npmCommand,
         args: [
@@ -1166,6 +1246,7 @@ export async function buildCollaborationServerBundle({
       packedPackages.push(packed)
     }
     await rm(contractsPackageDirectory, { recursive: true, force: true })
+    await rm(domainSdkPackageDirectory, { recursive: true, force: true })
 
     const dependencies = Object.fromEntries(packedPackages.map((packed) => [
       packed.name,
@@ -1268,6 +1349,8 @@ export async function buildCollaborationServerBundle({
           ? 'a-https-oidc-test'
           : aHttpsTestEdge
           ? 'a-https-test-edge'
+          : crossTeamR0Contract
+          ? 'cross-team-r0-contract'
           : privateTestRelease
             ? 'private-test'
             : 'origin-gui',
@@ -1298,6 +1381,8 @@ export async function buildCollaborationServerBundle({
               edgeCaddyImage: aHttpsTestEdgeImage,
               ...edgeProfile
             }
+          : crossTeamR0Contract
+          ? { deploymentBoundary: 'contract-consumption-only' }
           : {}),
       packageManager: {
         name: 'npm',
@@ -1342,11 +1427,13 @@ export async function buildCollaborationServerBundle({
       ? `Created A-ONLY HTTPS OIDC test collaboration bundle at ${destination}.`
       : aHttpsTestEdge
         ? `Created A-ONLY HTTPS test edge collaboration bundle at ${destination}.`
-      : teamPrivateAcceptance
-        ? `Created TEAM-PRIVATE acceptance collaboration bundle at ${destination}.`
-        : privateTestRelease
-          ? `Created TEST-ONLY private collaboration bundle at ${destination}.`
-          : `Created immutable collaboration release bundle at ${destination}.`)
+        : crossTeamR0Contract
+          ? `Created public cross-team R0 machine-contract bundle at ${destination}.`
+          : teamPrivateAcceptance
+            ? `Created TEAM-PRIVATE acceptance collaboration bundle at ${destination}.`
+            : privateTestRelease
+              ? `Created TEST-ONLY private collaboration bundle at ${destination}.`
+              : `Created immutable collaboration release bundle at ${destination}.`)
     return Object.freeze({
       commit: approvedCommit,
       manifest,
@@ -1515,6 +1602,7 @@ export async function runCollaborationServerBundleCli({
       log,
       outputDirectory: context.outputDirectory,
       privateTestRelease: context.arguments_.privateTestRelease,
+      crossTeamR0Contract: context.arguments_.crossTeamR0Contract,
       repositoryRoot: context.snapshotRepositoryRoot,
       runCommand,
       teamPrivateAcceptance: context.arguments_.teamPrivateAcceptance

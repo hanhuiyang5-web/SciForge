@@ -212,9 +212,12 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(sdkPackage.version, '0.2.2')
     assert.equal(sdkPackage.exports['./external-navigation'], './src/external-navigation.ts')
     assert.equal(sdkPackage.exports['./file-transfer'], './src/file-transfer.ts')
-    assert.equal(
+    assert.deepEqual(
       sdkPackage.exports['./portable-resource-references'],
-      './src/portable-resource-references.ts'
+      {
+        types: './dist/portable-resource-references.d.ts',
+        import: './dist/portable-resource-references.js'
+      }
     )
     assert.equal(sdkPackage.exports['./principal'], './src/principal.ts')
     assert.equal(sdkPackage.exports['./provider-composition'], './src/provider-composition.ts')
@@ -238,7 +241,7 @@ test('publishable domain packages resolve every public export from independent t
     assert.equal(identityManifest.module.hostApi.minimum, '1.4.0')
     assert.equal(
       identityPackage.dependencies['@sciforge/collaboration-contracts'],
-      '0.1.0'
+      '0.2.0'
     )
     assert.equal(
       identityPackage.dependencies['@sciforge/collaboration-identity'],
@@ -289,6 +292,20 @@ test('publishable domain packages resolve every public export from independent t
       cssLoader,
       entry
     ], {
+      cwd: installation,
+      maxBuffer: 4 * 1024 * 1024
+    })
+
+    const nodeRuntimeEntry = join(installation, 'node-runtime-smoke.mjs')
+    await writeFile(nodeRuntimeEntry, `
+      import assert from 'node:assert/strict'
+      const portable = await import('@sciforge/domain-sdk/portable-resource-references')
+      const collaboration = await import('@sciforge/collaboration-contracts')
+      assert.equal(typeof portable.parsePortableResourceReference, 'function')
+      assert.equal(typeof collaboration.parsePortableResourceReferenceCarrier, 'function')
+      assert.equal(typeof collaboration.computeTaskCreateProposalDigest, 'function')
+    `)
+    await run(process.execPath, [nodeRuntimeEntry], {
       cwd: installation,
       maxBuffer: 4 * 1024 * 1024
     })

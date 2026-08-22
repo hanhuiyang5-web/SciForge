@@ -30,6 +30,37 @@
           "type": "object"
         }
       ]
+    },
+    "__schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema1"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      ]
     }
   },
   "$id": "https://contracts.sciforge.invalid/collaboration/1.0/responses.schema.json",
@@ -664,6 +695,9 @@
                     "type": "boolean"
                   },
                   "locatorRename": {
+                    "type": "boolean"
+                  },
+                  "managedContainers": {
                     "type": "boolean"
                   },
                   "stableLocators": {
@@ -1949,6 +1983,263 @@
                 "assurance",
                 "status",
                 "verifiedAt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "checks": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "channelManagementRestricted": {
+                          "type": "boolean"
+                        },
+                        "exactMembership": {
+                          "type": "boolean"
+                        },
+                        "memberManagementRestricted": {
+                          "type": "boolean"
+                        },
+                        "messageBotCanSend": {
+                          "type": "boolean"
+                        },
+                        "ownerCanCreateTopics": {
+                          "type": "boolean"
+                        },
+                        "ownerCanSend": {
+                          "type": "boolean"
+                        },
+                        "private": {
+                          "type": "boolean"
+                        },
+                        "protectedHistory": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "private",
+                        "protectedHistory",
+                        "exactMembership",
+                        "ownerCanSend",
+                        "messageBotCanSend",
+                        "ownerCanCreateTopics",
+                        "memberManagementRestricted",
+                        "channelManagementRestricted"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "container": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "containerId": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "provider": {
+                          "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "realmId": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "provider_managed_container_ref",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "provider",
+                        "realmId",
+                        "containerId"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "displayName": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "humanEndpointId": {
+                  "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "lastVerifiedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "managedContainerId": {
+                  "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "ownerUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "policy": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "channelManagement": {
+                      "const": "provisioning_service_only",
+                      "type": "string"
+                    },
+                    "history": {
+                      "const": "protected",
+                      "type": "string"
+                    },
+                    "memberManagement": {
+                      "const": "provisioning_service_only",
+                      "type": "string"
+                    },
+                    "membership": {
+                      "const": "owner_and_message_bot",
+                      "type": "string"
+                    },
+                    "messageBotCanSend": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "messageBotCreatesProjectTopics": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "ownerCanCreateTopics": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "ownerCanSend": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "version": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "visibility": {
+                      "const": "private",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "visibility",
+                    "history",
+                    "membership",
+                    "memberManagement",
+                    "channelManagement",
+                    "ownerCanSend",
+                    "ownerCanCreateTopics",
+                    "messageBotCanSend",
+                    "messageBotCreatesProjectTopics"
+                  ],
+                  "type": "object"
+                },
+                "provider": {
+                  "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                  "type": "string"
+                },
+                "realmId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "safeErrorCode": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "stableKey": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "requested",
+                    "provisioning",
+                    "active",
+                    "drifted",
+                    "suspended",
+                    "archived",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "const": "managed_provider_container",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "type",
+                "managedContainerId",
+                "ownerUserId",
+                "humanEndpointId",
+                "provider",
+                "realmId",
+                "stableKey",
+                "displayName",
+                "container",
+                "policy",
+                "checks",
+                "status",
+                "lastVerifiedAt",
+                "safeErrorCode"
               ],
               "type": "object"
             },
@@ -5067,9 +5358,62 @@
                   "type": "string"
                 },
                 "openUrl": {
-                  "maxLength": 2048,
-                  "minLength": 1,
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "portableReference": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "authority": {
+                          "maxLength": 256,
+                          "minLength": 3,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                          "type": "string"
+                        },
+                        "contractVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "identity": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "kind": {
+                          "enum": [
+                            "content-space.file-reference",
+                            "content-space.container-reference",
+                            "content-space.artifact-reference"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "contractVersion",
+                        "kind",
+                        "authority",
+                        "identity"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "projectId": {
                   "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -5199,6 +5543,7 @@
                 "kind",
                 "name",
                 "openUrl",
+                "portableReference",
                 "version",
                 "status",
                 "statusReasonCode",
@@ -6483,6 +6828,263 @@
                   "assurance",
                   "status",
                   "verifiedAt"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "checks": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "channelManagementRestricted": {
+                            "type": "boolean"
+                          },
+                          "exactMembership": {
+                            "type": "boolean"
+                          },
+                          "memberManagementRestricted": {
+                            "type": "boolean"
+                          },
+                          "messageBotCanSend": {
+                            "type": "boolean"
+                          },
+                          "ownerCanCreateTopics": {
+                            "type": "boolean"
+                          },
+                          "ownerCanSend": {
+                            "type": "boolean"
+                          },
+                          "private": {
+                            "type": "boolean"
+                          },
+                          "protectedHistory": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "private",
+                          "protectedHistory",
+                          "exactMembership",
+                          "ownerCanSend",
+                          "messageBotCanSend",
+                          "ownerCanCreateTopics",
+                          "memberManagementRestricted",
+                          "channelManagementRestricted"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "container": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "containerId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "provider": {
+                            "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                            "type": "string"
+                          },
+                          "realmId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "provider_managed_container_ref",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "provider",
+                          "realmId",
+                          "containerId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "humanEndpointId": {
+                    "pattern": "^hep_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "lastVerifiedAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "managedContainerId": {
+                    "pattern": "^mco_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "ownerUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "policy": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelManagement": {
+                        "const": "provisioning_service_only",
+                        "type": "string"
+                      },
+                      "history": {
+                        "const": "protected",
+                        "type": "string"
+                      },
+                      "memberManagement": {
+                        "const": "provisioning_service_only",
+                        "type": "string"
+                      },
+                      "membership": {
+                        "const": "owner_and_message_bot",
+                        "type": "string"
+                      },
+                      "messageBotCanSend": {
+                        "const": true,
+                        "type": "boolean"
+                      },
+                      "messageBotCreatesProjectTopics": {
+                        "const": false,
+                        "type": "boolean"
+                      },
+                      "ownerCanCreateTopics": {
+                        "const": true,
+                        "type": "boolean"
+                      },
+                      "ownerCanSend": {
+                        "const": true,
+                        "type": "boolean"
+                      },
+                      "version": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "visibility": {
+                        "const": "private",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "visibility",
+                      "history",
+                      "membership",
+                      "memberManagement",
+                      "channelManagement",
+                      "ownerCanSend",
+                      "ownerCanCreateTopics",
+                      "messageBotCanSend",
+                      "messageBotCreatesProjectTopics"
+                    ],
+                    "type": "object"
+                  },
+                  "provider": {
+                    "pattern": "^[a-z][a-z0-9.-]{0,63}$",
+                    "type": "string"
+                  },
+                  "realmId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "safeErrorCode": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "stableKey": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "requested",
+                      "provisioning",
+                      "active",
+                      "drifted",
+                      "suspended",
+                      "archived",
+                      "failed"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "managed_provider_container",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "managedContainerId",
+                  "ownerUserId",
+                  "humanEndpointId",
+                  "provider",
+                  "realmId",
+                  "stableKey",
+                  "displayName",
+                  "container",
+                  "policy",
+                  "checks",
+                  "status",
+                  "lastVerifiedAt",
+                  "safeErrorCode"
                 ],
                 "type": "object"
               },
@@ -9601,9 +10203,62 @@
                     "type": "string"
                   },
                   "openUrl": {
-                    "maxLength": 2048,
-                    "minLength": 1,
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "portableReference": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "authority": {
+                            "maxLength": 256,
+                            "minLength": 3,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                            "type": "string"
+                          },
+                          "contractVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "identity": {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "kind": {
+                            "enum": [
+                              "content-space.file-reference",
+                              "content-space.container-reference",
+                              "content-space.artifact-reference"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "contractVersion",
+                          "kind",
+                          "authority",
+                          "identity"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "projectId": {
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
@@ -9733,6 +10388,7 @@
                   "kind",
                   "name",
                   "openUrl",
+                  "portableReference",
                   "version",
                   "status",
                   "statusReasonCode",
@@ -12232,7 +12888,7 @@
               "type": "integer"
             },
             "details": {
-              "$ref": "#/$defs/__schema0"
+              "$ref": "#/$defs/__schema1"
             },
             "expectedRevision": {
               "maximum": 9007199254740991,

@@ -19,7 +19,10 @@
     "./node/runtime-mcp-launcher": "./src/node/runtime-mcp-launcher.ts",
     "./node/workspace-paths": "./src/node/workspace-paths.ts",
     "./power": "./src/power.ts",
-    "./portable-resource-references": "./src/portable-resource-references.ts",
+    "./portable-resource-references": {
+      "types": "./dist/portable-resource-references.d.ts",
+      "import": "./dist/portable-resource-references.js"
+    },
     "./principal": "./src/principal.ts",
     "./provider-composition": "./src/provider-composition.ts",
     "./reproducibility": "./src/reproducibility.ts",
@@ -36,10 +39,13 @@
   },
   "files": [
     "src",
+    "dist",
+    "portable-resource-provenance.json",
     "package.json",
     "README.md"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },

@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS managed_provider_container_jobs_claim_idx
   ON sciforge_collaboration.managed_provider_container_jobs(state, next_attempt_at, lease_expires_at);
 
 INSERT INTO sciforge_collaboration.schema_migrations(version)
-VALUES (7)
+VALUES (8)
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

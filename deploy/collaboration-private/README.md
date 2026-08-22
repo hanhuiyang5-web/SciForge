@@ -12,7 +12,7 @@ core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已�
 
 ## 重要边界
 
-- 运行镜像只安装固定 commit 生成的三个 npm tarball：contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述显式 `private-test`、`team-private-acceptance`、`a-https-test-edge` 或 `a-https-oidc-test` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
+- 运行镜像只安装固定 commit 生成的四个 npm tarball：domain SDK、contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述互斥、显式的 `private-test`、`team-private-acceptance`、`a-https-test-edge`、`a-https-oidc-test` 或只供机器合同消费的 `cross-team-r0-contract` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
 - 默认是 **core-only**：`compose.yml` 不注入 Provider 配置或 secret。`deploy-provider-zulip.sh` 才会显式加载只作用于 app 的 overlay；migrate 始终看不到 Provider 配置和 secret。
 - `compose.yml` 只透传严格 OIDC 的非秘密配置。普通私有/core-only 模式的 issuer 为空，所有 User、Device 与 binding 入口 fail closed；`a-https-oidc-test` 唯一允许 `https://login-test.sciforge.cn/realms/SciForge`。Audience 固定为 `sciforge-cloud-api`，授权方固定为 `sciforge-desktop,sciforge-web-mobile`，insecure loopback 永远为 `false`。这不是匿名身份模式，也不恢复 opaque User bearer。
 - 原生入口是 `POST /v1/commands`、WebSocket `/v1/events` 和 A-only 网页控制台 `/console/`；没有 `/v1/meta`，也没有旧实验服务的 `/v1/ws`。
@@ -87,6 +87,10 @@ npm run collaboration:bundle -- \
 
 manifest 会记录 `releaseMode: "team-private-acceptance"`、完整 `baseCommit`、完整 `contractCommit` 和 `deploymentBoundary: "loopback-ssh-tunnel-only"`。这不会放宽默认 `origin-gui` 发布规则；artifact 不得绑定公网地址、反向代理或域名，也不得当作正式发布。
 
+### 跨团队 R0 机器合同 bundle
+
+`--cross-team-r0-contract` 只用于向固定机器消费者发布同一 commit 的 domain SDK、contracts、Provider adapter 与 server 包。它与其他 feature release 模式互斥，manifest 固定为 `releaseMode: "cross-team-r0-contract"` 和 `deploymentBoundary: "contract-consumption-only"`。该 bundle 不是 ECS 部署批准，也不能替代 A HTTPS/OIDC、数据库或 Desktop 产品验收。
+
 ### A 的 HTTPS core-only 测试边缘 bundle
 
 `cloud-test.sciforge.cn` 只能使用互斥的显式模式构建：
@@ -137,9 +141,9 @@ npm run collaboration:bundle -- \
 
 manifest schema 为 `3`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience/authorized parties、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"`，以及 64 位 `identityAcceptanceHarnessSha256` 和 `multiWorkerAcceptanceHarnessSha256`。前者绑定 multi-worker harness 导入的安全/协议原语，后者绑定正式的 1 个 Orchestrator → 2–8 个独立 Worker 验收入口。发布脚本逐项校验这些值以及 shared 12 + OIDC 6 个 ECS 运行资产摘要；两个 harness 摘要都是独立的本地验收证明，不计入这 18 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
 
-将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：三个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共八个文件。除 `SHA256SUMS` 自身外的七项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和三个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
+将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：四个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共九个文件。除 `SHA256SUMS` 自身外的八项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和四个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
 
-在可信构建机上从 exact commit 归档部署树，并把刚生成、已验证的八个 bundle 文件装入归档；不要从随后可能变化的工作树直接打包：
+在可信构建机上从 exact commit 归档部署树，并把刚生成、已验证的九个 bundle 文件装入归档；不要从随后可能变化的工作树直接打包：
 
 ```bash
 set -euo pipefail
@@ -154,7 +158,7 @@ git archive --format=tar "$release_commit" deploy/collaboration-private \
   | tar -xf - -C "$package_root"
 bundle_source="$artifact_dir/release"
 bundle_target="$package_root/deploy/collaboration-private/bundle"
-test "$(find "$bundle_source" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 8
+test "$(find "$bundle_source" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 9
 test -z "$(find "$bundle_source" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
 cp -- "$bundle_source"/* "$bundle_target/"
 (cd "$bundle_target" && shasum -a 256 -c SHA256SUMS)
@@ -349,7 +353,7 @@ sudo "$current_edge_release/deploy/collaboration-private/scripts/disable-a-https
 
 `deploy.sh` 和 `deploy-provider-zulip.sh` 都会在任何 app/数据库变更前拒绝仍存在的 edge、任何宿主或 Docker 443 暴露，以及被其他容器污染的 `private-edge` 网络。不得绕过这一步让动态 `app` DNS 提前指向未验证的新候选。
 
-随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v6 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
+随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v8 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -406,7 +410,7 @@ external_sha="$(node -e '
 
 A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。它只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络。local verifier 要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
 
-切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v6 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
+切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v8 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -558,9 +562,9 @@ sudo deploy/collaboration-private/scripts/verify-backup-restore.sh \
 
 本地备份只是第一层。每份 dump 和 sidecar 还应复制到加密的异机存储。灾难恢复仍应使用新的 volume；不得直接覆盖唯一生产 volume。
 
-### PostgreSQL 当前 schema v6 隔离业务语义验收
+### PostgreSQL 当前 schema v8 隔离业务语义验收
 
-固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。脚本文件名及 attestation/manifest 的 `V5` 标识为兼容既有固定发布接口而保留；门禁实际从 release migration 清单推导当前版本，并在本 release 要求 schema v6：
+固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。脚本文件名及 attestation/manifest 的 `V5` 标识为兼容既有固定发布接口而保留；门禁实际从 release migration 清单推导当前版本，并在本 release 要求 schema v8：
 
 ```bash
 sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
@@ -571,7 +575,7 @@ sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
 
 脚本与 core/provider 部署共享同一个非阻塞 deploy lock，并在锁内先执行候选 release 的 `docker compose build app`；这一步只构建带固定 revision 的候选 image，不停止或替换当前 app、不启动或重启 PostgreSQL，也不迁移生产库。当前 live app 可以仍是上一固定 commit，脚本会记录它的 container ID、host PID、RestartCount、image 和 revision，并要求前后完全不变。它还要求 PostgreSQL 只连接 `internal=true` 的专用 Compose network 且没有宿主机端口，然后用候选 runtime image 中已经安装的生产 `dist`、migration 和依赖启动一次性非 root runner；不会向 ECS 复制源码、test fixture、Vitest、tsx 或开发依赖。隔离验收通过后再运行 `deploy.sh`；后者会复用候选 image build cache、备份并迁移生产库。
 
-管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v6_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 v6、验证 `[1,2,3,4,5,6]` 与 `provider_identity` Inbox CHECK 约束后进入 ready；随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
+管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v8_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 `0006` provider identity Inbox、`0007` portable ResourceRef 与 `0008` managed provider container 迁移，验证 `[1,2,3,4,5,6,7,8]` 的完整表、列、索引与约束后进入 ready；随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
 
 验收会以生产库当时的实际 migration versions 和实际表集为准（允许它仍是 v3/v4/v5）。前后快照各自在独立的、受限的候选镜像容器内运行，不向 live app 容器注入代码或占用其 cgroup；容器只读挂载单值 `sciforge_collab` 密码文件，不把数据库 URL 或密码放进 Docker env/argv。每次快照使用单个 `REPEATABLE READ READ ONLY` 事务，对每张实际表声明 server-side cursor，并以 `FETCH FORWARD 512` 有界流式计算 row count 和稳定内容 SHA-256；只保留表名、计数及摘要，不输出行内容，并要求运行前后整个快照完全相同。为避免并发业务写入造成误报或掩盖边界，本步骤必须处于无业务写入的维护窗口。live app 的 container ID、host PID、RestartCount、image 和 revision 也必须完全相同。runner 原始日志先保存在 root-only tmpfs 文件中，并同时扫描实际管理员密码、应用数据库密码、认证 URL、连接参数、stack 和 `secretKey`；只有通过扫描后才输出脱敏 pass receipt。注意：`CREATE/DROP DATABASE` 必然写 PostgreSQL 集群 catalog/WAL，但所有业务 fixture 只写随机临时数据库，不写生产 `sciforge_collaboration`。
 

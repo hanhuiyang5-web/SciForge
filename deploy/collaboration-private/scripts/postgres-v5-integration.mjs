@@ -42,7 +42,7 @@ const outcome = supportedInvocation
 
 if (!outcome.ok) {
   process.stderr.write(`${JSON.stringify({
-    event: 'postgres.v6.integration',
+    event: 'postgres.v8.integration',
     status: 'failed',
     stage,
     failureCode: outcome.failureCode
@@ -52,7 +52,7 @@ if (!outcome.ok) {
   process.stdout.write(`${JSON.stringify(outcome.snapshot)}\n`)
 } else {
   process.stdout.write(`${JSON.stringify({
-    event: 'postgres.v6.integration',
+    event: 'postgres.v8.integration',
     status: 'passed',
     node: process.version,
     postgresVersion: outcome.postgresVersion,
@@ -198,28 +198,28 @@ async function run() {
     const versionsAtV5 = await migrationVersions(databasePool)
     const readyAtV5 = await runtime.isCollaborationDatabaseReady(databasePool)
 
-    stage = 'migration_v5_to_v6'
+    stage = 'migration_v5_to_v8'
     await runtime.runCollaborationMigrations(databasePool)
-    const versionsAtV6 = await migrationVersions(databasePool)
-    const readyAtV6 = await runtime.isCollaborationDatabaseReady(databasePool)
+    const versionsAtV8 = await migrationVersions(databasePool)
+    const readyAtV8 = await runtime.isCollaborationDatabaseReady(databasePool)
     const legacyAgent = await databasePool.query(
       `SELECT agent.status, agent.device_id,
               credential.revoked_at IS NOT NULL AS credential_revoked
        FROM sciforge_collaboration.agent_nodes AS agent
        JOIN sciforge_collaboration.credentials AS credential
          ON credential.subject_agent_id=agent.agent_id
-       WHERE agent.agent_id=$1`,
+      WHERE agent.agent_id=$1`,
       ['agt_pg_legacy_agent_0001']
     )
     const legacy = legacyAgent.rows[0]
     assert.ok(legacy)
-    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 6)
+    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 8)
     assert.deepEqual(versionsAtV1, [1])
     assert.deepEqual(versionsAtV5, [1, 2, 3, 4, 5])
-    assert.deepEqual(versionsAtV6, [1, 2, 3, 4, 5, 6])
+    assert.deepEqual(versionsAtV8, [1, 2, 3, 4, 5, 6, 7, 8])
     assert.equal(readyAtV1, false)
     assert.equal(readyAtV5, false)
-    assert.equal(readyAtV6, true)
+    assert.equal(readyAtV8, true)
     assert.equal(legacy.status, 'revoked')
     assert.equal(legacy.device_id, null)
     assert.equal(legacy.credential_revoked, true)
@@ -247,10 +247,12 @@ async function run() {
     evidence = {
       postgresVersion: String(version.rows[0]?.server_version),
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
-      migrations: versionsAtV6,
+      migrations: versionsAtV8,
       checks: [
-        'v1_to_v5_to_v6_readiness',
+        'v1_to_v5_to_v8_readiness',
         'provider_identity_inbox_constraint',
+        'portable_resource_reference_constraint',
+        'managed_provider_container_schema',
         'legacy_agent_revocation',
         'concurrent_oidc_jit',
         'device_agent_lifecycle',
@@ -610,7 +612,7 @@ function createDeviceFixture(canonicalEnrollmentBytes, overrides) {
 }
 
 function temporaryDatabaseName() {
-  return `sciforge_identity_v6_it_${process.pid}_${randomBytes(6).toString('hex')}`
+  return `sciforge_identity_v8_it_${process.pid}_${randomBytes(6).toString('hex')}`
 }
 
 async function applyMigrationUrls(pool, migrationUrls) {

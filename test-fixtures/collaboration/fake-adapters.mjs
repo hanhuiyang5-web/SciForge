@@ -605,6 +605,19 @@ export class FakeCollaborationRepository {
     revisionUpdate(this.state.endpoints, endpoint.humanEndpointId, endpoint, expectedRevision)
   }
 
+  async transferEndpointOwnership(input) {
+    const current = this.state.endpoints.get(input.humanEndpointId)
+    if (!current || current.userId !== input.sourceUserId) {
+      throw new Error('fake repository endpoint ownership mismatch')
+    }
+    revisionUpdate(this.state.endpoints, input.humanEndpointId, {
+      ...current,
+      userId: input.targetUserId,
+      revision: current.revision + 1,
+      updatedAt: input.updatedAt
+    }, input.expectedRevision)
+  }
+
   async insertExternalIdentity(identity) {
     if (await this.getExternalIdentity(identity.externalIdentityId) || this.state.endpoints.has(identity.humanEndpointId)) {
       throw new Error('fake repository duplicate external identity')

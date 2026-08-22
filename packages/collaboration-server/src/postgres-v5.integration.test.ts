@@ -1,11 +1,18 @@
 import { randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
+import { serializePortableResourceReferenceCarrier } from '@sciforge/collaboration-contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 // @ts-expect-error The vendored dynamic Ed25519 fixture is intentionally plain ESM.
 import { createDeviceFixture } from '../../../test-fixtures/collaboration/unified-identity/device-fixture.mjs'
+// @ts-expect-error This test-only bridge re-exports E's exact public Content Space codec.
+import {
+  parsePortableArtifactReference,
+  toPortableArtifactReference
+} from '../../../test-fixtures/collaboration/e-content-space-portable.mjs'
 import { AuthenticationService, type UserActor } from './auth.js'
+import { toResourceRef } from './contracts.js'
 import { CollaborationServiceError } from './errors.js'
 import { IdentityService } from './identity-service.js'
 import {
@@ -39,16 +46,16 @@ type MigrationEvidence = Readonly<{
   postgresVersionNumber: string
   versionsAtV1: number[]
   versionsAtV5: number[]
-  versionsAtV6: number[]
+  versionsAtCurrent: number[]
   readyAtV1: boolean
   readyAtV5: boolean
-  readyAtV6: boolean
+  readyAtCurrent: boolean
   legacyAgentStatus: string
   legacyAgentDeviceId: unknown
   legacyCredentialRevoked: boolean
 }>
 
-describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', () => {
+describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration integration', () => {
   let adminPool: SqlPool | undefined
   let databasePool: SqlPool | undefined
   let repository: PostgresCollaborationRepository | undefined
@@ -95,8 +102,8 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', (
     const readyAtV5 = await isCollaborationDatabaseReady(databasePool)
 
     await runCollaborationMigrations(databasePool)
-    const versionsAtV6 = await migrationVersions(databasePool)
-    const readyAtV6 = await isCollaborationDatabaseReady(databasePool)
+    const versionsAtCurrent = await migrationVersions(databasePool)
+    const readyAtCurrent = await isCollaborationDatabaseReady(databasePool)
     const legacyAgent = await databasePool.query<{
       status: unknown
       device_id: unknown
@@ -117,10 +124,10 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', (
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
       versionsAtV1,
       versionsAtV5,
-      versionsAtV6,
+      versionsAtCurrent,
       readyAtV1,
       readyAtV5,
-      readyAtV6,
+      readyAtCurrent,
       legacyAgentStatus: String(legacy.status),
       legacyAgentDeviceId: legacy.device_id,
       legacyCredentialRevoked: legacy.credential_revoked === true
@@ -130,9 +137,9 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', (
     collaboration = new CollaborationService({ repository, now })
     authentication = new AuthenticationService(repository, now)
     process.stdout.write(
-      `[postgres-v6-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
+      `[postgres-v8-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
       `postgresVersionNumber=${migrationEvidence.postgresVersionNumber} ` +
-      `v5Baseline=${versionsAtV5.join(',')} migrations=${versionsAtV6.join(',')} ready=${String(readyAtV6)}\n`
+      `v5Baseline=${versionsAtV5.join(',')} migrations=${versionsAtCurrent.join(',')} ready=${String(readyAtCurrent)}\n`
     )
   }, 120_000)
 
@@ -158,15 +165,15 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', (
     }
   }, 120_000)
 
-  it('migrates an isolated v1 database through the v5 baseline to exact v6 readiness', async () => {
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
+  it('migrates an isolated v1 database through the v5 baseline to exact schema v8 readiness', async () => {
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(8)
     expect(migrationEvidence).toMatchObject({
       versionsAtV1: [1],
       versionsAtV5: [1, 2, 3, 4, 5],
-      versionsAtV6: [1, 2, 3, 4, 5, 6],
+      versionsAtCurrent: [1, 2, 3, 4, 5, 6, 7, 8],
       readyAtV1: false,
       readyAtV5: false,
-      readyAtV6: true,
+      readyAtCurrent: true,
       legacyAgentStatus: 'revoked',
       legacyAgentDeviceId: null,
       legacyCredentialRevoked: true
@@ -512,6 +519,97 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> v6 collaboration integration', (
       externalIdentityId: rebound.identity.externalIdentityId,
       zulipUserId
     }])
+  }, 60_000)
+
+  it('round-trips a maximum-boundary portable artifact through PostgreSQL and E codec validation', async () => {
+    const identityService = required(identities, 'Identity Service')
+    const collaborationService = required(collaboration, 'Collaboration Service')
+    const pool = required(databasePool, 'database pool')
+    const owner = await identityService.resolveOidcUser(verifiedIdentity('postgres-portable-owner'))
+    const installationId = 'ins_pg_portable_device_0001'
+    const enrollment = await identityService.createDeviceEnrollment(owner, {
+      installationId,
+      idempotencyKey: 'idem_pg_portable_enrollment_0001'
+    })
+    const fixture = createDeviceFixture({
+      enrollmentId: enrollment.enrollmentId,
+      nonce: enrollment.nonce,
+      userId: owner.userId,
+      installationId,
+      expiresAt: enrollment.expiresAt,
+      capabilitySummary: ['portable-resource-round-trip']
+    })
+    const device = await identityService.createDevice(owner, {
+      ...fixture.deviceRequest,
+      nonce: enrollment.nonce,
+      idempotencyKey: 'idem_pg_portable_device_0001'
+    })
+    const registered = await collaborationService.registerAgent(owner, {
+      deviceId: device.device.deviceId,
+      displayName: 'Portable PostgreSQL Coordinator',
+      nodeType: 'desktop',
+      capabilities: ['portable-resource-round-trip'],
+      idempotencyKey: 'idem_pg_portable_agent_0001'
+    })
+    const project = await collaborationService.createProject(owner, {
+      displayName: 'Portable PostgreSQL round trip',
+      goal: 'Persist one portable artifact and revalidate it with E public codec.',
+      memberUserIds: [],
+      coordinatorAgentId: registered.agent.agentId,
+      idempotencyKey: 'idem_pg_portable_project_0001'
+    })
+
+    const digest = 'd'.repeat(64)
+    const providerInstanceRef = `p${'a'.repeat(255)}`
+    const fileId = `f${'b'.repeat(255)}`
+    const immutableVersionId = `v${'c'.repeat(255)}`
+    const portableReference = toPortableArtifactReference({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
+    const created = await collaborationService.createResourceRef(owner, {
+      projectId: project.projectId,
+      provider: 'opencontent',
+      externalId: `x${'e'.repeat(511)}`,
+      kind: portableReference.kind,
+      name: 'n'.repeat(200),
+      portableReference,
+      version: '1'.repeat(200),
+      idempotencyKey: 'idem_pg_portable_resource_0001'
+    })
+
+    const fetched = toResourceRef(await collaborationService.getResourceRef(owner, created.resourceRefId))
+    expect(fetched.openUrl).toBeNull()
+    expect(fetched.portableReference).toEqual(portableReference)
+    expect(parsePortableArtifactReference(fetched.portableReference)).toEqual({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
+    expect(fetched.externalId).toHaveLength(512)
+    expect(fetched.name).toHaveLength(200)
+    expect(fetched.version).toHaveLength(200)
+
+    const persisted = await pool.query<{ open_url: unknown; portable_reference: string }>(
+      `SELECT open_url, portable_reference
+       FROM sciforge_collaboration.resource_refs
+       WHERE resource_ref_id=$1`,
+      [created.resourceRefId]
+    )
+    expect(persisted.rows).toHaveLength(1)
+    expect(persisted.rows[0]).toMatchObject({
+      open_url: null,
+      portable_reference: serializePortableResourceReferenceCarrier(portableReference)
+    })
+    expect(parsePortableArtifactReference(JSON.parse(persisted.rows[0]!.portable_reference))).toEqual({
+      providerInstanceRef,
+      fileId,
+      immutableVersionId,
+      digest: { algorithm: 'sha256', value: digest }
+    })
   }, 60_000)
 })
 

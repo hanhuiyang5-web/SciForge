@@ -40,6 +40,10 @@ import {
 } from './core.js'
 import { deviceIdSchema } from './identity.js'
 import {
+  isPortableReferenceKind,
+  portableResourceReferenceCarrierSchema
+} from './portable-resource.js'
+import {
   providerIdentitySchema,
   providerLocatorSchema,
   providerManagedContainerPolicySchema,
@@ -657,9 +661,26 @@ export const resourceRefCreateMetadataSchema = z.object({
   externalId: resourceRefExternalIdSchema,
   kind: resourceRefKindSchema,
   name: resourceRefNameSchema,
-  openUrl: resourceRefOpenUrlSchema,
+  openUrl: resourceRefOpenUrlSchema.optional(),
+  portableReference: portableResourceReferenceCarrierSchema.optional(),
   version: resourceRefVersionSchema.optional()
-}).strict()
+}).strict().superRefine((resource, context) => {
+  const portableKind = isPortableReferenceKind(resource.kind)
+  if (portableKind !== (resource.portableReference !== undefined)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['portableReference'],
+      message: 'Content Space ResourceRef kinds require exactly one portable reference carrier'
+    })
+  }
+  if (resource.portableReference && resource.portableReference.kind !== resource.kind) {
+    context.addIssue({
+      code: 'custom',
+      path: ['portableReference', 'kind'],
+      message: 'ResourceRef kind must match the portable reference kind'
+    })
+  }
+})
 export type ResourceRefCreateMetadata = z.infer<typeof resourceRefCreateMetadataSchema>
 
 export const resourceRefSchema = z.object({
@@ -676,7 +697,8 @@ export const resourceRefSchema = z.object({
   externalId: resourceRefExternalIdSchema,
   kind: resourceRefKindSchema,
   name: resourceRefNameSchema,
-  openUrl: resourceRefOpenUrlSchema,
+  openUrl: resourceRefOpenUrlSchema.nullable(),
+  portableReference: portableResourceReferenceCarrierSchema.nullable(),
   version: resourceRefVersionSchema.nullable(),
   status: resourceRefStatusSchema,
   statusReasonCode: taskSafeFailureCodeSchema.nullable(),
@@ -684,6 +706,21 @@ export const resourceRefSchema = z.object({
   revokedAt: timestampSchema.nullable(),
   invalidatedAt: timestampSchema.nullable()
 }).strict().superRefine((resource, context) => {
+  const portableKind = isPortableReferenceKind(resource.kind)
+  if (portableKind !== (resource.portableReference !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['portableReference'],
+      message: 'Content Space ResourceRef kinds require exactly one portable reference carrier'
+    })
+  }
+  if (resource.portableReference && resource.portableReference.kind !== resource.kind) {
+    context.addIssue({
+      code: 'custom',
+      path: ['portableReference', 'kind'],
+      message: 'ResourceRef kind must match the portable reference kind'
+    })
+  }
   const taskScoped = resource.taskId !== null && resource.executionId !== null && resource.taskRevision !== null
   const anyTaskProvenance = resource.taskId !== null || resource.executionId !== null || resource.taskRevision !== null
   if (anyTaskProvenance && !taskScoped) {
