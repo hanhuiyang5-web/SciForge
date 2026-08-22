@@ -52,6 +52,7 @@ export const traceIdSchema = opaqueId('trc')
 export const localItemIdSchema = opaqueId('lit')
 export const turnIdSchema = opaqueId('trn')
 export const installationIdSchema = opaqueId('ins')
+export const managedContainerIdSchema = opaqueId('mco')
 
 export type UserId = z.infer<typeof userIdSchema>
 export type HumanEndpointId = z.infer<typeof humanEndpointIdSchema>

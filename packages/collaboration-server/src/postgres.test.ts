@@ -115,6 +115,50 @@ describe('PostgreSQL pool diagnostics', () => {
 })
 
 describe('PostgreSQL production transaction path', () => {
+  it('fences stale managed-container completions by claim attempt inside one transaction', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('UPDATE sciforge_collaboration.managed_provider_container_jobs')) {
+          return { rows: [], rowCount: 0 }
+        }
+        return { rows: [], rowCount: 1 }
+      },
+      release: () => undefined
+    }
+    const pool: SqlPool = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    }
+    const repository = new PostgresCollaborationRepository(pool)
+    const at = '2026-08-15T02:00:00.000Z'
+
+    await expect(repository.completeManagedContainerJob({
+      jobId: 'mcj_123456789012', workerId: 'mcw_123456789012', expectedAttemptCount: 2,
+      container: {
+        managedContainerId: 'mco_123456789012', ownerUserId: 'usr_123456789012',
+        humanEndpointId: 'hep_123456789012', provider: 'fake', realmId: 'realm-1',
+        ownerProviderUserId: '42', stableKey: 'managed-owner-realm', displayName: 'sciforge-owner',
+        externalContainerId: 'owner-channel', policy: {
+          version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+          memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+          ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
+          messageBotCreatesProjectTopics: false
+        },
+        status: 'active', revision: 3, createdAt: at, updatedAt: at
+      },
+      expectedContainerRevision: 2,
+      completedAt: at
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+
+    const fenced = queries.find(({ text }) => text.includes('managed_provider_container_jobs'))
+    expect(fenced?.text).toContain('attempt_count = $4')
+    expect(fenced?.values).toEqual(['mcj_123456789012', 'mcw_123456789012', at, 2])
+    expect(queries.at(-1)?.text).toBe('ROLLBACK')
+  })
+
   it.each(['40P01', '40001'] as const)('rolls back SQLSTATE %s and exposes only a retryable revision conflict', async (code) => {
     const queries: string[] = []
     const connection: SqlConnection = {
@@ -220,7 +264,7 @@ describe('PostgreSQL production transaction path', () => {
     }
   })
 
-  it('runs the ordered collaboration migrations through schema version 6', async () => {
+  it('runs the ordered collaboration migrations through schema version 7', async () => {
     const migrations: string[] = []
     const pool: SqlPool = {
       query: async (text) => { migrations.push(text); return { rows: [], rowCount: 0 } },
@@ -230,8 +274,8 @@ describe('PostgreSQL production transaction path', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
-    expect(migrations).toHaveLength(6)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(7)
+    expect(migrations).toHaveLength(7)
     expect(migrations[1]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.resource_refs')
     expect(migrations[1]).toContain('created_by_user_id text NOT NULL')
     expect(migrations[1]).toContain('CONSTRAINT resource_refs_open_url_safe')
@@ -322,6 +366,10 @@ describe('PostgreSQL production transaction path', () => {
     expect(migrations[5]).toContain('inbox_messages_recipient_kind_check')
     expect(migrations[5]).toContain("'provider_identity'")
     expect(migrations[5]).toContain('VALUES (6)')
+    expect(migrations[6]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_containers')
+    expect(migrations[6]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_container_jobs')
+    expect(migrations[6]).toContain('managed_provider_container_jobs_claim_idx')
+    expect(migrations[6]).toContain('VALUES (7)')
   })
 
   it('reconciles representative legacy TaskResult fixtures deterministically', () => {
@@ -793,7 +841,6 @@ describe('PostgreSQL production transaction path', () => {
       end: async () => undefined
     }
     const repository = new PostgresCollaborationRepository(pool)
-
     await expect(repository.transaction((tx) => tx.insertResourceRef(resource)))
       .rejects.toMatchObject({ code: 'validation_failed' })
     expect(queries.at(-1)).toBe('ROLLBACK')

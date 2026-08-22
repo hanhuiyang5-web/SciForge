@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 6
+export const COLLABORATION_SCHEMA_VERSION = 7
 
 const COLLABORATION_MIGRATIONS = [
   '0001_collaboration_schema.sql',
@@ -10,10 +10,11 @@ const COLLABORATION_MIGRATIONS = [
   '0003_task_progress.sql',
   '0004_coordination_contract.sql',
   '0005_unified_identity_device_bindings.sql',
-  '0006_provider_identity_inbox.sql'
+  '0006_provider_identity_inbox.sql',
+  '0007_managed_provider_containers.sql'
 ] as const
 
-const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6] as const
+const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7] as const
 
 const REQUIRED_TABLES = [
   'action_confirmations',
@@ -29,6 +30,8 @@ const REQUIRED_TABLES = [
   'human_requests',
   'inbox_cursors',
   'inbox_messages',
+  'managed_provider_container_jobs',
+  'managed_provider_containers',
   'oidc_identities',
   'participant_profiles',
   'project_endpoint_bindings',
@@ -139,6 +142,39 @@ const REQUIRED_COLUMN_TYPES = {
     disposition: 'text',
     superseded_at: 'timestamp with time zone',
     superseded_by_message_id: 'text'
+  },
+  managed_provider_container_jobs: {
+    job_id: 'text',
+    managed_container_id: 'text',
+    operation: 'text',
+    desired_revision: 'bigint',
+    state: 'text',
+    attempt_count: 'integer',
+    next_attempt_at: 'timestamp with time zone',
+    lease_owner: 'text',
+    lease_expires_at: 'timestamp with time zone',
+    safe_error_code: 'text',
+    created_at: 'timestamp with time zone',
+    updated_at: 'timestamp with time zone'
+  },
+  managed_provider_containers: {
+    managed_container_id: 'text',
+    owner_user_id: 'text',
+    human_endpoint_id: 'text',
+    provider: 'text',
+    realm_id: 'text',
+    owner_provider_user_id: 'text',
+    stable_key: 'text',
+    display_name: 'text',
+    external_container_id: 'text',
+    policy: 'jsonb',
+    observed_checks: 'jsonb',
+    status: 'text',
+    last_verified_at: 'timestamp with time zone',
+    safe_error_code: 'text',
+    revision: 'bigint',
+    created_at: 'timestamp with time zone',
+    updated_at: 'timestamp with time zone'
   },
   oidc_identities: {
     identity_id: 'text',
@@ -263,6 +299,16 @@ const REQUIRED_CONSTRAINTS = {
     'inbox_messages_disposition_valid',
     'inbox_messages_superseded_timestamp'
   ],
+  managed_provider_container_jobs: [
+    'managed_provider_container_jobs_operation_valid',
+    'managed_provider_container_jobs_desired_revision_valid',
+    'managed_provider_container_jobs_state_valid',
+    'managed_provider_container_jobs_attempt_count_valid'
+  ],
+  managed_provider_containers: [
+    'managed_provider_containers_status_valid',
+    'managed_provider_containers_revision_valid'
+  ],
   oidc_identities: [
     'oidc_identities_identity_shape',
     'oidc_identities_status_valid',
@@ -308,6 +354,17 @@ const REQUIRED_RELATIONAL_CONSTRAINTS = {
   devices: ['devices_installation_unique', 'devices_identity_owner_unique', 'devices_user_fk'],
   human_endpoint_bindings: ['human_endpoint_bindings_external_identity_unique'],
   human_answers: ['human_answers_confirmation_fk'],
+  managed_provider_container_jobs: [
+    'managed_provider_container_jobs_container_fk',
+    'managed_provider_container_jobs_operation_revision_unique'
+  ],
+  managed_provider_containers: [
+    'managed_provider_containers_owner_fk',
+    'managed_provider_containers_endpoint_fk',
+    'managed_provider_containers_owner_realm_unique',
+    'managed_provider_containers_external_unique',
+    'managed_provider_containers_stable_key_unique'
+  ],
   oidc_identities: [
     'oidc_identities_issuer_subject_unique',
     'oidc_identities_identity_owner_unique',
@@ -335,6 +392,13 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
   devices: {
     devices_user_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' }
   },
+  managed_provider_container_jobs: {
+    managed_provider_container_jobs_container_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' }
+  },
+  managed_provider_containers: {
+    managed_provider_containers_owner_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' },
+    managed_provider_containers_endpoint_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' }
+  },
   oidc_identities: {
     oidc_identities_user_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' }
   },
@@ -355,6 +419,7 @@ const REQUIRED_INDEXES = {
     'human_endpoint_bindings_zulip_provider_identity_active_unique',
     'human_endpoint_bindings_zulip_user_realm_active_unique'
   ],
+  managed_provider_container_jobs: ['managed_provider_container_jobs_claim_idx'],
   project_records: ['project_records_task_result_execution_unique'],
   tasks: ['tasks_execution_id_unique', 'tasks_result_record_unique'],
   zulip_binding_requests: ['zulip_binding_requests_pending_user_realm_unique']

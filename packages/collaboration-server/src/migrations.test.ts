@@ -11,6 +11,7 @@ const REQUIRED_TABLES = [
   'action_confirmations', 'agent_capability_profiles', 'agent_nodes', 'audit_events', 'credentials',
   'device_enrollments', 'devices', 'human_answers', 'human_endpoint_bindings',
   'human_endpoint_challenges', 'human_requests', 'inbox_cursors', 'inbox_messages',
+  'managed_provider_container_jobs', 'managed_provider_containers',
   'oidc_identities', 'participant_profiles', 'project_endpoint_bindings', 'project_input_cursors', 'project_inputs',
   'project_members', 'project_records', 'projects', 'provider_deliveries', 'provider_diagnostics',
   'provider_event_claims', 'provider_event_cursors', 'receipts', 'remote_session_projections',
@@ -57,6 +58,19 @@ const REQUIRED_COLUMN_TYPES = {
   },
   inbox_messages: {
     disposition: 'text', superseded_at: 'timestamp with time zone', superseded_by_message_id: 'text'
+  },
+  managed_provider_container_jobs: {
+    job_id: 'text', managed_container_id: 'text', operation: 'text', desired_revision: 'bigint', state: 'text',
+    attempt_count: 'integer', next_attempt_at: 'timestamp with time zone', lease_owner: 'text',
+    lease_expires_at: 'timestamp with time zone', safe_error_code: 'text',
+    created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone'
+  },
+  managed_provider_containers: {
+    managed_container_id: 'text', owner_user_id: 'text', human_endpoint_id: 'text', provider: 'text',
+    realm_id: 'text', owner_provider_user_id: 'text', stable_key: 'text', display_name: 'text',
+    external_container_id: 'text', policy: 'jsonb', observed_checks: 'jsonb', status: 'text',
+    last_verified_at: 'timestamp with time zone', safe_error_code: 'text', revision: 'bigint',
+    created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone'
   },
   oidc_identities: {
     identity_id: 'text', user_id: 'text', issuer: 'text', subject: 'text', email_at_link_time: 'text',
@@ -127,6 +141,16 @@ const REQUIRED_CONSTRAINTS = {
     'inbox_messages_disposition_valid',
     'inbox_messages_superseded_timestamp'
   ],
+  managed_provider_container_jobs: [
+    'managed_provider_container_jobs_operation_valid',
+    'managed_provider_container_jobs_desired_revision_valid',
+    'managed_provider_container_jobs_state_valid',
+    'managed_provider_container_jobs_attempt_count_valid'
+  ],
+  managed_provider_containers: [
+    'managed_provider_containers_status_valid',
+    'managed_provider_containers_revision_valid'
+  ],
   oidc_identities: [
     'oidc_identities_identity_shape', 'oidc_identities_status_valid', 'oidc_identities_status_timestamps',
     'oidc_identities_revision_valid', 'oidc_identities_times'
@@ -167,6 +191,15 @@ const REQUIRED_RELATIONAL_CONSTRAINTS = {
   devices: ['devices_installation_unique', 'devices_identity_owner_unique', 'devices_user_fk'],
   human_endpoint_bindings: ['human_endpoint_bindings_external_identity_unique'],
   human_answers: ['human_answers_confirmation_fk'],
+  managed_provider_container_jobs: [
+    'managed_provider_container_jobs_container_fk',
+    'managed_provider_container_jobs_operation_revision_unique'
+  ],
+  managed_provider_containers: [
+    'managed_provider_containers_owner_fk', 'managed_provider_containers_endpoint_fk',
+    'managed_provider_containers_owner_realm_unique', 'managed_provider_containers_external_unique',
+    'managed_provider_containers_stable_key_unique'
+  ],
   oidc_identities: ['oidc_identities_issuer_subject_unique', 'oidc_identities_identity_owner_unique',
     'oidc_identities_user_fk'],
   tasks: ['tasks_assignee_owner_fk', 'tasks_result_record_fk'],
@@ -188,6 +221,13 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
   devices: {
     devices_user_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' }
   },
+  managed_provider_container_jobs: {
+    managed_provider_container_jobs_container_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' }
+  },
+  managed_provider_containers: {
+    managed_provider_containers_owner_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' },
+    managed_provider_containers_endpoint_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' }
+  },
   oidc_identities: {
     oidc_identities_user_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' }
   },
@@ -206,6 +246,7 @@ const REQUIRED_INDEXES = {
   human_endpoint_bindings: ['human_endpoint_bindings_other_provider_identity_active_unique',
     'human_endpoint_bindings_zulip_provider_identity_active_unique',
     'human_endpoint_bindings_zulip_user_realm_active_unique'],
+  managed_provider_container_jobs: ['managed_provider_container_jobs_claim_idx'],
   project_records: ['project_records_task_result_execution_unique'],
   tasks: ['tasks_execution_id_unique', 'tasks_result_record_unique'],
   zulip_binding_requests: ['zulip_binding_requests_pending_user_realm_unique']
@@ -237,10 +278,10 @@ describe('collaboration database readiness', () => {
   })
 
   it.each([
-    { label: 'a missing migration', versions: [1, 2, 3, 4, 5] },
-    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7] },
-    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 5, 6] },
-    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 'not-a-version'] }
+    { label: 'a missing migration', versions: [1, 2, 3, 4, 5, 6] },
+    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7, 8] },
+    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 6, 6, 7] },
+    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 6, 'not-a-version'] }
   ])('rejects $label', async ({ versions }) => {
     await expect(isCollaborationDatabaseReady(poolFor({ versions }))).resolves.toBe(false)
   })
@@ -325,7 +366,7 @@ describe('collaboration database readiness', () => {
 })
 
 describe('collaboration migrations', () => {
-  it('preserves A migrations 1-5 and installs provider-identity inbox support as version 6', async () => {
+  it('preserves A migrations 1-6 and installs managed provider containers as version 7', async () => {
     const statements: string[] = []
     const pool: SqlPool = {
       query: async (text) => {
@@ -338,12 +379,15 @@ describe('collaboration migrations', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(6)
-    expect(statements).toHaveLength(6)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(7)
+    expect(statements).toHaveLength(7)
     expect(statements[1]).toContain('resource_refs')
     expect(statements[1]).not.toContain("'provider_identity'")
     expect(statements[5]).toContain("'provider_identity'")
     expect(statements[5]).toContain('VALUES (6)')
+    expect(statements[6]).toContain('managed_provider_containers')
+    expect(statements[6]).toContain('managed_provider_container_jobs')
+    expect(statements[6]).toContain('VALUES (7)')
   })
 })
 
@@ -352,7 +396,7 @@ function poolFor(state: ReadyState = {}): SqlPool {
     query: async (text) => {
       if (text.includes('schema_migrations')) {
         if (state.failQuery === 'versions') throw new Error('private migration query detail')
-        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6]).map((version) => ({ version }))
+        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6, 7]).map((version) => ({ version }))
         return { rows, rowCount: rows.length }
       }
       if (text.includes('information_schema.tables')) {
