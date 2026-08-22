@@ -59,12 +59,35 @@ test('global collaboration mutations satisfy the production broker contract with
     queue: [],
     diagnostics: []
   }
+  const project = {
+    projectId: 'project-1',
+    ownerUserId: TEST_IDS.userId,
+    name: 'Research Project',
+    goal: 'Complete the delegated task.',
+    state: 'active' as const,
+    revision: 1,
+    coordinatorAgentId: TEST_IDS.agentId,
+    memberUserIds: [TEST_IDS.userId],
+    tasks: []
+  }
+  const task = {
+    taskId: 'task-1',
+    projectId: project.projectId,
+    executionId: 'execution-1',
+    assigneeAgentId: TEST_IDS.agentId,
+    assigneeUserId: TEST_IDS.userId,
+    revision: 1,
+    title: 'Task',
+    objective: 'Return a concise result.',
+    completionCriteria: [{ criterionId: 'criterion-1', text: 'Result returned.' }],
+    state: 'offered' as const,
+    updatedAt: '2026-08-15T09:00:00.000Z'
+  }
   const runtime = {
-    configureConnection: async () => connection,
     changeConnection: async () => connection,
     startChallenge: async () => ({
       challengeId: TEST_IDS.challengeId,
-      pairingCode: `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`,
+      pairingCode: `sciforge-pair ${TEST_IDS.challengeId} challenge123`,
       expiresAt: '2026-08-15T09:00:00.000Z',
       instruction: 'Send the command.'
     }),
@@ -82,6 +105,8 @@ test('global collaboration mutations satisfy the production broker contract with
     updateProjection: async () => projection,
     shareProjection: async () => projection,
     retrySynchronization: async () => undefined,
+    createProject: async () => project,
+    createTask: async () => task,
     manageContainer: async () => ({ managedContainer: null }),
     status: async () => status
   } as unknown as CollaborationRuntime
@@ -90,9 +115,6 @@ test('global collaboration mutations satisfy the production broker contract with
     getRuntime: () => runtime
   }).createDefinitions()
   const inputs: Readonly<Record<string, unknown>> = {
-    [COLLABORATION_CAPABILITY_IDS.connectionConfigure]: {
-      baseUrl: 'https://collaboration.example.test'
-    },
     [COLLABORATION_CAPABILITY_IDS.connectionConnect]: { action: 'connect' },
     [COLLABORATION_CAPABILITY_IDS.endpointChallengeStart]: {
       providerKey: 'zulip',
@@ -128,6 +150,19 @@ test('global collaboration mutations satisfy the production broker contract with
       expectedRevision: 1
     },
     [COLLABORATION_CAPABILITY_IDS.synchronizationRetry]: { scope: 'connection' },
+    [COLLABORATION_CAPABILITY_IDS.projectCreate]: {
+      displayName: project.name,
+      goal: project.goal,
+      memberUserIds: [TEST_IDS.userId],
+      coordinatorAgentId: TEST_IDS.agentId
+    },
+    [COLLABORATION_CAPABILITY_IDS.taskCreate]: {
+      projectId: project.projectId,
+      assigneeAgentId: TEST_IDS.agentId,
+      title: task.title,
+      objective: task.objective,
+      completionCriteria: ['Result returned.']
+    },
     [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
     [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
       action: 'ensure', humanEndpointId: TEST_IDS.humanEndpointId
@@ -138,7 +173,7 @@ test('global collaboration mutations satisfy the production broker contract with
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 10)
+  assert.equal(mutations.length, 11)
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)

@@ -1,16 +1,21 @@
 import type { z } from 'zod'
 import type {
   DomainMainHost,
+  DomainMainInternalServiceDescriptor,
   DomainMainRuntimeDisposer,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import {
+  IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+  IDENTITY_CLOUD_SESSION_SERVICE_ID,
+  type IdentityCloudSessionService
+} from '@sciforge/domain-identity-access/main'
 import {
   COLLABORATION_CAPABILITY_IDS,
   collaborationAgentRegisterInputSchema,
   collaborationAgentRegisterResultSchema,
-  collaborationConnectionConfigureInputSchema,
-  collaborationConnectionConfigureResultSchema,
   collaborationConnectionConnectInputSchema,
   collaborationConnectionConnectResultSchema,
   collaborationEndpointChallengePollInputSchema,
@@ -29,14 +34,17 @@ import {
   collaborationProjectionShareResultSchema,
   collaborationProjectionUpdateInputSchema,
   collaborationProjectionUpdateResultSchema,
+  collaborationProjectCreateInputSchema,
+  collaborationProjectCreateResultSchema,
   collaborationStatusReadInputSchema,
   collaborationStatusReadResultSchema,
   collaborationSynchronizationRetryInputSchema,
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskCreateInputSchema,
+  collaborationTaskCreateResultSchema,
   type CollaborationAgentRegisterInput,
-  type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
@@ -45,12 +53,16 @@ import {
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
+  type CollaborationProjectCreateInput,
   type CollaborationSynchronizationRetryInput,
+  type CollaborationTaskCreateInput,
   type CollaborationTaskListInput
 } from './contract.js'
 import {
   COLLABORATION_CAPABILITY_FACTORY_CONTRIBUTION,
   COLLABORATION_DOMAIN_MODULE_ID,
+  COLLABORATION_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
+  COLLABORATION_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION,
   COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
@@ -59,6 +71,19 @@ import {
   collaborationStatePath,
   type CollaborationRuntimeOptions
 } from './main/runtime.js'
+import {
+  COLLABORATION_BC_NODE_CONTRACT_VERSION,
+  COLLABORATION_BC_NODE_SERVICE_ID,
+  CollaborationBCNodePortImpl
+} from './main/bc-node-port.js'
+
+export type {
+  BCInboxHandler,
+  BCInboxOutcome,
+  CollaborationBCCloudRequest,
+  CollaborationBCNodePort,
+  CollaborationNodePrincipal
+} from './main/bc-node-port.js'
 
 export {
   ProjectionCoordinator,
@@ -69,6 +94,9 @@ export {
   FileCollaborationStateBackend
 } from './main/store.js'
 export type { CollaborationStateBackend } from './main/store.js'
+export type {
+  CollaborationCloudIdentity
+} from './main/connection.js'
 
 type CapabilityEffect = 'read' | 'external-write' | 'destructive'
 
@@ -104,6 +132,7 @@ export type CollaborationCapabilityFactory<CapabilityDefinition = unknown> = Rea
 
 type CollaborationMainContribution<CapabilityDefinition = unknown> =
   | CollaborationCapabilityFactory<CapabilityDefinition>
+  | DomainMainInternalServiceDescriptor
   | DomainMainRuntimeLifecycleContribution
 
 type CollaborationMainHost = DomainMainHost & Readonly<{
@@ -118,17 +147,46 @@ type OwnedRuntime = Readonly<{
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: CollaborationMainHost
 ): TrustedDomainProcessEntryInput<CollaborationMainContribution<CapabilityDefinition>> {
-  if (!host.packageSettings || !host.packageSecrets) {
-    throw new Error('Collaboration requires package-scoped settings and secret storage.')
+  if (!host.packageSettings || !host.packageSecrets || !host.internalServices) {
+    throw new Error('Collaboration requires package storage and Host-mediated internal services.')
   }
   const createRuntime = host.createCollaborationRuntime ?? ((options) => new CollaborationRuntime(options))
   let owned: OwnedRuntime | null = null
   let activation: Promise<OwnedRuntime> | null = null
+  let activatingRuntime: CollaborationRuntime | null = null
+  let bcEnabled = false
+  let wakeRequested = false
 
   const requireRuntime = (): CollaborationRuntime => {
-    if (!owned || owned.disposed) throw new Error('Collaboration runtime is not active.')
-    return owned.runtime
+    if (owned && !owned.disposed) return owned.runtime
+    if (activatingRuntime) return activatingRuntime
+    throw new Error('Collaboration runtime is not active.')
   }
+  const bcPort = new CollaborationBCNodePortImpl({
+    current: () => requireRuntime().collaborationIdentity(),
+    execute: (request) => requireRuntime().executeARequest(request),
+    wake: () => {
+      if (owned && !owned.disposed) owned.runtime.wakeBC()
+      else wakeRequested = true
+    },
+    registrationChanged: (enabled) => {
+      bcEnabled = enabled
+      const current = owned && !owned.disposed ? owned.runtime : activatingRuntime
+      if (current) void current.setBCCapabilities(enabled).catch(() => undefined)
+    }
+  })
+  const internalServiceDescriptor = defineDomainMainInternalServiceDescriptor({
+    location: 'main.internal-service-descriptor',
+    serviceId: COLLABORATION_BC_NODE_SERVICE_ID,
+    contractVersion: COLLABORATION_BC_NODE_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.project-coordinator']
+  })
+  host.internalServices.register({
+    serviceId: COLLABORATION_BC_NODE_SERVICE_ID,
+    contractVersion: COLLABORATION_BC_NODE_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.project-coordinator'],
+    service: bcPort
+  })
   const disposeOwned = async (record: OwnedRuntime | null): Promise<void> => {
     if (!record || record.disposed) return
     record.disposed = true
@@ -140,20 +198,36 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     activate: async (context) => {
       if (owned || activation) throw new Error('Collaboration runtime lifecycle is already active.')
       const pending = (async (): Promise<OwnedRuntime> => {
+        const initialBCEnabled = bcEnabled
+        const cloudIdentitySession = host.internalServices!.acquire<IdentityCloudSessionService>(
+          IDENTITY_CLOUD_SESSION_SERVICE_ID,
+          IDENTITY_CLOUD_SESSION_CONTRACT_VERSION
+        )
         const runtime = createRuntime({
           statePath: collaborationStatePath(context.userDataDir),
           packageSettings: host.packageSettings!,
           packageSecrets: host.packageSecrets!,
+          cloudIdentitySession,
+          bcPort,
+          bcCapabilitiesEnabled: initialBCEnabled,
           sanitizeText: host.textSanitizer?.sanitizeText
         })
+        activatingRuntime = runtime
         try {
           const deactivate = await runtime.activate(context)
           const record: OwnedRuntime = { runtime, deactivate, disposed: false }
           owned = record
+          if (bcEnabled !== initialBCEnabled) await runtime.setBCCapabilities(bcEnabled)
+          if (wakeRequested) {
+            wakeRequested = false
+            runtime.wakeBC()
+          }
           return record
         } catch (error) {
           await runtime.dispose().catch(() => undefined)
           throw error
+        } finally {
+          if (activatingRuntime === runtime) activatingRuntime = null
         }
       })()
       activation = pending
@@ -188,6 +262,11 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
           if (pending) await disposeOwned(await pending)
           else await disposeOwned(owned)
         }
+      },
+      {
+        ...COLLABORATION_INTERNAL_SERVICE_DESCRIPTOR_CONTRIBUTION,
+        contract: COLLABORATION_INTERNAL_SERVICE_DESCRIPTOR_CONTRACT,
+        value: internalServiceDescriptor
       }
     ]
   }
@@ -251,18 +330,6 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         async () => ({ output: await options.getRuntime().status() })
       ),
       capability(
-        COLLABORATION_CAPABILITY_IDS.connectionConfigure,
-        'Configure collaboration service',
-        'Stores a non-secret HTTPS service location and loads its provider-neutral catalog.',
-        'external-write',
-        collaborationConnectionConfigureInputSchema,
-        collaborationConnectionConfigureResultSchema,
-        async (raw) => {
-          const input = collaborationConnectionConfigureInputSchema.parse(raw) as CollaborationConnectionConfigureInput
-          return { output: { connection: await options.getRuntime().configureConnection(input.baseUrl) } }
-        }
-      ),
-      capability(
         COLLABORATION_CAPABILITY_IDS.connectionConnect,
         'Change collaboration connection',
         'Connects, disconnects, or explicitly recovers the Agent device connection.',
@@ -290,7 +357,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       define({
         id: COLLABORATION_CAPABILITY_IDS.endpointChallengePoll,
         title: 'Poll endpoint verification',
-        description: 'Redeems the package-secret polling credential and saves the one-time user credential in the secret store.',
+        description: 'Redeems the package-secret polling handle using the current OIDC user authority.',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
@@ -305,7 +372,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.agentRegister,
         'Register this Agent',
-        'Registers the stable installation and saves the one-time device credential in the package secret store.',
+        'Registers this Agent against the ACTIVE identity Device and saves its one-time Agent credential in the package secret store.',
         'external-write',
         collaborationAgentRegisterInputSchema,
         collaborationAgentRegisterResultSchema,
@@ -398,6 +465,32 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               collaborationTaskListInputSchema.parse(raw) as CollaborationTaskListInput
             )
           }
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.projectCreate,
+        'Create collaboration Project',
+        'Creates an Owner-direct Project with explicit members and an active local Coordinator Agent.',
+        'external-write',
+        collaborationProjectCreateInputSchema,
+        collaborationProjectCreateResultSchema,
+        async (raw) => ({
+          output: { project: await options.getRuntime().createProject(
+            collaborationProjectCreateInputSchema.parse(raw) as CollaborationProjectCreateInput
+          ) }
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskCreate,
+        'Create collaboration Task',
+        'Creates an Owner-direct phase-one Task for an explicit Worker Agent without ResourceRefs or authorization requirements.',
+        'external-write',
+        collaborationTaskCreateInputSchema,
+        collaborationTaskCreateResultSchema,
+        async (raw) => ({
+          output: { task: await options.getRuntime().createTask(
+            collaborationTaskCreateInputSchema.parse(raw) as CollaborationTaskCreateInput
+          ) }
         })
       ),
       capability(

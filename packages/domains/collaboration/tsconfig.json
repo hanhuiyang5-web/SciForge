@@ -16,6 +16,8 @@
     "paths": {
       "@sciforge/collaboration-contracts": ["../../collaboration-contracts/src/index.ts"],
       "@sciforge/collaboration-contracts/testing": ["../../collaboration-contracts/src/testing.ts"],
+      "@sciforge/collaboration-identity": ["../../collaboration-identity/src/index.ts"],
+      "@sciforge/domain-identity-access/main": ["../identity-access/src/main/index.ts"],
       "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"]
     }
   },

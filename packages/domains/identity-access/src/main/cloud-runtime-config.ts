@@ -36,7 +36,11 @@ export function resolveDesktopIdentityRuntimeConfig(input: Readonly<{
     }
   }
 
-  return { mode: 'http', issuer: configuredIssuer, cloudBaseUrl: configuredCloudBaseUrl }
+  return {
+    mode: 'http',
+    issuer: configuredIssuer.replace(/\/+$/u, ''),
+    cloudBaseUrl: configuredCloudBaseUrl.replace(/\/+$/u, '')
+  }
 }
 
 export function createUnavailableCollaborationIdentityClient(

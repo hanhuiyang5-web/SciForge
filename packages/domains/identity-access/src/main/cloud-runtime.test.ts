@@ -20,8 +20,8 @@ afterEach(() => {
 describe('CloudIdentityRuntime', () => {
   it('uses the real HTTP client only when both endpoints are explicitly configured', () => {
     expect(resolveDesktopIdentityRuntimeConfig({
-      oidcIssuer: 'https://identity.example.test/realms/SciForge',
-      cloudBaseUrl: 'https://cloud.example.test'
+      oidcIssuer: 'https://identity.example.test/realms/SciForge/',
+      cloudBaseUrl: 'https://cloud.example.test///'
     })).toEqual({
       mode: 'http',
       issuer: 'https://identity.example.test/realms/SciForge',

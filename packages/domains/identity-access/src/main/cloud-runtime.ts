@@ -42,6 +42,7 @@ export class CloudIdentityRuntime {
   readonly #identity: DesktopIdentityService
   readonly #device: DesktopDeviceService
   readonly #links: CloudIdentityLinks
+  readonly #cloudBaseUrl: string | null
   readonly #listeners = new Set<() => void>()
   readonly #disposeIdentitySubscription: () => void
   readonly #disposeDeviceSubscription: () => void
@@ -55,11 +56,13 @@ export class CloudIdentityRuntime {
     identity: DesktopIdentityService
     device: DesktopDeviceService
     links: CloudIdentityLinks
+    cloudBaseUrl: string | null
     runtimeError?: CloudIdentityRuntimeError
   }>) {
     this.#identity = input.identity
     this.#device = input.device
     this.#links = input.links
+    this.#cloudBaseUrl = input.cloudBaseUrl
     this.#runtimeError = input.runtimeError
     this.#disposeIdentitySubscription = this.#identity.subscribe((status) => {
       this.#projectAuthenticatedUser(status)
@@ -133,6 +136,7 @@ export class CloudIdentityRuntime {
         identity,
         device,
         links,
+        cloudBaseUrl: identityConfig.mode === 'http' ? identityConfig.cloudBaseUrl : null,
         ...(linkResult.error ? { runtimeError: linkResult.error } : {})
       })
     } catch (error) {
@@ -198,6 +202,34 @@ export class CloudIdentityRuntime {
     this.#assertOpen()
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
+  }
+
+  cloudBaseUrl(): string | null {
+    return this.#cloudBaseUrl
+  }
+
+  async acquireFreshCloudSession(): Promise<Readonly<{
+    accessToken: string
+    snapshot: CloudIdentitySnapshot
+  }>> {
+    this.#assertOpen()
+    const accessToken = await this.#identity.getFreshAccessToken()
+    const device = await this.#device.ensureRegistered()
+    this.#acceptDeviceResult(device)
+    if (!device.ok || device.status.state !== 'active') {
+      throw new Error(device.ok
+        ? 'An ACTIVE SciForge Cloud Desktop Device is required.'
+        : device.message)
+    }
+    const snapshot = this.snapshot()
+    if (
+      snapshot.identity.state !== 'signed-in' ||
+      snapshot.device.state !== 'active' ||
+      this.#identity.getAccessToken() !== accessToken
+    ) {
+      throw new Error('SciForge Cloud authority changed while acquiring a fresh session.')
+    }
+    return Object.freeze({ accessToken, snapshot })
   }
 
   async login(): Promise<CloudIdentitySnapshot> {

@@ -2,11 +2,15 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { DomainMainInternalServiceHost } from '@sciforge/domain-sdk/host'
 import {
   IDENTITY_CAPABILITY_IDS,
   IDENTITY_RESET_CONFIRMATION
 } from '../contract.js'
 import {
+  IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS,
+  IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+  IDENTITY_CLOUD_SESSION_SERVICE_ID,
   createDomainMainEntry,
   createIdentityCapabilityFactory,
   type IdentityCapabilityOptions
@@ -52,6 +56,48 @@ describe('Identity main contributions', () => {
     ])
   })
 
+  it('registers the main-only Cloud session service for Collaboration alone', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-service-'))
+    roots.push(root)
+    const internalServices = memoryInternalServices()
+    const register = vi.spyOn(internalServices, 'register')
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memorySecrets(),
+      internalServices,
+      defineCapability: (definition) => definition
+    })
+
+    expect(register).toHaveBeenCalledWith({
+      serviceId: IDENTITY_CLOUD_SESSION_SERVICE_ID,
+      contractVersion: IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+      allowedConsumerModuleIds: IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS,
+      service: expect.objectContaining({
+        current: expect.any(Function),
+        withFreshAccessToken: expect.any(Function),
+        subscribe: expect.any(Function)
+      })
+    })
+    expect(entry.contributions[3]).toMatchObject({
+      id: 'identity-access.cloud-session-service',
+      kind: 'main.extension',
+      contract: {
+        location: 'main.internal-service-descriptor',
+        serviceId: 'identity.cloud-session',
+        contractVersion: '1.0.0',
+        allowedConsumerModuleIds: ['sciforge.collaboration']
+      },
+      value: {
+        location: 'main.internal-service-descriptor',
+        serviceId: 'identity.cloud-session',
+        contractVersion: '1.0.0',
+        allowedConsumerModuleIds: ['sciforge.collaboration']
+      }
+    })
+    entry.contributions[3]!.onDispose?.()
+  })
+
   it('shares one lazy service between capabilities and Principal provider and rejects Agent calls', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-main-'))
     roots.push(root)
@@ -59,6 +105,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -98,6 +145,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -299,6 +347,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
@@ -322,6 +371,7 @@ describe('Identity main contributions', () => {
         getUserDataDir: () => '/private/tmp/sciforge-identity-missing-device',
         ...(getDeviceId ? { getDeviceId } : {}),
         packageSecrets: memorySecrets(),
+        internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })
       const provider = entry.contributions[1]!.value as { current(): unknown }
@@ -340,6 +390,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -364,6 +415,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion,
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -391,6 +443,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -423,6 +476,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -465,6 +519,7 @@ describe('Identity main contributions', () => {
       getDeviceId: () => 'device-1',
       getAppVersion: () => '1.0.0',
       packageSecrets: memorySecrets(),
+      internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
     const lifecycle = entry.contributions[2]!.value as {
@@ -509,6 +564,7 @@ describe('Identity main contributions', () => {
         getDeviceId: () => 'device-1',
         getAppVersion: () => '1.0.0',
         packageSecrets: memorySecrets(),
+        internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })
       const lifecycle = entry.contributions[2]!.value as {
@@ -544,6 +600,28 @@ function memorySecrets() {
     },
     remove: async (key: string) => {
       values.delete(key)
+    }
+  }
+}
+
+function memoryInternalServices(): DomainMainInternalServiceHost {
+  const services = new Map<string, Readonly<{
+    contractVersion: string
+    service: object
+  }>>()
+  return {
+    register: (registration) => {
+      services.set(registration.serviceId, {
+        contractVersion: registration.contractVersion,
+        service: registration.service
+      })
+    },
+    acquire: <Service extends object>(serviceId: string, contractVersion: string): Service => {
+      const registration = services.get(serviceId)
+      if (!registration || registration.contractVersion !== contractVersion) {
+        throw new Error(`Internal service ${serviceId} is unavailable.`)
+      }
+      return registration.service as Service
     }
   }
 }
@@ -586,7 +664,11 @@ function runtimeDouble(
       close,
       snapshot: vi.fn(() => snapshot),
       semanticRevision: vi.fn(() => 'cloud-1'),
-      subscribe: vi.fn(() => () => undefined)
+      subscribe: vi.fn(() => () => undefined),
+      cloudBaseUrl: vi.fn(() => null),
+      acquireFreshCloudSession: vi.fn(async () => {
+        throw new Error('Cloud session is unavailable in this runtime double.')
+      })
     } as unknown as CloudIdentityRuntime
   }
 }

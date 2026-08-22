@@ -85,6 +85,7 @@ export class DesktopDeviceService {
   #status: DesktopDeviceStatus
   #devices: DesktopDeviceSummary[] = []
   #operation: DeviceOperation | null = null
+  #identityPrincipalKey: string | null
   #identityEpoch = 1
   #deviceOperationSequence = 0
   #closed = false
@@ -98,7 +99,9 @@ export class DesktopDeviceService {
     this.#displayName = options.displayName?.trim() || hostname() || 'SciForge Desktop'
     this.#capabilities = options.capabilities ?? ['agent.execute', 'workspace.read']
     this.#linkDevice = options.linkDevice
-    this.#status = options.identity.getStatus().state === 'signed-in'
+    const initialIdentity = options.identity.getStatus()
+    this.#identityPrincipalKey = identityPrincipalKey(initialIdentity)
+    this.#status = initialIdentity.state === 'signed-in'
       ? { state: 'not-enrolled' }
       : { state: 'signed-out' }
     this.#disposeIdentitySubscription = options.identity.subscribe((status) => {
@@ -338,6 +341,12 @@ export class DesktopDeviceService {
   }
 
   #handleIdentityStatus(status: DesktopIdentityStatus): void {
+    const nextPrincipalKey = identityPrincipalKey(status)
+    const keepsConfirmedActiveDevice =
+      nextPrincipalKey !== null &&
+      nextPrincipalKey === this.#identityPrincipalKey &&
+      this.#status.state === 'active'
+    this.#identityPrincipalKey = nextPrincipalKey
     this.#identityEpoch += 1
     this.#deviceOperationSequence += 1
     this.#operation = null
@@ -345,6 +354,10 @@ export class DesktopDeviceService {
     this.#devices = []
     if (status.state === 'signed-out') {
       this.#publish({ state: 'signed-out' })
+      return
+    }
+    if (keepsConfirmedActiveDevice) {
+      void this.ensureRegistered().catch(() => undefined)
       return
     }
     this.#publish({ state: 'not-enrolled' })
@@ -454,6 +467,15 @@ function devicePlatform(options: DesktopDeviceServiceOptions): Device['platform'
   const arch = architecture === 'arm64' ? 'arm64' : 'x64'
   const osVersion = options.osVersion ?? release()
   return { os, arch, osVersion, appVersion: options.appVersion }
+}
+
+function identityPrincipalKey(status: DesktopIdentityStatus): string | null {
+  if (status.state !== 'signed-in') return null
+  return [
+    status.user.issuer,
+    status.user.subject,
+    status.user.userId
+  ].join('\u0000')
 }
 
 function toSummary(device: Device): DesktopDeviceSummary {

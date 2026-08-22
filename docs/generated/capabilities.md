@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **246**
+Registered actions: **248**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,6 @@ Registered actions: **246**
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `change-inspector.open-session` | 1.0.0 | ui | read | none | workspace |
 | `collaboration.agent.register` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.connection.configure` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.connection.connect` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.endpoint.challenge.poll` | 1.0.0 | ui | read | none | global |
 | `collaboration.endpoint.challenge.start` | 1.0.0 | ui | external-write | confirmation | global |
@@ -67,11 +66,13 @@ Registered actions: **246**
 | `collaboration.managed-container.inspect` | 1.0.0 | ui | read | none | global |
 | `collaboration.managed-container.provision` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.participant.primary-agent.select` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.project.create` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.status.read` | 1.0.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.task.create` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.task.list` | 1.0.0 | ui | read | none | global |
 | `content-space.agent-create-folder` | 1.0.0 | agent | external-write | confirmation | resource |
 | `content-space.agent-download` | 1.0.0 | agent | external-write | confirmation | resource |
@@ -178,6 +179,7 @@ Registered actions: **246**
 | `project-dag.goal.save` | 1.0.0 | ui, agent, system | compute | none | workspace |
 | `project-dag.update` | 1.0.0 | ui, agent, system | compute | none | workspace |
 | `project-dag.view` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `project.coordinator.status.read` | 1.0.0 | ui, agent, system | read | none | global |
 | `remote-ssh.bindings.get` | 1.0.0 | ui | read | none | workspace |
 | `remote-ssh.bindings.save` | 1.0.0 | ui | external-write | confirmation | workspace |
 | `remote-ssh.command.cancel` | 1.0.0 | ui, agent | external-write | confirmation | workspace |
@@ -16722,7 +16724,7 @@ Issues a read-only resource for one session change snapshot.
 
 ## `collaboration.agent.register`
 
-Registers the stable installation and saves the one-time device credential in the package secret store.
+Registers this Agent against the ACTIVE identity Device and saves its one-time Agent credential in the package secret store.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -16858,120 +16860,6 @@ Registers the stable installation and saves the one-time device credential in th
 }
 ```
 
-## `collaboration.connection.configure`
-
-Stores a non-secret HTTPS service location and loads its provider-neutral catalog.
-
-- Version: `1.0.0`
-- Audiences: ui
-- Effect: `external-write`
-- Approval: confirmation
-- Scope: global
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "required",
-    "revision": "none"
-  },
-  "contractVersion": 1,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "baseUrl": {
-        "format": "uri",
-        "maxLength": 2048,
-        "type": "string"
-      }
-    },
-    "required": [
-      "baseUrl"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "connection": {
-        "additionalProperties": false,
-        "properties": {
-          "baseUrl": {
-            "format": "uri",
-            "maxLength": 2048,
-            "type": "string"
-          },
-          "configured": {
-            "type": "boolean"
-          },
-          "deviceCredentialAvailable": {
-            "type": "boolean"
-          },
-          "lastConnectedAt": {
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-            "type": "string"
-          },
-          "lastError": {
-            "maxLength": 4000,
-            "type": "string"
-          },
-          "lastInboxSequence": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "localAgentId": {
-            "maxLength": 256,
-            "minLength": 1,
-            "type": "string"
-          },
-          "pendingOutboxCount": {
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "state": {
-            "enum": [
-              "unconfigured",
-              "disconnected",
-              "connecting",
-              "connected",
-              "recovering",
-              "error"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "configured",
-          "state",
-          "lastInboxSequence",
-          "pendingOutboxCount"
-        ],
-        "type": "object"
-      }
-    },
-    "required": [
-      "connection"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "collaboration",
-    "user",
-    "device",
-    "session",
-    "project"
-  ],
-  "title": "Configure collaboration service"
-}
-```
-
 ## `collaboration.connection.connect`
 
 Connects, disconnects, or explicitly recovers the Agent device connection.
@@ -17091,7 +16979,7 @@ Connects, disconnects, or explicitly recovers the Agent device connection.
 
 ## `collaboration.endpoint.challenge.poll`
 
-Redeems the package-secret polling credential and saves the one-time user credential in the secret store.
+Redeems the package-secret polling handle using the current OIDC user authority.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -18636,6 +18524,303 @@ Selects an active Agent owned by the current user without guessing from presence
     "project"
   ],
   "title": "Select primary Agent"
+}
+```
+
+## `collaboration.project.create`
+
+Creates an Owner-direct Project with explicit members and an active local Coordinator Agent.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "coordinatorAgentId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "displayName": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "goal": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "memberUserIds": {
+        "items": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "displayName",
+      "goal",
+      "memberUserIds",
+      "coordinatorAgentId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "project": {
+        "additionalProperties": false,
+        "properties": {
+          "coordinatorAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "goal": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "memberUserIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ownerUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "assigneeAgentId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "assigneeUserId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "completionCriteria": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "criterionId": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "criterionId",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "error": {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                "executionId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "localTurnId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "objective": {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                "progress": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "percent": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "reportedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "summary": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "percent",
+                    "summary",
+                    "reportedAt"
+                  ],
+                  "type": "object"
+                },
+                "projectId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "resultProjectRecordId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "resultSummary": {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                "revision": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "safeFailureSummary": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "offered",
+                    "accepted",
+                    "running",
+                    "needs-human",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "stale"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "title": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "taskId",
+                "projectId",
+                "executionId",
+                "assigneeAgentId",
+                "assigneeUserId",
+                "revision",
+                "title",
+                "objective",
+                "completionCriteria",
+                "state",
+                "updatedAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "projectId",
+          "ownerUserId",
+          "name",
+          "goal",
+          "state",
+          "revision",
+          "coordinatorAgentId",
+          "memberUserIds",
+          "tasks"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "project"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Create collaboration Project"
 }
 ```
 
@@ -20362,6 +20547,10 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "minLength": 1,
               "type": "string"
             },
+            "goal": {
+              "maxLength": 4000,
+              "type": "string"
+            },
             "memberUserIds": {
               "items": {
                 "maxLength": 256,
@@ -20372,6 +20561,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
               "type": "array"
             },
             "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "ownerUserId": {
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
@@ -20404,8 +20598,43 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                     "minLength": 1,
                     "type": "string"
                   },
+                  "assigneeUserId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "completionCriteria": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "criterionId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "text": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "criterionId",
+                        "text"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array"
+                  },
                   "error": {
                     "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "maxLength": 256,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "localTurnId": {
@@ -20413,15 +20642,59 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                     "minLength": 1,
                     "type": "string"
                   },
+                  "objective": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "progress": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "reportedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "summary": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "percent",
+                      "summary",
+                      "reportedAt"
+                    ],
+                    "type": "object"
+                  },
                   "projectId": {
                     "maxLength": 256,
                     "minLength": 1,
+                    "type": "string"
+                  },
+                  "resultProjectRecordId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resultSummary": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
                   "revision": {
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
                     "type": "integer"
+                  },
+                  "safeFailureSummary": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
                   },
                   "state": {
                     "enum": [
@@ -20455,9 +20728,13 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                 "required": [
                   "taskId",
                   "projectId",
+                  "executionId",
                   "assigneeAgentId",
+                  "assigneeUserId",
                   "revision",
                   "title",
+                  "objective",
+                  "completionCriteria",
                   "state",
                   "updatedAt"
                 ],
@@ -20469,7 +20746,9 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
           },
           "required": [
             "projectId",
+            "ownerUserId",
             "name",
+            "goal",
             "state",
             "revision",
             "coordinatorAgentId",
@@ -20804,6 +21083,241 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
 }
 ```
 
+## `collaboration.task.create`
+
+Creates an Owner-direct phase-one Task for an explicit Worker Agent without ResourceRefs or authorization requirements.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "assigneeAgentId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "completionCriteria": {
+        "items": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "objective": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "assigneeAgentId",
+      "title",
+      "objective",
+      "completionCriteria"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "additionalProperties": false,
+        "properties": {
+          "assigneeAgentId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "assigneeUserId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "completionCriteria": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "criterionId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "text": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "criterionId",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "error": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "localTurnId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "objective": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "progress": {
+            "additionalProperties": false,
+            "properties": {
+              "percent": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reportedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "summary": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "percent",
+              "summary",
+              "reportedAt"
+            ],
+            "type": "object"
+          },
+          "projectId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resultProjectRecordId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resultSummary": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "safeFailureSummary": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "offered",
+              "accepted",
+              "running",
+              "needs-human",
+              "completed",
+              "failed",
+              "cancelled",
+              "stale"
+            ],
+            "type": "string"
+          },
+          "taskId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "projectId",
+          "executionId",
+          "assigneeAgentId",
+          "assigneeUserId",
+          "revision",
+          "title",
+          "objective",
+          "completionCriteria",
+          "state",
+          "updatedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "task"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Create collaboration Task"
+}
+```
+
 ## `collaboration.task.list`
 
 Reads local canonical cloud Task projections and restart reconciliation state.
@@ -20865,8 +21379,43 @@ Reads local canonical cloud Task projections and restart reconciliation state.
               "minLength": 1,
               "type": "string"
             },
+            "assigneeUserId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "completionCriteria": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "criterionId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "criterionId",
+                  "text"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            },
             "error": {
               "maxLength": 4000,
+              "type": "string"
+            },
+            "executionId": {
+              "maxLength": 256,
+              "minLength": 1,
               "type": "string"
             },
             "localTurnId": {
@@ -20874,15 +21423,59 @@ Reads local canonical cloud Task projections and restart reconciliation state.
               "minLength": 1,
               "type": "string"
             },
+            "objective": {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            "progress": {
+              "additionalProperties": false,
+              "properties": {
+                "percent": {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reportedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "percent",
+                "summary",
+                "reportedAt"
+              ],
+              "type": "object"
+            },
             "projectId": {
               "maxLength": 256,
               "minLength": 1,
+              "type": "string"
+            },
+            "resultProjectRecordId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "resultSummary": {
+              "maxLength": 4000,
               "type": "string"
             },
             "revision": {
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991,
               "type": "integer"
+            },
+            "safeFailureSummary": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
             },
             "state": {
               "enum": [
@@ -20916,9 +21509,13 @@ Reads local canonical cloud Task projections and restart reconciliation state.
           "required": [
             "taskId",
             "projectId",
+            "executionId",
             "assigneeAgentId",
+            "assigneeUserId",
             "revision",
             "title",
+            "objective",
+            "completionCriteria",
             "state",
             "updatedAt"
           ],
@@ -49221,6 +49818,80 @@ Reads the canonical committed Project graph and current update state.
     "status"
   ],
   "title": "View Project DAG"
+}
+```
+
+## `project.coordinator.status.read`
+
+Reads Coordinator and Worker recovery state.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "active": {
+        "type": "boolean"
+      },
+      "agentId": {
+        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "connected": {
+        "type": "boolean"
+      },
+      "pendingCoordinatorPlans": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "pendingWorkerExecutions": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "runningWorkerExecutions": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "active",
+      "connected",
+      "runningWorkerExecutions",
+      "pendingWorkerExecutions",
+      "pendingCoordinatorPlans"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "coordinator",
+    "worker"
+  ],
+  "title": "Inspect B Runtime"
 }
 ```
 
@@ -96703,6 +97374,7 @@ Releases an open Workspace Preview session.
 | Identity and Access |  |  |
 | OpenContent Connection |  |  |
 | Paper Radar | paperRadar: |  |
+| Project Coordinator |  |  |
 | Project DAG | projectDag: |  |
 | Remote SSH |  |  |
 | Research Checkpoints |  |  |

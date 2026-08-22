@@ -467,6 +467,39 @@ export class DesktopIdentityService {
     return this.getStatus().state === 'signed-in' ? this.accessToken : null
   }
 
+  /**
+   * Returns a main-process-only bearer token with at least the normal refresh
+   * leeway remaining. The token is never published through status listeners.
+   */
+  async getFreshAccessToken(): Promise<string> {
+    if (this.closed) {
+      throw new DesktopIdentityError('OIDC_SESSION_EXPIRED', 'The Desktop login session is closed.')
+    }
+    const current = this.getStatus()
+    if (
+      current.state === 'signed-in' &&
+      this.accessToken &&
+      Date.parse(current.accessTokenExpiresAt) - this.now() > REFRESH_LEEWAY_MS
+    ) {
+      return this.accessToken
+    }
+    if (!this.credentials) {
+      throw new DesktopIdentityError('OIDC_SESSION_EXPIRED', 'Sign in to SciForge Cloud first.')
+    }
+    const refreshed = await this.refreshSession()
+    if (!refreshed.ok) {
+      throw new DesktopIdentityError(refreshed.error.code, refreshed.error.message)
+    }
+    const refreshedStatus = this.getStatus()
+    if (refreshedStatus.state !== 'signed-in' || !this.accessToken) {
+      throw new DesktopIdentityError(
+        'OIDC_SESSION_EXPIRED',
+        'SciForge Cloud did not provide an active Desktop login session.'
+      )
+    }
+    return this.accessToken
+  }
+
   subscribe(listener: DesktopIdentityStatusListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

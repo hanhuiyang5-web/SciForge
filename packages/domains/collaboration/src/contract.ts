@@ -8,7 +8,6 @@ const displayTextSchema = z.string().trim().min(1).max(256)
 
 export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   statusRead: 'collaboration.status.read',
-  connectionConfigure: 'collaboration.connection.configure',
   connectionConnect: 'collaboration.connection.connect',
   endpointChallengeStart: 'collaboration.endpoint.challenge.start',
   endpointChallengePoll: 'collaboration.endpoint.challenge.poll',
@@ -18,6 +17,8 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   projectionUpdate: 'collaboration.projection.update',
   projectionShare: 'collaboration.projection.share',
   synchronizationRetry: 'collaboration.sync.retry',
+  projectCreate: 'collaboration.project.create',
+  taskCreate: 'collaboration.task.create',
   taskList: 'collaboration.task.list',
   managedContainerInspect: 'collaboration.managed-container.inspect',
   managedContainerProvision: 'collaboration.managed-container.provision',
@@ -132,9 +133,16 @@ export const collaborationProjectionViewSchema = z.object({
 export const collaborationTaskViewSchema = z.object({
   taskId: idSchema,
   projectId: idSchema,
+  executionId: idSchema,
   assigneeAgentId: idSchema,
+  assigneeUserId: idSchema,
   revision: z.number().int().positive(),
   title: displayTextSchema,
+  objective: safeTextSchema,
+  completionCriteria: z.array(z.object({
+    criterionId: idSchema,
+    text: z.string().trim().min(1).max(2_000)
+  }).strict()).min(1).max(100),
   state: z.enum([
     'offered',
     'accepted',
@@ -145,6 +153,14 @@ export const collaborationTaskViewSchema = z.object({
     'cancelled',
     'stale'
   ]),
+  progress: z.object({
+    percent: z.number().int().min(0).max(100),
+    summary: z.string().trim().min(1).max(2_000),
+    reportedAt: isoDateSchema
+  }).strict().optional(),
+  resultSummary: safeTextSchema.optional(),
+  resultProjectRecordId: idSchema.optional(),
+  safeFailureSummary: z.string().trim().min(1).max(2_000).optional(),
   localTurnId: idSchema.optional(),
   updatedAt: isoDateSchema,
   error: safeTextSchema.optional()
@@ -152,7 +168,9 @@ export const collaborationTaskViewSchema = z.object({
 
 export const collaborationProjectViewSchema = z.object({
   projectId: idSchema,
+  ownerUserId: idSchema,
   name: displayTextSchema,
+  goal: safeTextSchema,
   state: z.enum(['active', 'paused', 'completed', 'cancelled']),
   revision: z.number().int().nonnegative(),
   coordinatorAgentId: idSchema,
@@ -182,15 +200,6 @@ export const collaborationStatusSnapshotSchema = z.object({
 
 export const collaborationStatusReadInputSchema = z.object({}).strict()
 export const collaborationStatusReadResultSchema = collaborationStatusSnapshotSchema
-
-export const collaborationConnectionConfigureInputSchema = z.object({
-  baseUrl: z.url().max(2_048).refine((value) => new URL(value).protocol === 'https:', {
-    message: 'Collaboration service URL must use HTTPS.'
-  })
-}).strict()
-export const collaborationConnectionConfigureResultSchema = z.object({
-  connection: collaborationConnectionViewSchema
-}).strict()
 
 export const collaborationConnectionConnectInputSchema = z.object({
   action: z.enum(['connect', 'disconnect', 'recover'])
@@ -329,6 +338,40 @@ export const collaborationSynchronizationRetryResultSchema = z.object({
   connection: collaborationConnectionViewSchema
 }).strict()
 
+/**
+ * Phase-one owner-direct Project creation deliberately fixes the cloud budget
+ * in the main process. The renderer supplies only human intent and exact
+ * membership/Coordinator identities.
+ */
+export const collaborationProjectCreateInputSchema = z.object({
+  displayName: displayTextSchema,
+  goal: z.string().trim().min(1).max(4_000),
+  memberUserIds: z.array(idSchema).min(1).max(1_000).refine(
+    (values) => new Set(values).size === values.length,
+    { message: 'Project members must not contain duplicates.' }
+  ),
+  coordinatorAgentId: idSchema
+}).strict()
+export const collaborationProjectCreateResultSchema = z.object({
+  project: collaborationProjectViewSchema
+}).strict()
+
+/**
+ * Phase one is a metadata-only text Task. ResourceRefs and authorization
+ * requirements are intentionally absent from this public input, so the main
+ * process can only emit empty arrays for both fields.
+ */
+export const collaborationTaskCreateInputSchema = z.object({
+  projectId: idSchema,
+  assigneeAgentId: idSchema,
+  title: displayTextSchema,
+  objective: z.string().trim().min(1).max(4_000),
+  completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100)
+}).strict()
+export const collaborationTaskCreateResultSchema = z.object({
+  task: collaborationTaskViewSchema
+}).strict()
+
 export const collaborationTaskListInputSchema = z.object({
   projectId: idSchema.optional(),
   states: z.array(collaborationTaskViewSchema.shape.state).max(32).optional()
@@ -378,8 +421,8 @@ export type CollaborationStatusSnapshot = z.infer<typeof collaborationStatusSnap
 export type CollaborationProjectionView = z.infer<typeof collaborationProjectionViewSchema>
 export type CollaborationProjectionQueueItemView = z.infer<typeof collaborationProjectionQueueItemViewSchema>
 export type CollaborationTaskView = z.infer<typeof collaborationTaskViewSchema>
+export type CollaborationProjectView = z.infer<typeof collaborationProjectViewSchema>
 export type CollaborationProviderOption = z.infer<typeof collaborationProviderOptionSchema>
-export type CollaborationConnectionConfigureInput = z.infer<typeof collaborationConnectionConfigureInputSchema>
 export type CollaborationConnectionConnectInput = z.infer<typeof collaborationConnectionConnectInputSchema>
 export type CollaborationEndpointChallengeStartInput = z.infer<typeof collaborationEndpointChallengeStartInputSchema>
 export type CollaborationEndpointChallengePollInput = z.infer<typeof collaborationEndpointChallengePollInputSchema>
@@ -389,5 +432,7 @@ export type CollaborationProjectionLinkInput = z.infer<typeof collaborationProje
 export type CollaborationProjectionUpdateInput = z.infer<typeof collaborationProjectionUpdateInputSchema>
 export type CollaborationProjectionShareInput = z.infer<typeof collaborationProjectionShareInputSchema>
 export type CollaborationSynchronizationRetryInput = z.infer<typeof collaborationSynchronizationRetryInputSchema>
+export type CollaborationProjectCreateInput = z.infer<typeof collaborationProjectCreateInputSchema>
+export type CollaborationTaskCreateInput = z.infer<typeof collaborationTaskCreateInputSchema>
 export type CollaborationTaskListInput = z.infer<typeof collaborationTaskListInputSchema>
 export type CollaborationManagedContainerManageInput = z.infer<typeof collaborationManagedContainerManageInputSchema>

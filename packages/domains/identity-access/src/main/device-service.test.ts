@@ -24,7 +24,7 @@ function signedInStatus(
   userId: string,
   oidcIdentityId: string,
   subject = 'keycloak-user-001'
-): DesktopIdentityStatus {
+): Extract<DesktopIdentityStatus, { state: 'signed-in' }> {
   return {
     state: 'signed-in',
     user: {
@@ -164,6 +164,45 @@ describe('DesktopDeviceService', () => {
       cloudInstallationId('sciforge-local-installation')
     )
     expect(cloudInstallationId('sciforge-local-installation')).toMatch(/^ins_[a-f0-9]{32}$/u)
+  })
+
+  it('keeps confirmed ACTIVE authority during same-principal token refresh but exposes a confirmed missing Device', async () => {
+    const identity = identityHarness(
+      signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      'access-token-one'
+    )
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce({ devices: [cloudDevice('active')] })
+      .mockResolvedValueOnce({ devices: [cloudDevice('active')] })
+      .mockResolvedValueOnce({ devices: [] })
+    const service = new DesktopDeviceService({
+      identity: identity.identity,
+      client: clientStub({ listDevices }),
+      installationSeed: 'sciforge-local-installation',
+      secrets: memorySecrets(),
+      appVersion: '0.2.17'
+    })
+    await expect(service.ensureRegistered()).resolves.toMatchObject({
+      ok: true,
+      status: { state: 'active' }
+    })
+    const states: string[] = []
+    service.subscribe((status) => states.push(status.state))
+
+    identity.setStatus({
+      ...signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
+      accessTokenExpiresAt: '2027-08-19T00:10:00.000Z'
+    }, 'access-token-two')
+    await vi.waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(service.getStatus().state).toBe('active'))
+
+    expect(states).toEqual(['active'])
+    await expect(service.refresh()).resolves.toMatchObject({
+      ok: true,
+      status: { state: 'not-enrolled' }
+    })
+    expect(states).toEqual(['active', 'not-enrolled'])
+    service.close()
   })
 
   it.each(['enrollment', 'refresh'] as const)(

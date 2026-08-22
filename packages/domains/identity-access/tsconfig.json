@@ -11,7 +11,15 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "types": ["node"],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@sciforge/collaboration-contracts": ["../../collaboration-contracts/src/index.ts"],
+      "@sciforge/collaboration-contracts/testing": ["../../collaboration-contracts/src/testing.ts"],
+      "@sciforge/collaboration-identity": ["../../collaboration-identity/src/index.ts"],
+      "@sciforge/collaboration-identity/testing": ["../../collaboration-identity/src/testing.ts"],
+      "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

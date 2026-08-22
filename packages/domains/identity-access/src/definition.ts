@@ -23,6 +23,15 @@ export const IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
+export const IDENTITY_CLOUD_SESSION_SERVICE_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'identity-access.cloud-session-service'
+)
+export const IDENTITY_CLOUD_SESSION_SERVICE_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    IDENTITY_CLOUD_SESSION_SERVICE_CONTRIBUTION.id
+  ]!
 export const IDENTITY_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'
@@ -52,10 +61,10 @@ export const IDENTITY_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer.i18n-resource'
 )
 
-function contributionFor(process: 'main' | 'renderer', kind: string) {
+function contributionFor(process: 'main' | 'renderer', kind: string, id?: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)
-    ?.contributions.find((candidate) => candidate.kind === kind)
+    ?.contributions.find((candidate) => candidate.kind === kind && (!id || candidate.id === id))
   if (!contribution) {
     throw new Error(`Identity manifest is missing ${process}:${kind}.`)
   }

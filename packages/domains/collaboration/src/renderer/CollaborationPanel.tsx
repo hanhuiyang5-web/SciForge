@@ -1,4 +1,4 @@
-import React, { type FormEvent, type ReactElement, type ReactNode } from 'react'
+import React, { type ReactElement, type ReactNode } from 'react'
 import {
   useCallback,
   useEffect,
@@ -33,10 +33,12 @@ import { useTranslation } from 'react-i18next'
 import type {
   CollaborationAgentRegisterInput,
   CollaborationEndpointChallengeStartInput,
+  CollaborationProjectCreateInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionQueueItemView,
   CollaborationProjectionView,
   CollaborationStatusSnapshot,
+  CollaborationTaskCreateInput,
   CollaborationTaskView
 } from '../contract.js'
 import type { CollaborationRendererClient } from './collaboration-capability-client.js'
@@ -266,6 +268,13 @@ export async function writePairingCommandToClipboard(
   }
 }
 
+export async function writeCollaborationIdentityToClipboard(
+  identity: string,
+  clipboard: ClipboardWriter | undefined = globalThis.navigator?.clipboard
+): Promise<Exclude<PairingCopyState, 'idle'>> {
+  return writePairingCommandToClipboard(identity, clipboard)
+}
+
 const MINIMUM_PAIRING_POLL_MILLISECONDS = 3_000
 const PAIRING_ERROR_RETRY_MILLISECONDS = 4_000
 
@@ -307,7 +316,6 @@ export function CollaborationPanel({
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
-  const [baseUrl, setBaseUrl] = useState('')
   const [selectedProviderKey, setSelectedProviderKey] = useState('')
   const [locator, setLocator] = useState<Record<string, string>>({})
   const [participantDisplayName, setParticipantDisplayName] = useState('')
@@ -327,7 +335,6 @@ export function CollaborationPanel({
     try {
       const next = await client.readStatus()
       setSnapshot(next)
-      setBaseUrl((current) => current || next.connection.baseUrl || '')
       setSelectedProviderKey((current) => current || next.providerOptions[0]?.providerKey || '')
       setActionError(null)
     } catch (error) {
@@ -340,6 +347,13 @@ export function CollaborationPanel({
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void client.readStatus().then(setSnapshot).catch(() => undefined)
+    }, 5_000)
+    return () => clearInterval(interval)
+  }, [client])
 
   useEffect(() => () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
@@ -646,15 +660,7 @@ export function CollaborationPanel({
           <>
             <CloudConnectionSection
               connection={snapshot.connection}
-              baseUrl={baseUrl}
               busyKey={busyKey}
-              onBaseUrlChange={setBaseUrl}
-              onConfigure={(event) => {
-                event.preventDefault()
-                void runAction('connection-configure', () =>
-                  client.configureConnection({ baseUrl: baseUrl.trim() })
-                )
-              }}
               onConnectionAction={(action) => {
                 void runAction(`connection-${action}`, () =>
                   client.changeConnection({ action })
@@ -905,7 +911,20 @@ export function CollaborationPanel({
               ) : null}
             </section>
 
-            <ProjectsSection projects={snapshot.projects} participant={participant} />
+            <ProjectsSection
+              projects={snapshot.projects}
+              participant={participant}
+              localAgentId={snapshot.connection.localAgentId}
+              busy={busyKey !== null}
+              onCreateProject={(input) => void runAction(
+                'project-create',
+                () => client.createProject(input)
+              )}
+              onCreateTask={(input) => void runAction(
+                'task-create',
+                () => client.createTask(input)
+              )}
+            />
 
             <RecoverySection
               queue={snapshot.queue}
@@ -1222,19 +1241,13 @@ export function ProjectionGroup({
 
 type CloudConnectionSectionProps = Readonly<{
   connection: CollaborationStatusSnapshot['connection']
-  baseUrl: string
   busyKey: string | null
-  onBaseUrlChange: (value: string) => void
-  onConfigure: (event: FormEvent<HTMLFormElement>) => void
   onConnectionAction: (action: 'connect' | 'disconnect' | 'recover') => void
 }>
 
 export function CloudConnectionSection({
   connection,
-  baseUrl,
   busyKey,
-  onBaseUrlChange,
-  onConfigure,
   onConnectionAction
 }: CloudConnectionSectionProps): ReactElement {
   const { t } = useTranslation('common')
@@ -1248,26 +1261,14 @@ export function CloudConnectionSection({
         {t('collaborationCloud')}
         <StatusPill status={connection.state} />
       </SectionTitle>
-      <form className="space-y-2" onSubmit={onConfigure}>
-        <label className="block text-xs text-ds-muted">
-          <span className="mb-1 block">{t('collaborationCloudAddress')}</span>
-          <input
-            className={INPUT}
-            type="url"
-            required
-            value={baseUrl}
-            placeholder={t('collaborationCloudAddressPlaceholder')}
-            onChange={(event) => onBaseUrlChange(event.currentTarget.value)}
-          />
-        </label>
+      <div className="space-y-2">
+        <div className="rounded-md bg-ds-hover p-2 text-xs">
+          <div className="text-ds-muted">{t('collaborationCloudAddress')}</div>
+          <code className="break-all text-[10px] text-ds-ink">
+            {connection.baseUrl || t('collaborationCloudIdentityRequired')}
+          </code>
+        </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="submit"
-            className={PRIMARY_BUTTON}
-            disabled={!baseUrl.trim() || busyKey !== null}
-          >
-            {t('collaborationConfigure')}
-          </button>
           {connected ? (
             <button
               type="button"
@@ -1299,7 +1300,7 @@ export function CloudConnectionSection({
             {t('collaborationReconnect')}
           </button>
         </div>
-      </form>
+      </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-ds-muted">
         <span>Inbox #{connection.lastInboxSequence}</span>
         <span>Outbox {connection.pendingOutboxCount}</span>
@@ -1366,7 +1367,10 @@ export function ParticipantSection({
       {participant ? (
         <div className="mb-3">
           <div className="font-medium">{participant.displayName}</div>
-          <code className="text-[10px] text-ds-faint">{participant.userId}</code>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 break-all text-[10px] text-ds-faint">{participant.userId}</code>
+            <IdentityCopyButton value={participant.userId} />
+          </div>
         </div>
       ) : null}
 
@@ -1565,7 +1569,10 @@ function AgentRow({ agent, busy, onSelectPrimary }: Readonly<{
         <span className="min-w-0 flex-1 truncate font-medium">{agent.displayName}</span>
         <StatusPill status={agent.status} />
       </div>
-      <code className="mt-1 block text-[10px] text-ds-faint">{agent.agentId}</code>
+      <div className="mt-1 flex items-center gap-2">
+        <code className="min-w-0 flex-1 break-all text-[10px] text-ds-faint">{agent.agentId}</code>
+        <IdentityCopyButton value={agent.agentId} />
+      </div>
       {agent.primary ? (
         <div className="mt-1 flex items-center gap-1 text-ds-muted">
           <ShieldCheck className="h-3.5 w-3.5" />
@@ -1582,6 +1589,22 @@ function AgentRow({ agent, busy, onSelectPrimary }: Readonly<{
         </button>
       ) : null}
     </div>
+  )
+}
+
+function IdentityCopyButton({ value }: Readonly<{ value: string }>): ReactElement {
+  const { t } = useTranslation('common')
+  const [state, setState] = useState<PairingCopyState>('idle')
+  useEffect(() => setState('idle'), [value])
+  return (
+    <button
+      type="button"
+      className={SECONDARY_BUTTON}
+      data-collaboration-copy-identity="true"
+      onClick={() => void writeCollaborationIdentityToClipboard(value).then(setState)}
+    >
+      {state === 'copied' ? t('collaborationCopied') : t('collaborationCopyIdentity')}
+    </button>
   )
 }
 
@@ -1915,16 +1938,126 @@ export function InlineConfirmationEditor({
   )
 }
 
-export function ProjectsSection({ projects, participant }: Readonly<{
+export function parseCollaborationIdentityList(value: string): string[] {
+  return [...new Set(value.split(/[\s,;]+/u).map((item) => item.trim()).filter(Boolean))]
+}
+
+export function ProjectsSection({
+  projects,
+  participant,
+  localAgentId,
+  busy,
+  onCreateProject,
+  onCreateTask
+}: Readonly<{
   projects: readonly ProjectView[]
   participant?: ParticipantView
+  localAgentId?: string
+  busy: boolean
+  onCreateProject: (input: CollaborationProjectCreateInput) => void
+  onCreateTask: (input: CollaborationTaskCreateInput) => void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const [projectName, setProjectName] = useState('')
+  const [projectGoal, setProjectGoal] = useState('')
+  const [memberUserIds, setMemberUserIds] = useState('')
+  const [coordinatorAgentId, setCoordinatorAgentId] = useState(localAgentId ?? '')
+  const [projectId, setProjectId] = useState('')
+  const [assigneeAgentId, setAssigneeAgentId] = useState('')
+  const [taskTitle, setTaskTitle] = useState('')
+  const [taskObjective, setTaskObjective] = useState('')
+  const [completionCriteria, setCompletionCriteria] = useState('')
+  useEffect(() => {
+    if (localAgentId) setCoordinatorAgentId((current) => current || localAgentId)
+  }, [localAgentId])
+  useEffect(() => {
+    const active = projects.find((project) => project.state === 'active')
+    if (active) setProjectId((current) => current || active.projectId)
+  }, [projects])
+
+  const submitProject = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    const members = parseCollaborationIdentityList(memberUserIds)
+    if (participant?.userId && !members.includes(participant.userId)) members.unshift(participant.userId)
+    onCreateProject({
+      displayName: projectName.trim(),
+      goal: projectGoal.trim(),
+      memberUserIds: members,
+      coordinatorAgentId
+    })
+  }
+  const submitTask = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    onCreateTask({
+      projectId,
+      assigneeAgentId: assigneeAgentId.trim(),
+      title: taskTitle.trim(),
+      objective: taskObjective.trim(),
+      completionCriteria: completionCriteria.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean)
+    })
+  }
   return (
     <section className={PANEL_SECTION} data-collaboration-section="projects">
       <SectionTitle icon={<Server className="h-4 w-4" />}>
         {t('collaborationProjects')}
       </SectionTitle>
+      <div className="mb-3 grid gap-3 xl:grid-cols-2">
+        <form className="space-y-2 rounded-md border border-ds-border p-2.5" onSubmit={submitProject}>
+          <div className="text-xs font-semibold">{t('collaborationCreateProject')}</div>
+          <input className={INPUT} required maxLength={200} value={projectName}
+            placeholder={t('collaborationProjectName')}
+            onChange={(event) => setProjectName(event.currentTarget.value)} />
+          <textarea className={INPUT} required maxLength={20_000} rows={3} value={projectGoal}
+            placeholder={t('collaborationProjectGoal')}
+            onChange={(event) => setProjectGoal(event.currentTarget.value)} />
+          <textarea className={INPUT} required rows={2} value={memberUserIds}
+            placeholder={t('collaborationMemberUserIds')}
+            onChange={(event) => setMemberUserIds(event.currentTarget.value)} />
+          <select className={INPUT} required value={coordinatorAgentId}
+            onChange={(event) => setCoordinatorAgentId(event.currentTarget.value)}>
+            <option value="" disabled>{t('collaborationCoordinator')}</option>
+            {participant?.agents.filter((agent) => (
+              agent.agentId === localAgentId && agent.status !== 'revoked'
+            )).map((agent) => (
+              <option key={agent.agentId} value={agent.agentId}>{agent.displayName} · {agent.agentId}</option>
+            ))}
+          </select>
+          <button type="submit" className={PRIMARY_BUTTON}
+            disabled={busy || !participant || !projectName.trim() || !projectGoal.trim() || !coordinatorAgentId || parseCollaborationIdentityList(memberUserIds).length === 0}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('collaborationCreateProject')}
+          </button>
+        </form>
+
+        <form className="space-y-2 rounded-md border border-ds-border p-2.5" onSubmit={submitTask}>
+          <div className="text-xs font-semibold">{t('collaborationCreateTask')}</div>
+          <select className={INPUT} required value={projectId}
+            onChange={(event) => setProjectId(event.currentTarget.value)}>
+            <option value="" disabled>{t('collaborationSelectProject')}</option>
+            {projects.filter((project) => project.state === 'active').map((project) => (
+              <option key={project.projectId} value={project.projectId}>{project.name}</option>
+            ))}
+          </select>
+          <input className={INPUT} required value={assigneeAgentId}
+            placeholder={t('collaborationWorkerAgentId')}
+            onChange={(event) => setAssigneeAgentId(event.currentTarget.value)} />
+          <input className={INPUT} required maxLength={200} value={taskTitle}
+            placeholder={t('collaborationTaskTitle')}
+            onChange={(event) => setTaskTitle(event.currentTarget.value)} />
+          <textarea className={INPUT} required maxLength={32_000} rows={3} value={taskObjective}
+            placeholder={t('collaborationTaskObjective')}
+            onChange={(event) => setTaskObjective(event.currentTarget.value)} />
+          <textarea className={INPUT} required rows={3} value={completionCriteria}
+            placeholder={t('collaborationCompletionCriteria')}
+            onChange={(event) => setCompletionCriteria(event.currentTarget.value)} />
+          <p className="text-[10px] text-ds-muted">{t('collaborationPhaseOneTaskNotice')}</p>
+          <button type="submit" className={PRIMARY_BUTTON}
+            disabled={busy || !projectId || !assigneeAgentId.trim() || !taskTitle.trim() || !taskObjective.trim() || completionCriteria.split(/\r?\n/u).every((item) => !item.trim())}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('collaborationCreateTask')}
+          </button>
+        </form>
+      </div>
       {projects.length ? (
         <div className="space-y-2">
           {projects.map((project) => (
@@ -1938,6 +2071,7 @@ export function ProjectsSection({ projects, participant }: Readonly<{
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-semibold">{project.name}</div>
                   <code className="text-[10px] text-ds-faint">{project.projectId}</code>
+                  <p className="mt-1 text-ds-muted">{project.goal}</p>
                 </div>
                 <StatusPill status={project.state} />
               </div>
@@ -1987,6 +2121,21 @@ function TaskRow({ task, participant }: Readonly<{
       <div className="mt-1 text-ds-muted">
         {t('collaborationAssignee')}: {agent?.displayName || task.assigneeAgentId} · Revision {task.revision}
       </div>
+      <p className="mt-1 whitespace-pre-wrap text-ds-muted">{task.objective}</p>
+      {task.progress ? (
+        <div className="mt-2 rounded border border-ds-border p-2" data-task-progress={task.progress.percent}>
+          <div className="font-medium">{task.progress.percent}%</div>
+          <div className="whitespace-pre-wrap text-ds-muted">{task.progress.summary}</div>
+        </div>
+      ) : null}
+      {task.resultSummary ? (
+        <div className="mt-2 rounded border border-ds-border p-2" data-task-result="true">
+          <div className="font-medium">{t('collaborationTaskResult')}</div>
+          <div className="whitespace-pre-wrap text-ds-ink">{task.resultSummary}</div>
+          {task.resultProjectRecordId ? <code className="text-[10px] text-ds-faint">{task.resultProjectRecordId}</code> : null}
+        </div>
+      ) : null}
+      {task.safeFailureSummary ? <ExplicitError message={task.safeFailureSummary} compact /> : null}
       {task.error ? <ExplicitError message={task.error} compact /> : null}
     </div>
   )

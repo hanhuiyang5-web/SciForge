@@ -1,0 +1,4 @@
+export const A_CONTRACT_COMMIT =
+  '9507390cb65d9be27522bb02d7ae2e4cf0993c7b' as const
+export const A_CONTRACT_TGZ_SHA256 =
+  '1400f659eb3ad88624b716ebe7f484619c06240133b065df079c68d7d06eb8f0' as const

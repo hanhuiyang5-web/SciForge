@@ -5,8 +5,6 @@ import {
   COLLABORATION_CAPABILITY_IDS,
   collaborationAgentRegisterInputSchema,
   collaborationAgentRegisterResultSchema,
-  collaborationConnectionConfigureInputSchema,
-  collaborationConnectionConfigureResultSchema,
   collaborationConnectionConnectInputSchema,
   collaborationConnectionConnectResultSchema,
   collaborationEndpointChallengePollInputSchema,
@@ -25,14 +23,17 @@ import {
   collaborationProjectionShareResultSchema,
   collaborationProjectionUpdateInputSchema,
   collaborationProjectionUpdateResultSchema,
+  collaborationProjectCreateInputSchema,
+  collaborationProjectCreateResultSchema,
   collaborationStatusReadInputSchema,
   collaborationStatusReadResultSchema,
   collaborationSynchronizationRetryInputSchema,
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskCreateInputSchema,
+  collaborationTaskCreateResultSchema,
   type CollaborationAgentRegisterInput,
-  type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
@@ -41,13 +42,14 @@ import {
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
+  type CollaborationProjectCreateInput,
   type CollaborationStatusSnapshot,
   type CollaborationSynchronizationRetryInput,
+  type CollaborationTaskCreateInput,
   type CollaborationTaskListInput
 } from '../contract.js'
 
 type AgentRegisterResult = z.infer<typeof collaborationAgentRegisterResultSchema>
-type ConnectionConfigureResult = z.infer<typeof collaborationConnectionConfigureResultSchema>
 type ConnectionConnectResult = z.infer<typeof collaborationConnectionConnectResultSchema>
 type EndpointChallengeStartResult = z.infer<typeof collaborationEndpointChallengeStartResultSchema>
 type EndpointChallengePollResult = z.infer<typeof collaborationEndpointChallengePollResultSchema>
@@ -57,6 +59,8 @@ type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResult
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type ProjectCreateResult = z.infer<typeof collaborationProjectCreateResultSchema>
+type TaskCreateResult = z.infer<typeof collaborationTaskCreateResultSchema>
 type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
 const contracts = Object.freeze({
@@ -65,12 +69,6 @@ const contracts = Object.freeze({
     effect: 'read' as const,
     inputSchema: collaborationStatusReadInputSchema,
     outputSchema: collaborationStatusReadResultSchema
-  }),
-  connectionConfigure: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.connectionConfigure,
-    effect: 'external-write' as const,
-    inputSchema: collaborationConnectionConfigureInputSchema,
-    outputSchema: collaborationConnectionConfigureResultSchema
   }),
   connectionConnect: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.connectionConnect,
@@ -132,6 +130,18 @@ const contracts = Object.freeze({
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
   }),
+  projectCreate: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.projectCreate,
+    effect: 'external-write' as const,
+    inputSchema: collaborationProjectCreateInputSchema,
+    outputSchema: collaborationProjectCreateResultSchema
+  }),
+  taskCreate: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskCreate,
+    effect: 'external-write' as const,
+    inputSchema: collaborationTaskCreateInputSchema,
+    outputSchema: collaborationTaskCreateResultSchema
+  }),
   managedContainerInspect: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
     effect: 'read' as const,
@@ -156,7 +166,6 @@ const CONFIRMED = Object.freeze({ approval: Object.freeze({ mode: 'confirmation'
 
 export type CollaborationRendererClient = Readonly<{
   readStatus(): Promise<CollaborationStatusSnapshot>
-  configureConnection(input: CollaborationConnectionConfigureInput): Promise<ConnectionConfigureResult>
   changeConnection(input: CollaborationConnectionConnectInput): Promise<ConnectionConnectResult>
   startEndpointChallenge(input: CollaborationEndpointChallengeStartInput): Promise<EndpointChallengeStartResult>
   pollEndpointChallenge(input: CollaborationEndpointChallengePollInput): Promise<EndpointChallengePollResult>
@@ -167,6 +176,8 @@ export type CollaborationRendererClient = Readonly<{
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  createProject(input: CollaborationProjectCreateInput): Promise<ProjectCreateResult>
+  createTask(input: CollaborationTaskCreateInput): Promise<TaskCreateResult>
   manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
 
@@ -175,11 +186,6 @@ export function createCollaborationRendererClient(
 ): CollaborationRendererClient {
   return Object.freeze({
     readStatus: () => invoker.invoke(contracts.statusRead, {}),
-    configureConnection: (input) => invoker.invoke(
-      contracts.connectionConfigure,
-      input,
-      CONFIRMED
-    ),
     changeConnection: (input) => invoker.invoke(
       contracts.connectionConnect,
       input,
@@ -209,6 +215,8 @@ export function createCollaborationRendererClient(
       CONFIRMED
     ),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    createProject: (input) => invoker.invoke(contracts.projectCreate, input, CONFIRMED),
+    createTask: (input) => invoker.invoke(contracts.taskCreate, input, CONFIRMED),
     manageContainer: (input) => {
       if (input.action === 'refresh-status' || input.action === 'refresh-locators') {
         return invoker.invoke(contracts.managedContainerInspect, input)

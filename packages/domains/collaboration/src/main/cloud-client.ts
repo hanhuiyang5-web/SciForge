@@ -2,10 +2,22 @@ import { once } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import {
+  deviceCreateRequestSchema,
+  deviceEnrollmentCreateRequestSchema,
+  deviceEnrollmentCreateResponseSchema,
+  deviceListResponseSchema,
+  deviceResponseSchema,
+  meResponseSchema,
   restRequestSchema,
   restResponseSchema,
   webSocketMessageSchema,
+  type DeviceCreateRequest,
+  type DeviceEnrollmentCreateRequest,
+  type DeviceEnrollmentCreateResponse,
+  type DeviceListResponse,
+  type DeviceResponse,
   type InboxMessage,
+  type MeResponse,
   type RestRequest,
   type RestResponse,
   type WebSocketMessage
@@ -23,6 +35,13 @@ export type CloudInboxPage = Readonly<{
 }>
 
 export interface CollaborationCloudClient {
+  me(credential: CollaborationCredential): Promise<MeResponse>
+  createDeviceEnrollment(
+    request: DeviceEnrollmentCreateRequest,
+    credential: CollaborationCredential
+  ): Promise<DeviceEnrollmentCreateResponse>
+  createDevice(request: DeviceCreateRequest, credential: CollaborationCredential): Promise<DeviceResponse>
+  listDevices(credential: CollaborationCredential): Promise<DeviceListResponse>
   execute(request: RestRequest, credential?: CollaborationCredential): Promise<RestResponse>
   pullAgentInbox(input: Readonly<{
     afterSequence: number
@@ -54,6 +73,36 @@ export class HttpCollaborationCloudClient implements CollaborationCloudClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.webSocketFactory = options.webSocketFactory ?? ((url, headers) => new WebSocket(url, { headers }))
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000
+  }
+
+  async me(credential: CollaborationCredential): Promise<MeResponse> {
+    return meResponseSchema.parse(await this.request('v1/me', { method: 'GET', credential }))
+  }
+
+  async createDeviceEnrollment(
+    request: DeviceEnrollmentCreateRequest,
+    credential: CollaborationCredential
+  ): Promise<DeviceEnrollmentCreateResponse> {
+    const body = deviceEnrollmentCreateRequestSchema.parse(request)
+    return deviceEnrollmentCreateResponseSchema.parse(await this.request('v1/device-enrollments', {
+      method: 'POST', credential, body
+    }))
+  }
+
+  async createDevice(
+    request: DeviceCreateRequest,
+    credential: CollaborationCredential
+  ): Promise<DeviceResponse> {
+    const body = deviceCreateRequestSchema.parse(request)
+    return deviceResponseSchema.parse(await this.request('v1/devices', {
+      method: 'POST', credential, body
+    }))
+  }
+
+  async listDevices(credential: CollaborationCredential): Promise<DeviceListResponse> {
+    return deviceListResponseSchema.parse(await this.request('v1/me/devices', {
+      method: 'GET', credential
+    }))
   }
 
   async execute(
@@ -185,7 +234,11 @@ export class HttpCollaborationCloudClient implements CollaborationCloudClient {
       if (!response.ok) {
         const parsed = restResponseSchema.safeParse(value)
         if (parsed.success && parsed.data.type === 'rest.error') {
-          throw new CloudProtocolError(parsed.data.error.message, parsed.data.error.code)
+          throw new CloudProtocolError(
+            parsed.data.error.message,
+            parsed.data.error.code,
+            parsed.data.error.currentRevision
+          )
         }
         throw new CloudProtocolError(`Cloud request failed with HTTP ${response.status}.`)
       }
@@ -203,7 +256,11 @@ function idempotencyKey(value: unknown): string | undefined {
 }
 
 export class CloudProtocolError extends Error {
-  constructor(message: string, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly currentRevision?: number
+  ) {
     super(message)
     this.name = 'CloudProtocolError'
   }

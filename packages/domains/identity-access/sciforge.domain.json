@@ -17,6 +17,14 @@
     "priority": 900
   },
   "contributionContracts": {
+    "identity-access.cloud-session-service": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "identity.cloud-session",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration"
+      ]
+    },
     "identity-access.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "identity-access.open-account",
@@ -45,6 +53,12 @@
         {
           "id": "identity-access.runtime-lifecycle",
           "kind": "main.runtime-lifecycle",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.cloud-session-service",
+          "kind": "main.extension",
+          "version": "1.0.0",
           "priority": 900
         }
       ]

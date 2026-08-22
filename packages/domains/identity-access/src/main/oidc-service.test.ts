@@ -272,6 +272,17 @@ describe('DesktopIdentityService', () => {
     })
     expect(JSON.stringify(sessionStore.current())).not.toContain(service.getAccessToken()!)
 
+    const initialAccessToken = service.getAccessToken()
+    now += 250_000
+    const freshAccessToken = await service.getFreshAccessToken()
+    expect(freshAccessToken).not.toBe(initialAccessToken)
+    expect(freshAccessToken).toBe(service.getAccessToken())
+    expect(service.getStatus()).toMatchObject({
+      state: 'signed-in',
+      accessTokenExpiresAt: '2026-08-18T12:09:10.000Z'
+    })
+    expect(JSON.stringify(service.getStatus())).not.toContain(freshAccessToken)
+
     const logout = await service.logout()
     expect(logout).toEqual({ ok: true, status: { state: 'signed-out' } })
     expect(service.getAccessToken()).toBeNull()

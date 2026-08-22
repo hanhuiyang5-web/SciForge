@@ -1,7 +1,9 @@
 import type {
+  DomainMainInternalServiceDescriptor,
   DomainMainHost,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import {
   principalDeviceIdSchema,
   type DomainMainPrincipalProvider
@@ -27,14 +29,30 @@ import {
 import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
+  IDENTITY_CLOUD_SESSION_SERVICE_CONTRACT,
+  IDENTITY_CLOUD_SESSION_SERVICE_CONTRIBUTION,
   IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
   IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { IdentityService } from './service.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
+import {
+  IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS,
+  IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+  IDENTITY_CLOUD_SESSION_SERVICE_ID,
+  IdentityCloudSessionServiceOwner
+} from './cloud-session-service.js'
 
 export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
+export {
+  IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS,
+  IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+  IDENTITY_CLOUD_SESSION_SERVICE_ID,
+  type IdentityCloudSessionAccessLease,
+  type IdentityCloudSessionService,
+  type IdentityCloudSessionSnapshot
+} from './cloud-session-service.js'
 
 type IdentityCapabilityEffect = 'read' | 'external-write' | 'destructive'
 type IdentityCapabilityContext = Readonly<{
@@ -102,15 +120,30 @@ export type IdentityCapabilityFactory<CapabilityDefinition = unknown> = Readonly
 
 type IdentityMainContribution =
   | IdentityCapabilityFactory
+  | DomainMainInternalServiceDescriptor
   | DomainMainPrincipalProvider
   | DomainMainRuntimeLifecycleContribution
+
+const cloudSessionDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: IDENTITY_CLOUD_SESSION_SERVICE_ID,
+  contractVersion: IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+  allowedConsumerModuleIds: IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS
+})
 
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<IdentityMainContribution> {
-  if (!host.packageSecrets) {
-    throw new Error('Identity requires package-scoped secret storage.')
+  if (!host.packageSecrets || !host.internalServices) {
+    throw new Error('Identity requires package-scoped secret storage and Host internal-service mediation.')
   }
+  const cloudSessionOwner = new IdentityCloudSessionServiceOwner()
+  host.internalServices.register({
+    serviceId: IDENTITY_CLOUD_SESSION_SERVICE_ID,
+    contractVersion: IDENTITY_CLOUD_SESSION_CONTRACT_VERSION,
+    allowedConsumerModuleIds: IDENTITY_CLOUD_SESSION_ALLOWED_CONSUMERS,
+    service: cloudSessionOwner.service
+  })
   let service: IdentityService | undefined
   const getService = (): IdentityService => {
     service ??= new IdentityService(
@@ -134,7 +167,10 @@ export function createDomainMainEntry(
   const closeCloudRuntime = (runtime: CloudIdentityRuntime | null): void => {
     if (!runtime || closedCloudRuntimes.has(runtime)) return
     closedCloudRuntimes.add(runtime)
-    if (cloudRuntime === runtime) cloudRuntime = null
+    if (cloudRuntime === runtime) {
+      cloudSessionOwner.detach(runtime)
+      cloudRuntime = null
+    }
     runtime.close()
   }
   const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
@@ -155,6 +191,7 @@ export function createDomainMainEntry(
         })
         try {
           await runtime.initialize()
+          cloudSessionOwner.attach(runtime)
           return runtime
         } catch (error) {
           closeCloudRuntime(runtime)
@@ -214,6 +251,12 @@ export function createDomainMainEntry(
         ...IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
         value: lifecycle,
         onDispose: disposeCloud
+      },
+      {
+        ...IDENTITY_CLOUD_SESSION_SERVICE_CONTRIBUTION,
+        contract: IDENTITY_CLOUD_SESSION_SERVICE_CONTRACT,
+        value: cloudSessionDescriptor,
+        onDispose: () => cloudSessionOwner.close()
       }
     ]
   }

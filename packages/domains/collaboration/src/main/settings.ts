@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type {
   DomainMainPackageSettingsHost,
@@ -6,9 +5,13 @@ import type {
 } from '@sciforge/domain-sdk/package-storage'
 
 const collaborationSettingsSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(3),
   baseUrl: z.url().max(2_048).refine((value) => new URL(value).protocol === 'https:'),
-  installationId: z.string().regex(/^ins_[A-Za-z0-9]{12,64}$/)
+  deviceId: z.string().regex(/^dev_[A-Za-z0-9][A-Za-z0-9_]{10,62}[A-Za-z0-9]$/).optional(),
+  agentId: z.string().regex(/^agt_[A-Za-z0-9]{12,64}$/).optional(),
+  capabilityProfileRevision: z.number().int().positive().optional(),
+  capabilityProfileExpiresAt: z.iso.datetime({ offset: true }).optional(),
+  pendingCapabilityProfileReport: z.record(z.string(), z.json()).optional()
 }).strict()
 
 export type CollaborationSettings = z.infer<typeof collaborationSettingsSchema>
@@ -25,17 +28,77 @@ export class CollaborationSettingsService {
       revision: snapshot.revision,
       settings: snapshot.value === null
         ? null
-        : collaborationSettingsSchema.parse(snapshot.value)
+        : normalizeSettings(snapshot.value)
     }
   }
 
   async configure(baseUrl: string): Promise<CollaborationSettings> {
     const normalized = normalizeBaseUrl(baseUrl)
-    return this.writeCurrent((current) => ({
-      schemaVersion: 1,
-      baseUrl: normalized,
-      installationId: current?.installationId ?? installationId()
-    }))
+    return this.writeCurrent((current) => {
+      if (!current) return { schemaVersion: 3, baseUrl: normalized }
+      if (current.baseUrl === normalized) return current
+      return { schemaVersion: 3, baseUrl: normalized }
+    })
+  }
+
+  async bindDevice(deviceId: string): Promise<CollaborationSettings> {
+    return this.writeCurrent((current) => {
+      if (!current) throw new Error('Configure the collaboration service before binding a cloud Device.')
+      if (current.deviceId === deviceId) return current
+      const {
+        agentId: _agentId,
+        capabilityProfileRevision: _profileRevision,
+        capabilityProfileExpiresAt: _profileExpiresAt,
+        pendingCapabilityProfileReport: _pendingProfile,
+        ...rest
+      } = current
+      return { ...rest, schemaVersion: 3, deviceId }
+    })
+  }
+
+  async rememberAgent(agentId: string | undefined): Promise<CollaborationSettings> {
+    return this.writeCurrent((current) => {
+      if (!current) throw new Error('Configure the collaboration service before storing an Agent binding.')
+      if (current.agentId === agentId) return current
+      const {
+        agentId: _previous,
+        capabilityProfileRevision: _profileRevision,
+        capabilityProfileExpiresAt: _profileExpiresAt,
+        pendingCapabilityProfileReport: _pendingProfile,
+        ...rest
+      } = current
+      return { ...rest, schemaVersion: 3, ...(agentId ? { agentId } : {}) }
+    })
+  }
+
+  async releaseIdentity(): Promise<CollaborationSettings> {
+    return this.writeCurrent((current) => {
+      if (!current) throw new Error('Collaboration service is not configured.')
+      return { schemaVersion: 3, baseUrl: current.baseUrl }
+    })
+  }
+
+  async stageCapabilityProfileReport(request: unknown): Promise<CollaborationSettings> {
+    const pendingCapabilityProfileReport = z.record(z.string(), z.json()).parse(request)
+    return this.writeCurrent((current) => {
+      if (!current?.agentId) throw new Error('An Agent binding is required before reporting capabilities.')
+      return { ...current, pendingCapabilityProfileReport }
+    })
+  }
+
+  async completeCapabilityProfileReport(
+    revision: number,
+    expiresAt: string
+  ): Promise<CollaborationSettings> {
+    return this.writeCurrent((current) => {
+      if (!current?.agentId) throw new Error('An Agent binding is required before reporting capabilities.')
+      const { pendingCapabilityProfileReport: _pending, ...rest } = current
+      return {
+        ...rest,
+        capabilityProfileRevision: revision,
+        capabilityProfileExpiresAt: expiresAt
+      }
+    })
   }
 
   async require(): Promise<CollaborationSettings> {
@@ -51,7 +114,7 @@ export class CollaborationSettingsService {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const current = snapshot.value === null
         ? null
-        : collaborationSettingsSchema.parse(snapshot.value)
+        : normalizeSettings(snapshot.value)
       const next = collaborationSettingsSchema.parse(create(current))
       try {
         const written = await this.host.write(next, snapshot.revision)
@@ -65,8 +128,8 @@ export class CollaborationSettingsService {
   }
 }
 
-function installationId(): `ins_${string}` {
-  return `ins_${randomUUID().replaceAll('-', '')}`
+function normalizeSettings(value: unknown): CollaborationSettings {
+  return collaborationSettingsSchema.parse(value)
 }
 
 function normalizeBaseUrl(value: string): string {

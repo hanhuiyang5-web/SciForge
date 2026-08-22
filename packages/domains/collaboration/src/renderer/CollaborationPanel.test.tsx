@@ -21,6 +21,7 @@ import {
   ManagedChannelSection,
   PairingCopyFeedback,
   PairingStatus,
+  parseCollaborationIdentityList,
   ParticipantSection,
   ProjectionLocatorSelector,
   ProjectionCard,
@@ -34,6 +35,7 @@ import {
   projectionTopicDisplayName,
   projectionLocatorKey,
   reconcileProjectionLocatorSelection,
+  writeCollaborationIdentityToClipboard,
   writePairingCommandToClipboard
 } from './CollaborationPanel.js'
 
@@ -231,7 +233,7 @@ test('renders controlled first-binding inputs and builds typed commands without 
 })
 
 test('copies the complete pairing command only through the renderer Clipboard API', async () => {
-  const command = `/bind SF1.${'a'.repeat(32)}.Abc_123-xYz0`
+  const command = 'sciforge-pair challenge-opaque verification-opaque'
   const writes: string[] = []
   assert.equal(await writePairingCommandToClipboard(command, {
     writeText: async (value) => { writes.push(value) }
@@ -250,7 +252,7 @@ test('copies the complete pairing command only through the renderer Clipboard AP
     }} />
   )
   assert.match(pending, /data-collaboration-copy-pairing="true"/u)
-  assert.match(pending, /\/bind SF1\./u)
+  assert.match(pending, /sciforge-pair challenge-opaque verification-opaque/u)
   assert.match(pending, /collaborationCopyPairingInstruction/u)
   assert.match(pending, /collaborationPairingCopyHint/u)
 
@@ -259,6 +261,17 @@ test('copies the complete pairing command only through the renderer Clipboard AP
   assert.match(copied, /aria-live="polite"/u)
   const failed = renderToStaticMarkup(<PairingCopyFeedback state="failed" />)
   assert.match(failed, /role="alert"/u)
+})
+
+test('normalizes copied Worker identities and explicit multi-member input', async () => {
+  const writes: string[] = []
+  assert.deepEqual(parseCollaborationIdentityList('user-a, user-b\nuser-a ; user-c'), [
+    'user-a', 'user-b', 'user-c'
+  ])
+  assert.equal(await writeCollaborationIdentityToClipboard('agt_Worker0000001', {
+    writeText: async (value) => { writes.push(value) }
+  }), 'copied')
+  assert.deepEqual(writes, ['agt_Worker0000001'])
 })
 
 test('shows a compact personal Topic card with diagnostics folded and no sharing controls', () => {
@@ -661,7 +674,14 @@ test('keeps locator discovery inside the authenticated user managed container', 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
   const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
   const projects = renderToStaticMarkup(
-    <ProjectsSection projects={snapshot.projects} participant={snapshot.participant} />
+    <ProjectsSection
+      projects={snapshot.projects}
+      participant={snapshot.participant}
+      localAgentId={snapshot.connection.localAgentId}
+      busy={false}
+      onCreateProject={NOOP}
+      onCreateTask={NOOP}
+    />
   )
   assert.match(projects, /data-project-id="project-1"/u)
   assert.match(projects, /data-project-status="active"/u)
@@ -669,6 +689,23 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(projects, /data-task-id="task-1"/u)
   assert.match(projects, /data-task-status="needs-human"/u)
   assert.match(projects, /Server A/u)
+
+  const completedProjects = snapshot.projects.map((project) => ({
+    ...project,
+    tasks: project.tasks.map((task) => ({
+      ...task,
+      state: 'completed' as const,
+      resultSummary: 'Worker returned the completed analysis.',
+      resultProjectRecordId: 'record-1'
+    }))
+  }))
+  const completed = renderToStaticMarkup(
+    <ProjectsSection projects={completedProjects} participant={snapshot.participant}
+      localAgentId={snapshot.connection.localAgentId} busy={false}
+      onCreateProject={NOOP} onCreateTask={NOOP} />
+  )
+  assert.match(completed, /data-task-result="true"/u)
+  assert.match(completed, /Worker returned the completed analysis/u)
 
   const recovery = renderToStaticMarkup(
     <RecoverySection
@@ -897,7 +934,9 @@ function statusFixture() {
     projections: [],
     projects: [{
       projectId: 'project-1',
+      ownerUserId: 'user-a',
       name: 'Protein collaboration',
+      goal: 'Validate the candidate structure.',
       state: 'active' as const,
       revision: 5,
       coordinatorAgentId: 'agent-a',
@@ -905,9 +944,13 @@ function statusFixture() {
       tasks: [{
         taskId: 'task-1',
         projectId: 'project-1',
+        executionId: 'execution-1',
         assigneeAgentId: 'agent-b',
+        assigneeUserId: 'user-a',
         revision: 2,
         title: 'Validate structure',
+        objective: 'Validate the candidate structure and return a concise summary.',
+        completionCriteria: [{ criterionId: 'criterion-1', text: 'Summary returned.' }],
         state: 'needs-human' as const,
         updatedAt: '2026-08-15T04:01:00.000Z'
       }]
