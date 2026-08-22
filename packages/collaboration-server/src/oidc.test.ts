@@ -118,6 +118,78 @@ describe('OIDC RS256 access-token verifier', () => {
     })
   })
 
+  it('verifies an ID token against the confidential Portal client and one-time nonce', async () => {
+    const fixture = await openOidcFixture()
+    const verifier = verifierFor(fixture, {
+      allowedAuthorizedParties: ['sciforge-desktop', 'sciforge-web-mobile', 'sciforge-cloud-console']
+    })
+    const nonce = 'A'.repeat(43)
+    const token = fixture.mintToken({
+      now: NOW_SECONDS,
+      header: { typ: 'JWT' },
+      claims: {
+        aud: 'sciforge-cloud-console',
+        azp: 'sciforge-cloud-console',
+        nonce
+      }
+    })
+
+    await expect(verifier.verifyIdToken(token, {
+      clientId: 'sciforge-cloud-console',
+      nonce
+    })).resolves.toEqual({
+      issuer: fixture.issuer,
+      subject: 'oidc-sub-test-owner',
+      audience: ['sciforge-cloud-console'],
+      issuedAt: NOW_SECONDS,
+      notBefore: NOW_SECONDS - 1,
+      expiresAt: NOW_SECONDS + 300,
+      authTime: NOW_SECONDS,
+      nonce
+    })
+
+    await expectOidcCode(verifier.verifyIdToken(token, {
+      clientId: 'sciforge-cloud-console',
+      nonce: 'B'.repeat(43)
+    }), 'oidc_claim_invalid')
+    await expectOidcCode(verifier.verifyIdToken(fixture.mintToken({
+      now: NOW_SECONDS,
+      header: { typ: 'at+jwt' },
+      claims: { aud: 'sciforge-cloud-console', azp: 'sciforge-cloud-console', nonce }
+    }), { clientId: 'sciforge-cloud-console', nonce }), 'oidc_claim_invalid')
+    await expectOidcCode(verifier.verifyIdToken(fixture.mintToken({
+      now: NOW_SECONDS,
+      claims: { aud: ['sciforge-cloud-console', 'another-client'], azp: undefined, nonce }
+    }), { clientId: 'sciforge-cloud-console', nonce }), 'oidc_claim_invalid')
+  })
+
+  it('keeps public API and confidential Portal access-token authorized parties disjoint', async () => {
+    const fixture = await openOidcFixture()
+    const publicVerifier = verifierFor(fixture, {
+      allowedAuthorizedParties: ['sciforge-desktop', 'sciforge-web-mobile']
+    })
+    const portalVerifier = verifierFor(fixture, {
+      allowedAuthorizedParties: ['sciforge-cloud-console']
+    })
+    const portalToken = fixture.mintToken({
+      now: NOW_SECONDS,
+      claims: { azp: 'sciforge-cloud-console' }
+    })
+    const desktopToken = fixture.mintToken({
+      now: NOW_SECONDS,
+      claims: { azp: 'sciforge-desktop' }
+    })
+
+    await expect(portalVerifier.verifyAccessToken(portalToken)).resolves.toMatchObject({
+      authorizedParty: 'sciforge-cloud-console'
+    })
+    await expectOidcCode(publicVerifier.verifyAccessToken(portalToken), 'oidc_claim_invalid')
+    await expect(publicVerifier.verifyAccessToken(desktopToken)).resolves.toMatchObject({
+      authorizedParty: 'sciforge-desktop'
+    })
+    await expectOidcCode(portalVerifier.verifyAccessToken(desktopToken), 'oidc_claim_invalid')
+  })
+
   it('rejects exact issuer, audience, authorized-party, subject, and time claim violations', async () => {
     const fixture = await openOidcFixture()
     const verifier = verifierFor(fixture)

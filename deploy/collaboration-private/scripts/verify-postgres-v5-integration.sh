@@ -46,8 +46,8 @@ fi
 
 validate_release_bundle "$expected_commit"
 expected_schema_version="$(expected_collaboration_schema_version)"
-[[ "$expected_schema_version" == 8 ]] \
-  || die "The current PostgreSQL integration gate requires release schema v8 exactly."
+[[ "$expected_schema_version" == 9 ]] \
+  || die "The current PostgreSQL integration gate requires release schema v9 exactly."
 prepare_compose_environment "$expected_commit" "$env_input"
 "${COMPOSE[@]}" config --quiet
 
@@ -194,12 +194,12 @@ production_snapshot() {
 list_integration_databases() {
   "${COMPOSE[@]}" exec -T postgres \
     psql -U sciforge_admin -d postgres --tuples-only --no-align \
-    --command="SELECT datname FROM pg_database WHERE datname ~ '^sciforge_identity_v8_it_[0-9]+_[0-9a-f]{12}$' ORDER BY datname;"
+    --command="SELECT datname FROM pg_database WHERE datname ~ '^sciforge_identity_v9_it_[0-9]+_[0-9a-f]{12}$' ORDER BY datname;"
 }
 
 runner_script="$(canonical_regular_file "$SCRIPT_DIR/postgres-v5-integration.mjs")"
 runner_container_id=""
-runner_name="sciforge-postgres-v8-integration-${expected_commit:0:12}-$$"
+runner_name="sciforge-postgres-v9-integration-${expected_commit:0:12}-$$"
 password_file=""
 snapshot_password_file=""
 log_file=""
@@ -240,7 +240,7 @@ cleanup() {
         mapfile -t databases <<< "$database_output"
       fi
       for database in "${databases[@]}"; do
-        [[ "$database" =~ ^sciforge_identity_v8_it_[0-9]+_[0-9a-f]{12}$ ]] \
+        [[ "$database" =~ ^sciforge_identity_v9_it_[0-9]+_[0-9a-f]{12}$ ]] \
           || { cleanup_failed=true; continue; }
         "${COMPOSE[@]}" exec -T postgres \
           dropdb -U sciforge_admin --if-exists --force "$database" > /dev/null \
@@ -311,7 +311,7 @@ cleanup() {
   fi
 
   if [[ "$cleanup_failed" == true ]]; then
-    echo "ERROR: PostgreSQL schema v8 integration cleanup was incomplete; operator inspection is required." >&2
+    echo "ERROR: PostgreSQL schema v9 integration cleanup was incomplete; operator inspection is required." >&2
     exit_status=1
   fi
   exit "$exit_status"
@@ -325,7 +325,7 @@ if [[ -n "$preexisting_database_output" ]]; then
   mapfile -t preexisting_databases <<< "$preexisting_database_output"
 fi
 (( ${#preexisting_databases[@]} == 0 )) \
-  || die "A stale PostgreSQL schema v8 integration database already exists; inspect it before a new run."
+  || die "A stale PostgreSQL schema v9 integration database already exists; inspect it before a new run."
 cleanup_integration_databases=true
 
 app_state_before="$(app_runtime_state)"
@@ -359,27 +359,27 @@ production_snapshot_before="$production_snapshot_result"
 password_file="$(mktemp /run/sciforge-postgres-v5-admin.XXXXXXXXXXXX)"
 [[ "$password_file" =~ ^/run/sciforge-postgres-v5-admin\.[A-Za-z0-9]+$ \
     && -f "$password_file" && ! -L "$password_file" ]] \
-  || die "Could not create the constrained PostgreSQL schema v8 password file."
+  || die "Could not create the constrained PostgreSQL schema v9 password file."
 dotenv_value "$ENV_FILE" SCIFORGE_COLLAB_DB_ADMIN_PASSWORD > "$password_file"
 [[ "$(stat -c '%s' "$password_file")" == 64 ]] \
-  || die "The PostgreSQL schema v8 password file has an invalid size."
+  || die "The PostgreSQL schema v9 password file has an invalid size."
 grep -Eq '^[0-9A-Fa-f]{64}$' "$password_file" \
-  || die "The PostgreSQL schema v8 password file has an invalid value."
+  || die "The PostgreSQL schema v9 password file has an invalid value."
 chown root:10001 "$password_file"
 chmod 0440 "$password_file"
 [[ "$(stat -c '%u:%g:%a' "$password_file")" == 0:10001:440 ]] \
-  || die "The PostgreSQL schema v8 password file must be root:10001 mode 0440."
+  || die "The PostgreSQL schema v9 password file must be root:10001 mode 0440."
 
 log_file="$(mktemp /run/sciforge-postgres-v5-log.XXXXXXXXXXXX)"
 [[ "$log_file" =~ ^/run/sciforge-postgres-v5-log\.[A-Za-z0-9]+$ \
     && -f "$log_file" && ! -L "$log_file" ]] \
-  || die "Could not create the constrained PostgreSQL schema v8 log file."
+  || die "Could not create the constrained PostgreSQL schema v9 log file."
 chmod 0600 "$log_file"
 
 runner_container_id="$(docker create \
   --name "$runner_name" \
   --label "org.opencontainers.image.revision=$expected_commit" \
-  --label 'cn.sciforge.test.purpose=postgres-v8-integration' \
+  --label 'cn.sciforge.test.purpose=postgres-v9-integration' \
   --network "$database_network" \
   --user 10001:10001 \
   --read-only \
@@ -399,7 +399,7 @@ runner_container_id="$(docker create \
   --entrypoint node \
   "$approved_image_id" \
   /app/postgres-v5-integration.mjs)"
-[[ -n "$runner_container_id" ]] || die "Could not create the PostgreSQL schema v8 integration runner."
+[[ -n "$runner_container_id" ]] || die "Could not create the PostgreSQL schema v9 integration runner."
 
 runner_image_id="$(docker container inspect --format '{{.Image}}' "$runner_container_id")"
 runner_user="$(docker container inspect --format '{{.Config.User}}' "$runner_container_id")"
@@ -419,7 +419,7 @@ forbidden_runner_env_count="$(docker container inspect --format \
     && "$runner_secret_mount_rw" == false \
     && "$runner_script_mount_rw" == false \
     && "$forbidden_runner_env_count" == 0 ]] \
-  || die "The PostgreSQL schema v8 runner does not satisfy its fixed image, identity, network, mount, or secret boundary."
+  || die "The PostgreSQL schema v9 runner does not satisfy its fixed image, identity, network, mount, or secret boundary."
 
 docker start "$runner_container_id" > /dev/null
 set +e
@@ -429,26 +429,37 @@ wait_status=$?
 set -e
 if (( wait_status != 0 )); then
   docker stop -t 20 "$runner_container_id" > /dev/null 2>&1 || true
-  die "The PostgreSQL schema v8 integration runner timed out or could not be observed."
+  die "The PostgreSQL schema v9 integration runner timed out or could not be observed."
 fi
-[[ "$wait_output" =~ ^[0-9]+$ ]] || die "The PostgreSQL schema v8 runner returned an invalid exit status."
+[[ "$wait_output" =~ ^[0-9]+$ ]] || die "The PostgreSQL schema v9 runner returned an invalid exit status."
 runner_exit_code="$wait_output"
 docker logs "$runner_container_id" > "$log_file" 2>&1
 
 if grep -Fq -f "$password_file" "$log_file" \
     || grep -Eq 'postgres(ql)?://|SCIFORGE_POSTGRES_V5_ADMIN_URL|SCIFORGE_COLLAB_DB_ADMIN_PASSWORD|POSTGRES_PASSWORD|secretKey|connectionString|stack' "$log_file"; then
-  die "The PostgreSQL schema v8 runner log violated the secret redaction policy; its contents were suppressed."
+  die "The PostgreSQL schema v9 runner log violated the secret redaction policy; its contents were suppressed."
 fi
 cat "$log_file"
-[[ "$runner_exit_code" == 0 ]] || die "The PostgreSQL schema v8 integration runner failed."
-grep -Fq '"event":"postgres.v8.integration","status":"passed"' "$log_file" \
-  || die "The PostgreSQL schema v8 integration runner did not emit its pass receipt."
-for required_check in v1_to_v5_to_v8_readiness provider_identity_inbox_constraint \
+[[ "$runner_exit_code" == 0 ]] || die "The PostgreSQL schema v9 integration runner failed."
+grep -Fq '"event":"postgres.v9.integration","status":"passed"' "$log_file" \
+  || die "The PostgreSQL schema v9 integration runner did not emit its pass receipt."
+for required_check in v1_to_v5_to_v9_readiness portal_bounded_read_indexes portal_hard_caps \
+  provider_identity_inbox_constraint \
   portable_resource_reference_constraint managed_provider_container_schema \
-  legacy_agent_revocation concurrent_oidc_jit \
+  legacy_agent_revocation legacy_project_record_author_backfill \
+  legacy_project_record_author_transfer_ambiguity concurrent_oidc_jit \
   device_agent_lifecycle zulip_binding_uniqueness; do
   grep -Fq "\"$required_check\"" "$log_file" \
-    || die "The PostgreSQL schema v8 pass receipt is missing a required check."
+    || die "The PostgreSQL schema v9 pass receipt is missing a required check."
+done
+for required_index in agent_nodes_active_owner_agent_idx \
+  human_answers_project_created_answer_idx \
+  tasks_project_task_id_idx project_records_project_record_id_idx \
+  human_requests_project_target_request_id_idx tasks_active_assignee_idx \
+  oidc_identities_active_user_issuer_idx project_members_active_user_project_idx \
+  project_members_active_project_user_idx project_records_candidate_task_result_project_idx; do
+  grep -Fq "\"$required_index\"" "$log_file" \
+    || die "The PostgreSQL schema v9 pass receipt is missing a required Portal bounded-read index."
 done
 
 residual_database_output="$(list_integration_databases)"
@@ -464,9 +475,9 @@ production_snapshot
 production_snapshot_after="$production_snapshot_result"
 app_state_after="$(app_runtime_state)"
 [[ "$production_snapshot_after" == "$production_snapshot_before" ]] \
-  || die "Production schema versions, actual tables, row counts, or content digests changed during the isolated v8 integration run."
+  || die "Production schema versions, actual tables, row counts, or content digests changed during the isolated v9 integration run."
 [[ "$app_state_after" == "$app_state_before" ]] \
-  || die "The live app container ID, host PID, RestartCount, image, or revision changed during the isolated v8 integration run."
+  || die "The live app container ID, host PID, RestartCount, image, or revision changed during the isolated v9 integration run."
 curl --fail --silent --show-error --max-time 5 "$base_url/healthz" > /dev/null
 curl --fail --silent --show-error --max-time 5 "$base_url/readyz" > /dev/null
 
@@ -477,17 +488,17 @@ runner_script_digest="$(sha256sum "$runner_script" | awk '{print $1}')"
 verifier_script_digest="$(sha256sum "$SCRIPT_DIR/verify-postgres-v5-integration.sh" | awk '{print $1}')"
 for digest in "$release_manifest_digest" "$bundle_sums_digest" "$bundle_commit_digest" \
   "$runner_script_digest" "$verifier_script_digest"; do
-  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "Could not derive a schema v8 attestation input digest."
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "Could not derive a schema v9 attestation input digest."
 done
 verified_epoch="$(date -u +%s)"
 verified_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 [[ "$verified_epoch" =~ ^[0-9]{10,}$ \
     && "$verified_utc" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-  || die "Could not derive the schema v8 attestation time."
+  || die "Could not derive the schema v9 attestation time."
 attestation_temporary="$(mktemp /run/sciforge-postgres-v5-attestation.XXXXXXXXXXXX)"
 [[ "$attestation_temporary" =~ ^/run/sciforge-postgres-v5-attestation\.[A-Za-z0-9]+$ \
     && -f "$attestation_temporary" && ! -L "$attestation_temporary" ]] \
-  || die "Could not create the PostgreSQL schema v8 attestation."
+  || die "Could not create the PostgreSQL schema v9 attestation."
 chmod 0600 "$attestation_temporary"
 {
   printf 'schemaVersion=1\n'
@@ -503,8 +514,8 @@ chmod 0600 "$attestation_temporary"
   printf 'verifiedAtUtc=%s\n' "$verified_utc"
 } > "$attestation_temporary"
 [[ "$(stat -c '%u:%g:%a' "$attestation_temporary")" == 0:0:600 ]] \
-  || die "The PostgreSQL schema v8 attestation must be root:root mode 0600."
+  || die "The PostgreSQL schema v9 attestation must be root:root mode 0600."
 mv -f -- "$attestation_temporary" "$attestation_path"
 attestation_temporary=""
 
-echo "PostgreSQL schema v8 integration passed through the v5 baseline in a random isolated database; the production consistency snapshot and live app state were unchanged, and a one-time deployment attestation was written."
+echo "PostgreSQL schema v9 integration passed through the v5 baseline in a random isolated database, including fixed Portal hard caps and all ten Portal/coordination bounded-read indexes; the production consistency snapshot and live app state were unchanged, and the compatibility-named one-time deployment attestation was written."

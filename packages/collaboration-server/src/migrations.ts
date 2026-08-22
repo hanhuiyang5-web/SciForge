@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 8
+export const COLLABORATION_SCHEMA_VERSION = 9
 
 const COLLABORATION_MIGRATIONS = [
   '0001_collaboration_schema.sql',
@@ -12,10 +12,11 @@ const COLLABORATION_MIGRATIONS = [
   '0005_unified_identity_device_bindings.sql',
   '0006_provider_identity_inbox.sql',
   '0007_portable_resource_refs.sql',
-  '0008_managed_provider_containers.sql'
+  '0008_managed_provider_containers.sql',
+  '0009_portal_bounded_reads.sql'
 ] as const
 
-const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8] as const
+const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 
 const REQUIRED_TABLES = [
   'action_confirmations',
@@ -190,6 +191,7 @@ const REQUIRED_COLUMN_TYPES = {
     revoked_at: 'timestamp with time zone'
   },
   project_records: {
+    author_user_id: 'text',
     status: 'text',
     source_execution_id: 'text',
     criterion_evidence: 'jsonb',
@@ -256,6 +258,8 @@ const REQUIRED_COLUMN_TYPES = {
     updated_at: 'timestamp with time zone'
   }
 } as const
+
+const REQUIRED_NOT_NULL_COLUMNS = ['project_records.author_user_id'] as const
 
 const REQUIRED_CONSTRAINTS = {
   action_confirmations: [
@@ -415,7 +419,7 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
 } as const
 
 const REQUIRED_INDEXES = {
-  agent_nodes: ['agent_nodes_device_id'],
+  agent_nodes: ['agent_nodes_device_id', 'agent_nodes_active_owner_agent_idx'],
   device_enrollments: ['device_enrollments_owner_installation'],
   human_endpoint_bindings: [
     'human_endpoint_bindings_other_provider_identity_active_unique',
@@ -423,9 +427,65 @@ const REQUIRED_INDEXES = {
     'human_endpoint_bindings_zulip_user_realm_active_unique'
   ],
   managed_provider_container_jobs: ['managed_provider_container_jobs_claim_idx'],
-  project_records: ['project_records_task_result_execution_unique'],
-  tasks: ['tasks_execution_id_unique', 'tasks_result_record_unique'],
+  human_answers: ['human_answers_project_created_answer_idx'],
+  human_requests: ['human_requests_project_target_request_id_idx'],
+  oidc_identities: ['oidc_identities_active_user_issuer_idx'],
+  project_members: ['project_members_active_user_project_idx', 'project_members_active_project_user_idx'],
+  project_records: [
+    'project_records_task_result_execution_unique',
+    'project_records_project_record_id_idx',
+    'project_records_candidate_task_result_project_idx'
+  ],
+  tasks: [
+    'tasks_execution_id_unique',
+    'tasks_result_record_unique',
+    'tasks_project_task_id_idx',
+    'tasks_active_assignee_idx'
+  ],
   zulip_binding_requests: ['zulip_binding_requests_pending_user_realm_unique']
+} as const
+
+const REQUIRED_PORTAL_INDEX_DEFINITIONS = {
+  'agent_nodes.agent_nodes_active_owner_agent_idx': {
+    keyExpressions: ['owner_user_id', 'agent_id'],
+    predicate: "status='active'"
+  },
+  'tasks.tasks_project_task_id_idx': {
+    keyExpressions: ['project_id', 'task_id'],
+    predicate: null
+  },
+  'human_answers.human_answers_project_created_answer_idx': {
+    keyExpressions: ['project_id', 'created_at', 'human_answer_id'],
+    predicate: null
+  },
+  'project_records.project_records_project_record_id_idx': {
+    keyExpressions: ['project_id', 'project_record_id'],
+    predicate: null
+  },
+  'human_requests.human_requests_project_target_request_id_idx': {
+    keyExpressions: ['project_id', 'target_user_id', 'human_request_id'],
+    predicate: null
+  },
+  'tasks.tasks_active_assignee_idx': {
+    keyExpressions: ['assignee_agent_id'],
+    predicate: "statusin('accepted','in_progress','needs_human')"
+  },
+  'oidc_identities.oidc_identities_active_user_issuer_idx': {
+    keyExpressions: ['user_id', 'issuer'],
+    predicate: "status='active'"
+  },
+  'project_members.project_members_active_user_project_idx': {
+    keyExpressions: ['user_id', 'project_id'],
+    predicate: 'active'
+  },
+  'project_members.project_members_active_project_user_idx': {
+    keyExpressions: ['project_id', 'user_id'],
+    predicate: 'active'
+  },
+  'project_records.project_records_candidate_task_result_project_idx': {
+    keyExpressions: ['project_id'],
+    predicate: "kind='task_result'andstatus='candidate'"
+  }
 } as const
 
 export async function runCollaborationMigrations(pool: SqlPool): Promise<void> {
@@ -457,8 +517,13 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
     const actualTables = tables.rows.map((row) => String(row.table_name))
     if (!sameStrings(actualTables, REQUIRED_TABLES)) return false
 
-    const columns = await pool.query<{ table_name: unknown; column_name: unknown; data_type: unknown }>(
-      `SELECT table_name, column_name, data_type
+    const columns = await pool.query<{
+      table_name: unknown
+      column_name: unknown
+      data_type: unknown
+      is_nullable: unknown
+    }>(
+      `SELECT table_name, column_name, data_type, is_nullable
        FROM information_schema.columns
        WHERE table_schema = $1
          AND table_name = ANY($2::text[])`,
@@ -467,7 +532,8 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
     const presentColumns = new Set(columns.rows.map((row) => (
       `${String(row.table_name)}.${String(row.column_name)}.${String(row.data_type)}`
     )))
-    if (!hasRequiredColumnTypes(presentColumns, REQUIRED_COLUMN_TYPES)) return false
+    if (!hasRequiredColumnTypes(presentColumns, REQUIRED_COLUMN_TYPES) ||
+        !hasRequiredNotNullColumns(columns.rows, REQUIRED_NOT_NULL_COLUMNS)) return false
 
     const constraints = await pool.query<{
       table_name: unknown
@@ -509,17 +575,46 @@ export async function isCollaborationDatabaseReady(pool: SqlPool): Promise<boole
     )))
     if (!hasRequiredForeignKeyActions(presentForeignKeyActions, REQUIRED_FOREIGN_KEY_ACTIONS)) return false
 
-    const indexes = await pool.query<{ table_name: unknown; index_name: unknown }>(
-      `SELECT tablename AS table_name, indexname AS index_name
-       FROM pg_catalog.pg_indexes
-       WHERE schemaname = $1
-         AND tablename = ANY($2::text[])`,
+    const indexes = await pool.query<{
+      table_name: unknown
+      index_name: unknown
+      access_method: unknown
+      is_unique: unknown
+      is_valid: unknown
+      is_ready: unknown
+      has_expressions: unknown
+      has_included_columns: unknown
+      key_expressions: unknown
+      predicate: unknown
+    }>(
+      `SELECT table_relation.relname AS table_name,
+              index_relation.relname AS index_name,
+              access_method.amname AS access_method,
+              index_record.indisunique AS is_unique,
+              index_record.indisvalid AS is_valid,
+              index_record.indisready AS is_ready,
+              index_record.indexprs IS NOT NULL AS has_expressions,
+              index_record.indnatts > index_record.indnkeyatts AS has_included_columns,
+              ARRAY(
+                SELECT pg_get_indexdef(index_record.indexrelid, key_position.position, true)
+                FROM generate_series(1, index_record.indnkeyatts) AS key_position(position)
+                ORDER BY key_position.position
+              ) AS key_expressions,
+              pg_get_expr(index_record.indpred, index_record.indrelid, true) AS predicate
+       FROM pg_catalog.pg_index AS index_record
+       JOIN pg_catalog.pg_class AS table_relation ON table_relation.oid = index_record.indrelid
+       JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid = index_record.indexrelid
+       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = table_relation.relnamespace
+       JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_relation.relam
+       WHERE namespace.nspname = $1
+         AND table_relation.relname = ANY($2::text[])`,
       ['sciforge_collaboration', Object.keys(REQUIRED_INDEXES)]
     )
     const presentIndexes = new Set(indexes.rows.map((row) => (
       `${String(row.table_name)}.${String(row.index_name)}`
     )))
-    return hasRequiredNames(presentIndexes, REQUIRED_INDEXES)
+    return hasRequiredNames(presentIndexes, REQUIRED_INDEXES) &&
+      hasRequiredPortalIndexDefinitions(indexes.rows)
   } catch {
     return false
   }
@@ -564,6 +659,20 @@ function hasRequiredColumnTypes(
   ))
 }
 
+function hasRequiredNotNullColumns(
+  rows: readonly Readonly<{
+    table_name: unknown
+    column_name: unknown
+    is_nullable: unknown
+  }>[],
+  required: readonly string[]
+): boolean {
+  const notNullColumns = new Set(rows
+    .filter((row) => String(row.is_nullable) === 'NO')
+    .map((row) => `${String(row.table_name)}.${String(row.column_name)}`))
+  return required.every((qualifiedName) => notNullColumns.has(qualifiedName))
+}
+
 function hasRequiredNames(
   present: ReadonlySet<string>,
   required: Readonly<Record<string, readonly string[]>>
@@ -571,6 +680,58 @@ function hasRequiredNames(
   return Object.entries(required).every(([relation, names]) => (
     names.every((name) => present.has(`${relation}.${name}`))
   ))
+}
+
+function hasRequiredPortalIndexDefinitions(rows: readonly Readonly<{
+  table_name: unknown
+  index_name: unknown
+  access_method: unknown
+  is_unique: unknown
+  is_valid: unknown
+  is_ready: unknown
+  has_expressions: unknown
+  has_included_columns: unknown
+  key_expressions: unknown
+  predicate: unknown
+}>[]): boolean {
+  return Object.entries(REQUIRED_PORTAL_INDEX_DEFINITIONS).every(([qualifiedName, required]) => {
+    const row = rows.find((candidate) => (
+      `${String(candidate.table_name)}.${String(candidate.index_name)}` === qualifiedName
+    ))
+    if (!row || String(row.access_method) !== 'btree' || row.is_unique !== false ||
+        row.is_valid !== true || row.is_ready !== true || row.has_expressions !== false ||
+        row.has_included_columns !== false || !Array.isArray(row.key_expressions)) return false
+    const keyExpressions = row.key_expressions.map((value) => String(value))
+    return sameStrings(keyExpressions, required.keyExpressions) &&
+      normalizeIndexPredicate(row.predicate) === required.predicate
+  })
+}
+
+function normalizeIndexPredicate(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  let normalized = String(value)
+    .toLowerCase()
+    .replace(/::(?:pg_catalog\.)?text\b/gu, '')
+    .replace(/\s+/gu, '')
+  while (hasOneEnclosingParenthesisPair(normalized)) {
+    normalized = normalized.slice(1, -1)
+  }
+  normalized = normalized
+    .replace(/=any\(array\[(.*)\]\)$/u, 'in($1)')
+    .replace(/\(([a-z_][a-z0-9_]*='[^']*')\)/gu, '$1')
+  return normalized === 'active=true' ? 'active' : normalized
+}
+
+function hasOneEnclosingParenthesisPair(value: string): boolean {
+  if (!value.startsWith('(') || !value.endsWith(')')) return false
+  let depth = 0
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '(') depth += 1
+    else if (value[index] === ')') depth -= 1
+    if (depth === 0 && index < value.length - 1) return false
+    if (depth < 0) return false
+  }
+  return depth === 0
 }
 
 function hasRequiredForeignKeyActions(

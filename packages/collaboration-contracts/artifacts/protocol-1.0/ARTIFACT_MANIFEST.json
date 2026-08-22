@@ -33,7 +33,7 @@
   "commitInjectionPlaceholder": "__SCIFORGE_COLLABORATION_COMMIT__",
   "contractCommit": "__SCIFORGE_COLLABORATION_COMMIT__",
   "contractVersion": "1.0",
-  "databaseSchemaVersion": 8,
+  "databaseSchemaVersion": 9,
   "files": [
     {
       "bytes": 1267,
@@ -131,14 +131,14 @@
       "sha256": "8318f6050e99c5f872cdbcc87ae6cd4564e5a9452da7482f5d4dd6a454aba813"
     },
     {
-      "bytes": 98399,
+      "bytes": 102306,
       "path": "schemas/commands.schema.json",
-      "sha256": "931619050708949ebb6c47c598cc659f89052157b33ec7a30e4572d81c8fbaac"
+      "sha256": "c8b104d0e732799ddd9e1d0db303eb422619983cc0c5c62807d5cd2aaad61531"
     },
     {
-      "bytes": 166588,
+      "bytes": 179893,
       "path": "schemas/entities.schema.json",
-      "sha256": "3a6bda9c38c14707216655b07a2b22ba3e085ce5b5104623ec9a7d49c210c125"
+      "sha256": "ddcd21b1f5a0b1db4cdc5dc4fa9a727425169ac9fe9c51a42a8da9021f2d0b1e"
     },
     {
       "bytes": 3950,
@@ -216,19 +216,19 @@
       "sha256": "beab6bcc0bf2ca28c50cbbe8e5e49cf0e157965b9ab67a4e09726c93c0f09672"
     },
     {
-      "bytes": 48048,
+      "bytes": 51536,
       "path": "schemas/inbox.schema.json",
-      "sha256": "9d699821afa35d96a8e15dd3f3fd0750ad1a037477b862ab41ff1bc135b0fbd9"
+      "sha256": "91ce437c5ade31364584a642f27098b51d4d0d150d1580d03f0112b679636fcc"
     },
     {
-      "bytes": 547762,
+      "bytes": 586638,
       "path": "schemas/responses.schema.json",
-      "sha256": "4366b504c042a152e0dcce48e0dba508b6b34978751eb0b8fcf10cac8cc11504"
+      "sha256": "c5b355b08ee3d859774c4681d27e3ce29c7cff57d731114a0eba2bf286c36c13"
     },
     {
-      "bytes": 21521,
+      "bytes": 22577,
       "path": "state-and-actors.json",
-      "sha256": "bf834c34db12671fa6e295a4f10f89c6941688bc2035dad628ea17fd46836e98"
+      "sha256": "ed5a6bb88554c428a56ff8358beeb9e615e1c5a488289e016642df81f94e4a69"
     }
   ],
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",

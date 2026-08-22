@@ -62,6 +62,96 @@ schema_version="$("${COMPOSE[@]}" exec -T --user postgres postgres \
 expected_schema_version="$(expected_collaboration_schema_version)"
 [[ "$schema_version" == "$expected_schema_version" ]] \
   || die "Live database schema version does not match the validated release migrations."
+[[ "$expected_schema_version" == 9 ]] \
+  || die "This fixed release verifier requires collaboration schema v9 exactly."
+
+project_record_author_nullable="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="SELECT is_nullable FROM information_schema.columns
+             WHERE table_schema='sciforge_collaboration'
+               AND table_name='project_records'
+               AND column_name='author_user_id';")"
+[[ "$project_record_author_nullable" == NO ]] \
+  || die "Live database schema v9 does not require a ProjectRecord User author."
+
+portal_hard_cap_violation_count="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="
+    SELECT
+      (SELECT count(*) FROM (
+         SELECT user_id FROM sciforge_collaboration.project_members
+         WHERE active=true GROUP BY user_id HAVING count(*)>1000
+       ) AS over_membership)
+      +
+      (SELECT count(*) FROM (
+         SELECT project_id FROM sciforge_collaboration.project_records
+         GROUP BY project_id HAVING count(*)>50000
+       ) AS over_records)
+      +
+      (SELECT count(*) FROM (
+         SELECT project_id FROM sciforge_collaboration.human_requests
+         GROUP BY project_id HAVING count(*)>10000
+       ) AS over_human_needed);")"
+[[ "$portal_hard_cap_violation_count" == 0 ]] \
+  || die "Live database schema v9 violates a fixed Portal collection cap."
+
+portal_bounded_read_index_receipt="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="
+    WITH expected(table_name,index_name,key_columns,predicate) AS (
+      VALUES
+        ('agent_nodes','agent_nodes_active_owner_agent_idx',
+          ARRAY['owner_user_id','agent_id']::text[],\$\$status = 'active'::text\$\$::text),
+        ('human_answers','human_answers_project_created_answer_idx',
+          ARRAY['project_id','created_at','human_answer_id']::text[],NULL::text),
+        ('human_requests','human_requests_project_target_request_id_idx',
+          ARRAY['project_id','target_user_id','human_request_id']::text[],NULL::text),
+        ('oidc_identities','oidc_identities_active_user_issuer_idx',
+          ARRAY['user_id','issuer']::text[],\$\$status = 'active'::text\$\$::text),
+        ('project_members','project_members_active_project_user_idx',
+          ARRAY['project_id','user_id']::text[],\$\$active\$\$::text),
+        ('project_members','project_members_active_user_project_idx',
+          ARRAY['user_id','project_id']::text[],\$\$active\$\$::text),
+        ('project_records','project_records_candidate_task_result_project_idx',
+          ARRAY['project_id']::text[],
+          \$\$(kind = 'task_result'::text) AND (status = 'candidate'::text)\$\$::text),
+        ('project_records','project_records_project_record_id_idx',
+          ARRAY['project_id','project_record_id']::text[],NULL::text),
+        ('tasks','tasks_active_assignee_idx',ARRAY['assignee_agent_id']::text[],
+          \$\$status = ANY (ARRAY['accepted'::text, 'in_progress'::text, 'needs_human'::text])\$\$::text),
+        ('tasks','tasks_project_task_id_idx',ARRAY['project_id','task_id']::text[],NULL::text)
+    ), actual AS (
+      SELECT table_relation.relname AS table_name,
+             index_relation.relname AS index_name,
+             access_method.amname AS access_method,
+             index_metadata.indisunique AS is_unique,
+             ARRAY(
+               SELECT pg_catalog.pg_get_indexdef(index_relation.oid,key_position,true)
+               FROM generate_series(1,index_metadata.indnkeyatts) AS key_position
+               ORDER BY key_position
+             ) AS key_columns,
+             pg_catalog.pg_get_expr(index_metadata.indpred,index_metadata.indrelid,true) AS predicate
+        FROM pg_catalog.pg_index AS index_metadata
+        JOIN pg_catalog.pg_class AS index_relation
+          ON index_relation.oid=index_metadata.indexrelid
+        JOIN pg_catalog.pg_class AS table_relation
+          ON table_relation.oid=index_metadata.indrelid
+        JOIN pg_catalog.pg_namespace AS schema_namespace
+          ON schema_namespace.oid=table_relation.relnamespace
+        JOIN pg_catalog.pg_am AS access_method
+          ON access_method.oid=index_relation.relam
+       WHERE schema_namespace.nspname='sciforge_collaboration'
+    )
+    SELECT expected.index_name
+      FROM expected
+      JOIN actual USING (table_name,index_name,key_columns)
+     WHERE actual.access_method='btree'
+       AND actual.is_unique=false
+       AND actual.predicate IS NOT DISTINCT FROM expected.predicate
+     ORDER BY expected.index_name;")"
+expected_portal_bounded_read_index_receipt=$'agent_nodes_active_owner_agent_idx\nhuman_answers_project_created_answer_idx\nhuman_requests_project_target_request_id_idx\noidc_identities_active_user_issuer_idx\nproject_members_active_project_user_idx\nproject_members_active_user_project_idx\nproject_records_candidate_task_result_project_idx\nproject_records_project_record_id_idx\ntasks_active_assignee_idx\ntasks_project_task_id_idx'
+[[ "$portal_bounded_read_index_receipt" == "$expected_portal_bounded_read_index_receipt" ]] \
+  || die "Live database schema v9 is missing an exact Portal bounded-read index."
 
 expected_tables="$(expected_collaboration_tables)"
 expected_table_count="$(printf '%s\n' "$expected_tables" | awk 'END { print NR }')"
@@ -81,6 +171,11 @@ running_image_id="$(docker container inspect --format '{{.Image}}' "$app_contain
 [[ "$running_image_id" == "$image_id" ]] || die "Running application container does not use the approved runtime image."
 container_revision="$("${COMPOSE[@]}" exec -T app sh -c 'tr -d "\r\n" < /app/CONTRACT_COMMIT')"
 [[ "$container_revision" == "$expected_commit" ]] || die "Running container revision proof mismatch."
+if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+  "${COMPOSE[@]}" exec -T app node /app/verify-portal-assets.mjs \
+    /app/RELEASE_MANIFEST.json "$A_CLOUD_PORTAL_ASSET_DIR" >/dev/null \
+    || die "Running container Portal assets do not match the fixed release manifest."
+fi
 app_mode="$(docker container inspect --format \
   '{{index .Config.Labels "cn.sciforge.deployment.mode"}}' "$app_container_id")"
 if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
@@ -230,4 +325,4 @@ websocket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' 
   "$base_url/v1/events" || true)"
 [[ "$websocket_status" == "401" ]] || die "Unauthenticated WebSocket Upgrade was not rejected with HTTP 401."
 
-echo "Verification passed: loopback-only app, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, fixed image revision/UID/GID, A console, probes and fail-closed auth boundaries."
+echo "Verification passed: loopback-only app, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, required ProjectRecord User authors, fixed Portal hard caps, ten exact Portal/coordination bounded-read indexes, fixed image revision/UID/GID, A console, probes and fail-closed auth boundaries."

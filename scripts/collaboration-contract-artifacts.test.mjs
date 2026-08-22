@@ -70,7 +70,7 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   assert.equal(manifest.packages['@sciforge/collaboration-contracts'], '0.2.0')
   assert.equal(manifest.packages['@sciforge/domain-sdk'], '0.2.2')
   assert.equal(manifest.packages['@sciforge/domain-content-space'], '1.0.0')
-  assert.equal(manifest.databaseSchemaVersion, 8)
+  assert.equal(manifest.databaseSchemaVersion, 9)
   assert.equal(manifest.portableResourceCarrier.schemaVersion, '1.0.0')
   assert.equal(manifest.portableResourceCarrier.upstreamCommit,
     'e58ed48e94812d0c56da48ab7387f53135439cc5')

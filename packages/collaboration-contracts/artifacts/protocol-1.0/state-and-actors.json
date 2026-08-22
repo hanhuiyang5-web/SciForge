@@ -30,6 +30,14 @@
         "user"
       ],
       "availability": "current",
+      "command": "agent.owned.list",
+      "condition": "The authenticated OIDC User may list only their own usable Coordinator/Worker Agents."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "current",
       "command": "agent.owner.transfer",
       "condition": "The user must own the Agent; transfer and revocation assurance rules apply."
     },
@@ -333,6 +341,22 @@
         "user"
       ],
       "availability": "current",
+      "command": "project.list",
+      "condition": "The authenticated OIDC User may list only Projects where they are a current active member."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "current",
+      "command": "project.members.update",
+      "condition": "Only the Project owner may update members with an exact expectedRevision; protected owners and members with active work or HumanNeeded cannot be removed."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "current",
       "command": "project.transfer_coordinator",
       "condition": "Only the Project owner may perform this administrative write."
     },
@@ -577,6 +601,14 @@
       "availability": "current",
       "command": "user.update",
       "condition": "The credential userId must equal the target userId."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "test-only",
+      "command": "worker.directory.page",
+      "condition": "The authenticated OIDC User must share the configured issuer and the exact test-only global directory feature flag must be enabled."
     }
   ],
   "protocolVersion": "1.0",

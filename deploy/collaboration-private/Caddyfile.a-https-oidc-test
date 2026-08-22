@@ -26,7 +26,6 @@ cloud-test.sciforge.cn:8443 {
 
 	header {
 		-Server
-		Cache-Control "no-store"
 		X-SciForge-Edge-Revision "{$SCIFORGE_EDGE_COMMIT}"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		Content-Security-Policy "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
@@ -36,18 +35,49 @@ cloud-test.sciforge.cn:8443 {
 		X-Frame-Options "DENY"
 	}
 
-	respond /console* 404
-	reverse_proxy {
-		lb_try_duration 5s
-		lb_try_interval 250ms
-		dynamic a app 8787 {
-			refresh 5s
-			resolvers 127.0.0.11
-			versions ipv4
+	@console path /console*
+	handle @console {
+		header Cache-Control "no-store"
+		respond 404
+	}
+
+	@portal path /portal /portal/*
+	handle @portal {
+		header {
+			defer
+			Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; manifest-src 'none'"
+			X-SciForge-Portal-Mode "confidential-bff"
 		}
-		transport http {
-			dial_timeout 2s
-			response_header_timeout 30s
+		reverse_proxy {
+			header_up X-Forwarded-For {remote_host}
+			lb_try_duration 5s
+			lb_try_interval 250ms
+			dynamic a app 8787 {
+				refresh 5s
+				resolvers 127.0.0.11
+				versions ipv4
+			}
+			transport http {
+				dial_timeout 2s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	handle {
+		header Cache-Control "no-store"
+		reverse_proxy {
+			lb_try_duration 5s
+			lb_try_interval 250ms
+			dynamic a app 8787 {
+				refresh 5s
+				resolvers 127.0.0.11
+				versions ipv4
+			}
+			transport http {
+				dial_timeout 2s
+				response_header_timeout 30s
+			}
 		}
 	}
 }

@@ -3107,7 +3107,7 @@ describe('CollaborationService canonical transactions', () => {
     expect(() => aliceAgentInbox.messages.map((message) => toInboxMessage(message))).not.toThrow()
   })
 
-  it('materializes authoritative HumanNeeded expiry before returning a coordination view', async () => {
+  it('projects HumanNeeded expiry in a read-only coordination snapshot without materializing it', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
     const authentication = new AuthenticationService(repository, now)
@@ -3150,20 +3150,39 @@ describe('CollaborationService canonical transactions', () => {
       targetUserId: owner.userId, requiredAssurance: 'verified', prompt: 'This request remains pending.',
       expiresAt: '2026-08-15T05:00:00.000Z', idempotencyKey: 'idem_expiry_view_future_01'
     })
+    task = await service.getTask(owner.user, task.taskId)
+    const answeredRequest = await service.createHumanNeeded(worker, {
+      projectId: project.projectId,
+      source: { kind: 'worker', taskId: task.taskId, executionId: task.executionId,
+        expectedTaskRevision: task.revision },
+      targetUserId: owner.userId, requiredAssurance: 'verified', prompt: 'This request is already answered.',
+      expiresAt: '2026-08-15T03:30:00.000Z', idempotencyKey: 'idem_expiry_view_answered_01'
+    })
+    const answer = await service.answerHumanNeeded(owner.endpoint, {
+      humanRequestId: answeredRequest.humanRequestId, requestRevision: answeredRequest.revision,
+      answer: 'Continue.', idempotencyKey: 'idem_expiry_view_answer_01'
+    })
     const readAt = '2026-08-15T04:00:00.000Z'
     const laterService = new CollaborationService({ repository, now: () => new Date(readAt) })
+    const storedRequestsBeforeRead = structuredClone([...repository.state.humanRequests.entries()])
+    const storedAnswersBeforeRead = structuredClone([...repository.state.humanAnswers.entries()])
+    repository.pruneExpired = async () => { throw new Error('Coordination GET must remain read-only') }
 
     const view = await laterService.getProjectCoordinationView(owner.user, project.projectId)
 
     expect(view.readAt).toBe(readAt)
     expect(view.humanRequests.find((request) => request.humanRequestId === expiredRequest.humanRequestId))
-      .toMatchObject({ status: 'expired', revision: expiredRequest.revision + 1, updatedAt: readAt })
+      .toMatchObject({ status: 'expired', revision: expiredRequest.revision, updatedAt: expiredRequest.updatedAt })
     expect(view.humanRequests.find((request) => request.humanRequestId === futureRequest.humanRequestId))
       .toMatchObject({ status: 'pending', revision: futureRequest.revision })
+    expect(view.humanRequests.find((request) => request.humanRequestId === answeredRequest.humanRequestId))
+      .toMatchObject({ status: 'answered', revision: answeredRequest.revision + 1 })
     expect(view.humanRequests.some((request) => request.status === 'pending' && request.expiresAt <= readAt)).toBe(false)
+    expect(view.humanAnswers).toEqual([expect.objectContaining({ humanAnswerId: answer.humanAnswerId })])
+    expect([...repository.state.humanRequests.entries()]).toEqual(storedRequestsBeforeRead)
+    expect([...repository.state.humanAnswers.entries()]).toEqual(storedAnswersBeforeRead)
     expect(repository.state.humanRequests.get(expiredRequest.humanRequestId))
-      .toMatchObject({ status: 'expired', revision: expiredRequest.revision + 1, updatedAt: readAt })
-    await expect(laterService.pruneExpired()).resolves.toMatchObject({ humanRequests: 0 })
+      .toMatchObject({ status: 'pending', revision: expiredRequest.revision, updatedAt: expiredRequest.updatedAt })
   })
 
   it('returns expired unacknowledged Inbox entries as sequence-preserving superseded tombstones', async () => {
@@ -3654,7 +3673,8 @@ describe('CollaborationService canonical transactions', () => {
       action: { kind: 'project.complete', projectId: project.projectId, finalRecordDigest: 'sha256:expired' }
     })
     await expect(service.getActionConfirmation(owner.user, expired.confirmationId))
-      .resolves.toMatchObject({ status: 'superseded', updatedAt: at.toISOString() })
+      .resolves.toMatchObject({ status: 'superseded', updatedAt: expired.updatedAt })
+    expect(repository.state.actionConfirmations.get(expired.confirmationId)).toEqual(expired)
   })
 
   it('requires a fresh owner-bound profile for create, retry, and reassignment even without capability IDs', async () => {

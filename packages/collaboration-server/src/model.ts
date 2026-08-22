@@ -267,6 +267,78 @@ export type ProjectCapabilityDirectoryView = {
   agents: ProjectCapabilityAgentView[]
 }
 
+export type ProjectTaskStatusCountsView = {
+  offered: number
+  accepted: number
+  rejected: number
+  running: number
+  needsHuman: number
+  succeeded: number
+  failed: number
+  cancelled: number
+}
+
+export type ProjectListItemView = {
+  projectId: string
+  displayName: string
+  goal: string
+  status: 'draft' | 'active' | 'paused' | 'completed' | 'cancelled'
+  role: StoredProjectMember['role']
+  memberCount: number
+  taskCounts: ProjectTaskStatusCountsView
+  pendingResultCount: number
+  revision: number
+  updatedAt: string
+}
+
+export type ProjectListPageView = {
+  items: ProjectListItemView[]
+  nextCursor?: string
+}
+
+export type WorkerDirectoryEntryView = {
+  ownerUserId: string
+  agentId: string
+  displayName: string
+  nodeType: 'desktop' | 'server'
+  os: {
+    family: StoredAgentCapabilityProfile['osFamily']
+    architecture: StoredAgentCapabilityProfile['osArchitecture']
+  }
+  runtimeIds: string[]
+  capabilityIds: string[]
+  gpu: Array<{ vendor?: string; model?: string; memoryGB?: number }>
+  status: 'online' | 'busy' | 'offline'
+  lastSeenAt: string
+  profileExpiresAt: string
+  revision: number
+}
+
+export type WorkerDirectoryPageView = {
+  stats: {
+    total: number
+    online: number
+    busy: number
+    offline: number
+    desktop: number
+    server: number
+  }
+  items: WorkerDirectoryEntryView[]
+  nextCursor?: string
+  readAt: string
+}
+
+export type OwnedAgentListView = {
+  items: Array<{
+    agentId: string
+    displayName: string
+    nodeType: 'desktop' | 'server'
+    connectionStatus: StoredAgent['connectionStatus']
+    lastSeenAt?: string
+    revision: number
+  }>
+}
+
 export type TaskStatus =
   | 'offered'
   | 'accepted'
@@ -340,7 +412,7 @@ export type StoredProjectRecord = {
   kind: ProjectRecordKind
   status: 'candidate' | 'accepted' | 'rejected' | 'superseded'
   summary: string
-  authorUserId?: string
+  authorUserId: string
   authorAgentId?: string
   sourceTaskId?: string
   sourceExecutionId?: string

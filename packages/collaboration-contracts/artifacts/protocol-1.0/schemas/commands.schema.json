@@ -966,6 +966,29 @@
     {
       "additionalProperties": false,
       "properties": {
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "agent.owned.list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "idempotencyKey": {
           "maxLength": 128,
           "minLength": 16,
@@ -1905,6 +1928,54 @@
     {
       "additionalProperties": false,
       "properties": {
+        "cursor": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "statuses": {
+          "items": {
+            "enum": [
+              "draft",
+              "active",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "type": "array"
+        },
+        "type": {
+          "const": "project.list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "type",
+        "limit"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "projectId": {
           "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
           "type": "string"
@@ -1955,6 +2026,99 @@
         "requestId",
         "type",
         "projectId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 50,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "worker.directory.page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "type",
+        "limit"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "addMemberUserIds": {
+          "default": [],
+          "items": {
+            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
+        "expectedRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 16,
+          "pattern": "^idem_[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "projectId": {
+          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "removeMemberUserIds": {
+          "default": [],
+          "items": {
+            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "project.members.update",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "idempotencyKey",
+        "type",
+        "projectId",
+        "expectedRevision"
       ],
       "type": "object"
     },

@@ -5,3 +5,6 @@
 !bundle/package.json
 !bundle/package-lock.json
 !bundle/CONTRACT_COMMIT
+!bundle/RELEASE_MANIFEST.json
+!scripts/
+!scripts/verify-portal-assets.mjs

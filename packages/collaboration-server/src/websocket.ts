@@ -7,12 +7,14 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { actorInboxRecipient, type AuthenticationService } from './auth.js'
 import type { InboxRecipient } from './model.js'
 import type { InboxAvailabilityNotifier } from './service.js'
+import type { PortalWebSocketUpgradeHandler } from './portal-websocket.js'
 
 export type CollaborationWebSocketOptions = {
   authentication: AuthenticationService
   basePath?: string
   allowedOrigins?: readonly string[]
   now?: () => Date
+  portal?: PortalWebSocketUpgradeHandler
 }
 
 type AuthenticatedWebSocket = Readonly<{
@@ -30,7 +32,14 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
     this.server = server
     const path = `${normalizeBasePath(options.basePath)}/v1/events`
     httpServer.on('upgrade', (request, socket, head) => {
-      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
+      if (options.portal?.handleUpgrade(request, socket, head)) return
+      let url: URL
+      try { url = new URL(request.url ?? '/', 'http://localhost') }
+      catch {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
       if (url.pathname !== path || !originAllowed(request.headers.origin, options.allowedOrigins)) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         socket.destroy()

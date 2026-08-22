@@ -1,0 +1,36 @@
+{
+  "name": "@sciforge/collaboration-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SciForge Cloud collaboration portal for authenticated Orchestrators and Worker visibility.",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && vite build && node scripts/write-asset-integrity.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:a11y": "node scripts/visual-audit.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "axe-core": "^4.10.3",
+    "happy-dom": "^20.11.2",
+    "pixelmatch": "7.1.0",
+    "playwright-core": "1.61.1",
+    "pngjs": "7.0.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.7"
+  }
+}

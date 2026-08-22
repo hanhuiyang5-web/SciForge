@@ -29,6 +29,9 @@ for script in "$SCRIPT_DIR"/*.sh; do
   bash -n "$script"
 done
 node --check "$SCRIPT_DIR/postgres-v5-integration.mjs"
+node --check "$SCRIPT_DIR/verify-portal-assets.mjs"
+[[ -x "$SCRIPT_DIR/verify-portal-assets.mjs" ]] \
+  || die "The fixed Portal asset verifier is not executable."
 for edge_script in deploy-a-https-test-edge.sh disable-a-https-test-edge.sh \
     verify-a-https-test-edge.sh verify-a-https-test-edge-external.sh \
     deploy-a-https-oidc-test.sh disable-a-https-oidc-test.sh \
@@ -59,11 +62,12 @@ assert_contains "$SCRIPT_DIR/common.sh" 'export SCIFORGE_COLLAB_EDGE_MEMORY="$ed
 assert_contains "$SCRIPT_DIR/common.sh" 'export SCIFORGE_COLLAB_LOG_MAX_FILES="$log_max_files"'
 assert_contains "$DEPLOY_DIR/.env.example" '/srv/sciforge-collaboration/secrets/collaboration.env'
 assert_contains "$DEPLOY_DIR/.env.example" 'physical root:root mode 0700 secrets'
-assert_contains "$SCRIPT_DIR/common.sh" '(( ${#tarballs[@]} == 4 ))'
+assert_contains "$SCRIPT_DIR/common.sh" '(( ${#tarballs[@]} == 5 ))'
 assert_contains "$SCRIPT_DIR/common.sh" 'sciforge-domain-sdk-*.tgz'
-assert_contains "$SCRIPT_DIR/common.sh" 'domain_sdk_packages == 1 && contract_packages == 1 && provider_packages == 1 && server_packages == 1'
-assert_contains "$SCRIPT_DIR/common.sh" '(( ${#manifest_filenames[@]} == 4 ))'
-assert_contains "$SCRIPT_DIR/common.sh" 'line_count == 8 && ${#seen_files[@]} == 8'
+assert_contains "$SCRIPT_DIR/common.sh" 'sciforge-collaboration-portal-*.tgz'
+assert_contains "$SCRIPT_DIR/common.sh" '&& portal_packages == 1 && server_packages == 1'
+assert_contains "$SCRIPT_DIR/common.sh" '(( ${#manifest_filenames[@]} == 5 ))'
+assert_contains "$SCRIPT_DIR/common.sh" 'line_count == 9 && ${#seen_files[@]} == 9'
 
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" '[[ "$ready_status" == 503 ]]'
 assert_contains "$SCRIPT_DIR/verify-postgres-restart.sh" 'running_contract_commit'
@@ -127,10 +131,43 @@ assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'dst=/run/secret
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'forbidden_snapshot_env_count'
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'production_snapshot_after" == "$production_snapshot_before"'
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'app_state_after" == "$app_state_before'
-assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'expected_schema_version" == 8'
-assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" '^sciforge_identity_v8_it_[0-9]+_[0-9a-f]{12}$'
-assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" '"event":"postgres.v8.integration","status":"passed"'
-assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'v1_to_v5_to_v8_readiness'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'expected_schema_version" == 9'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" '^sciforge_identity_v9_it_[0-9]+_[0-9a-f]{12}$'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" '"event":"postgres.v9.integration","status":"passed"'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'v1_to_v5_to_v9_readiness'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'portal_bounded_read_indexes'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'portal_hard_caps'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'migration_0009_active_project_membership_limit_exceeded'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'migration_0009_project_record_limit_exceeded'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'migration_0009_human_needed_limit_exceeded'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'legacy_project_record_author_backfill'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'legacy_project_record_author_transfer_ambiguity'
+assert_contains "$SCRIPT_DIR/verify.sh" 'project_record_author_nullable'
+assert_contains "$SCRIPT_DIR/verify.sh" "table_name='project_records'"
+assert_contains "$SCRIPT_DIR/verify.sh" "column_name='author_user_id'"
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'tasks_project_task_id_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'project_records_project_record_id_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'human_requests_project_target_request_id_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'tasks_active_assignee_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'oidc_identities_active_user_issuer_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'project_members_active_user_project_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'project_members_active_project_user_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'project_records_candidate_task_result_project_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'agent_nodes_active_owner_agent_idx'
+assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'human_answers_project_created_answer_idx'
+for portal_index in \
+  agent_nodes_active_owner_agent_idx \
+  human_answers_project_created_answer_idx \
+  human_requests_project_target_request_id_idx \
+  oidc_identities_active_user_issuer_idx \
+  project_members_active_project_user_idx \
+  project_members_active_user_project_idx \
+  project_records_candidate_task_result_project_idx \
+  project_records_project_record_id_idx \
+  tasks_active_assignee_idx \
+  tasks_project_task_id_idx; do
+  assert_contains "$SCRIPT_DIR/verify.sh" "$portal_index"
+done
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'provider_identity_inbox_constraint'
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'portable_resource_reference_constraint'
 assert_contains "$SCRIPT_DIR/verify-postgres-v5-integration.sh" 'managed_provider_container_schema'
@@ -163,9 +200,14 @@ assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'to_jsonb(row_value)::
 assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'secretBuffer.fill(0)'
 assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" "mode & 0o777, 0o440"
 assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'status: '\''passed'\'''
-assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'runtime.COLLABORATION_SCHEMA_VERSION, 8'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'runtime.COLLABORATION_SCHEMA_VERSION, 9'
 assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'versionsAtV5, [1, 2, 3, 4, 5]'
-assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'versionsAtV8, [1, 2, 3, 4, 5, 6, 7, 8]'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'versionsAtV9, [1, 2, 3, 4, 5, 6, 7, 8, 9]'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'portalBoundedReadIndexes: outcome.portalBoundedReadIndexes'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'verifyPortalBoundedReadIndexes(databasePool)'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" "assert.equal(actual.access_method, 'btree')"
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'assert.deepEqual(actual.key_columns, expected.keyColumns)'
+assert_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'assert.equal(actual.predicate, expected.predicate)'
 assert_not_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'SCIFORGE_POSTGRES_V5_ADMIN_URL'
 assert_not_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'vitest'
 assert_not_contains "$SCRIPT_DIR/postgres-v5-integration.mjs" 'tsx'
@@ -317,6 +359,30 @@ assert_contains "$SCRIPT_DIR/common.sh" 'A_HTTPS_OIDC_TEST_IDENTITY_NETWORK=scif
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_binding_confirm_mode" == disabled'
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_provider_mode" == disabled'
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_oidc_allow_insecure_loopback" == false'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_CLOUD_PORTAL_ASSET_DIR=/app/node_modules/@sciforge/collaboration-portal/dist'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_CLOUD_PORTAL_CLIENT_ID=sciforge-cloud-console'
+assert_contains "$SCRIPT_DIR/common.sh" 'A_CLOUD_PORTAL_REDIRECT_URI=https://cloud-test.sciforge.cn/portal/auth/callback'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_schema_version" == 4'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_mode" == confidential-bff'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_base_path" == /portal/'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_auth_path_prefix" == /portal/auth/'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_api_path_prefix" == /portal/api/'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_events_path" == /portal/events'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_vite_manifest_path" == dist/.vite/manifest.json'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_integrity_manifest_path" == dist/ASSET_INTEGRITY.json'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_authorized_party" == "$A_CLOUD_PORTAL_CLIENT_ID"'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_human_needed_mode" == display-only'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_test_worker_directory_enabled" == true'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_session_idle_seconds" == 1800'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_session_absolute_seconds" == 28800'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_content_security_policy" == "$A_CLOUD_PORTAL_CSP"'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_compose_sha256'
+assert_contains "$SCRIPT_DIR/common.sh" 'manifest_portal_asset_verify_script_sha256'
+assert_contains "$SCRIPT_DIR/common.sh" 'portalOidcClientSecret|SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET|client_secret'
+assert_contains "$SCRIPT_DIR/common.sh" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET must be a non-placeholder Keycloak secret'
+assert_contains "$SCRIPT_DIR/common.sh" 'docker exec "$app_container_id" node /app/verify-portal-assets.mjs'
+assert_contains "$SCRIPT_DIR/common.sh" 'The OIDC test app does not contain exactly one bounded Portal client secret.'
 assert_contains "$SCRIPT_DIR/common.sh" '$2 == "identityAcceptanceHarnessSha256" { print $4 }'
 assert_contains "$SCRIPT_DIR/common.sh" '$2 == "multiWorkerAcceptanceHarnessSha256" { print $4 }'
 assert_contains "$SCRIPT_DIR/common.sh" 'manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$'
@@ -331,6 +397,44 @@ assert_contains "$SCRIPT_DIR/common.sh" 'Provider environment is forbidden in A 
 assert_contains "$SCRIPT_DIR/common.sh" 'SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK|false'
 assert_contains "$SCRIPT_DIR/common.sh" '--project-name sciforge-collaboration-a-https-oidc-test'
 
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" "integrityManifest.schemaVersion !== 1 || integrityManifest.basePath !== '/portal/'"
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'Portal asset inventory is not strictly sorted.'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'Installed Portal directory contains an unlisted or missing file.'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'schemaVersion: 4'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" "portalMode: 'confidential-bff'"
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" "portalAuthorizedParty: 'sciforge-cloud-console'"
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'portalViteManifestSha256: sha256(viteManifestContent)'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'portalIntegrityManifestSha256: sha256(integrityManifestContent)'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'portalContentSecurityPolicy:'
+assert_contains "$SCRIPT_DIR/verify-portal-assets.mjs" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET'
+
+assert_contains "$DEPLOY_DIR/Dockerfile.runtime" 'COPY bundle/RELEASE_MANIFEST.json ./RELEASE_MANIFEST.json'
+assert_contains "$DEPLOY_DIR/Dockerfile.runtime" 'COPY scripts/verify-portal-assets.mjs ./verify-portal-assets.mjs'
+assert_contains "$DEPLOY_DIR/Dockerfile.runtime" 'node ./verify-portal-assets.mjs'
+assert_contains "$DEPLOY_DIR/.dockerignore" '!bundle/RELEASE_MANIFEST.json'
+assert_contains "$DEPLOY_DIR/.dockerignore" '!scripts/verify-portal-assets.mjs'
+
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_ENABLED:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI:'
+assert_contains "$DEPLOY_DIR/compose.a-cloud-portal.yml" 'SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED:'
+portal_overlay_services="$(awk '/^[[:space:]]{2}[A-Za-z0-9_-]+:$/ { sub(/^[[:space:]]+/, ""); sub(/:$/, ""); print }' \
+  "$DEPLOY_DIR/compose.a-cloud-portal.yml")"
+[[ "$portal_overlay_services" == app ]] \
+  || die "The Portal Compose overlay must target only the app service."
+
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_ENABLED=true'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR=/app/node_modules/@sciforge/collaboration-portal/dist'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN=https://cloud-test.sciforge.cn'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID=sciforge-cloud-console'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET=replace_with_keycloak_generated_confidential_client_secret'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI=https://cloud-test.sciforge.cn/portal/auth/callback'
+assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED=true'
+
 assert_contains "$SCRIPT_DIR/deploy.sh" 'RELEASE_MANIFEST_MODE" == a-https-oidc-test'
 assert_contains "$SCRIPT_DIR/deploy.sh" 'assert_no_a_https_test_edge_container'
 assert_contains "$SCRIPT_DIR/deploy-provider-zulip.sh" 'RELEASE_MANIFEST_MODE" != a-https-oidc-test'
@@ -342,6 +446,26 @@ assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'strict_sni_host on'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'protocols h1 h2'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'X-SciForge-Edge-Revision "{$SCIFORGE_EDGE_COMMIT}"'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'Cache-Control "no-store"'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@console path /console*'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" $'@console path /console*\n\thandle @console {\n\t\theader Cache-Control "no-store"\n\t\trespond 404\n\t}'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@portal path /portal /portal/*'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'X-SciForge-Portal-Mode "confidential-bff"'
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" $'\thandle @portal {\n\t\theader {\n\t\t\tdefer'
+[[ "$(grep -Fxc $'\t\t\theader_up X-Forwarded-For {remote_host}' \
+  "$DEPLOY_DIR/Caddyfile.a-https-oidc-test")" == 1 ]] \
+  || die "The Portal edge must overwrite X-Forwarded-For exactly once with remote_host."
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" "Content-Security-Policy \"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; manifest-src 'none'\""
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" $'@portal path /portal /portal/*\n\thandle @portal {'
+portal_route_block="$(awk '
+  $0 == "\t@portal path /portal /portal/*" { capture=1 }
+  capture && $0 == "\thandle {" { exit }
+  capture { print }
+' "$DEPLOY_DIR/Caddyfile.a-https-oidc-test")"
+[[ -n "$portal_route_block" ]] || die "The fixed Portal Caddy route could not be isolated."
+if grep -Fq 'Cache-Control' <<< "$portal_route_block"; then
+  die "The edge must preserve the Portal runtime immutable asset cache policy."
+fi
+assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" $'\thandle {\n\t\theader Cache-Control "no-store"\n\t\treverse_proxy {'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@forbidden path /admin* /metrics* /health*'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" '@keycloak_public {'
 assert_contains "$DEPLOY_DIR/Caddyfile.a-https-oidc-test" 'path /realms/SciForge /realms/SciForge/* /resources/*'
@@ -386,11 +510,44 @@ assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/SciForgeX/.we
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/realms/SciForge/%2e%2e/master/.well-known/openid-configuration'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '--path-as-is --output /dev/null'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Trusted Zulip binding confirm is not fail-closed with exact HTTP 401.'
-assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Keycloak Discovery does not publish the exact HTTPS issuer/endpoints and RS256 support.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Keycloak Discovery does not publish the exact HTTPS issuer/token/revocation endpoints and RS256/S256 support.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'revocation_endpoint: `${issuer}/protocol/openid-connect/revoke`'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'body.code_challenge_methods_supported.includes("S256")'
+assert_not_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'end_session_endpoint:'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Keycloak JWKS has no unique usable RSA/RS256 signing key.'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'unexpected_identity_edge_response'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'published_443_count" == 1'
-assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Real-token acceptance remains a separate harness gate.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The A-only console must remain unavailable on the OIDC edge.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The fixed Portal entry did not return the exact relative /portal/ location.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'x-sciforge-portal-mode: confidential-bff'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal HTML is not uniquely marked no-store.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal HTML lacks frame denial.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The public Portal runtime asset does not match its fixed bytes and SHA-256.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The manifest-bound Portal runtime asset is not uniquely immutable-cacheable.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal runtime asset did not honor its exact ETag with HTTP 304.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '/portal/ASSET_INTEGRITY.json /portal/.vite/manifest.json'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'portal_authentication_required'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal session endpoint accepted cross-site Fetch Metadata.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal session rejection lacks its unique no-store/CSP boundary.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The removed raw Portal command relay is not a fixed HTTP 404 tombstone.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '"$cloud_url/portal/api/commands")" == 404'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '"$cloud_url/portal/api/projects")" == 401'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The anonymous typed Portal project view did not return HTTP 401.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The anonymous typed Portal project mutation did not return HTTP 401.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The typed Portal project mutation accepted a cross-site write.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The anonymous Portal logout boundary did not return HTTP 204.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'portal.websocket_required'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal HTTP event response lacks Upgrade: websocket.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Sec-WebSocket-Protocol: sciforge.portal.v1'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'portal_login_rejected'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal callback replay did not remain fail-closed after consuming the transaction.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" '__Host-sciforge-portal-login='
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'value.searchParams.get("client_id") !== "sciforge-cloud-console"'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'X-Forwarded-For: 198.51.100.10, 127.0.0.1'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'after edge X-Forwarded-For canonicalization.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'The Portal login redirect lacks its unique no-store/CSP boundary.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET|KC_DB_'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test.sh" 'Real browser login and real-token acceptance remain separate maintenance-window gates.'
 
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'identity_hostname=login-test.sciforge.cn'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/master/.well-known/openid-configuration'
@@ -400,8 +557,43 @@ assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/SciF
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/realms/SciForge/%2e%2e/master/.well-known/openid-configuration'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '--path-as-is --output /dev/null'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'expected_issuer=https://login-test.sciforge.cn/realms/SciForge'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'Public Keycloak Discovery does not publish the exact HTTPS issuer/token/revocation endpoints and RS256/S256 support.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'revocation_endpoint: `${issuer}/protocol/openid-connect/revoke`'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'body.code_challenge_methods_supported.includes("S256")'
+assert_not_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'end_session_endpoint:'
 assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'Forbidden public TCP port $forbidden_port is reachable.'
-assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'No real-token or cross-team E2E claim is made.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public OIDC edge exposed the A-only console.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal entry did not return the exact relative /portal/ location.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'x-sciforge-portal-mode: confidential-bff'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal HTML is not uniquely marked no-store.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal HTML lacks frame denial.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal asset does not match the fixed manifest bytes and SHA-256.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public manifest-bound Portal asset is not uniquely immutable-cacheable.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal asset did not honor its exact ETag with HTTP 304.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '/portal/ASSET_INTEGRITY.json /portal/.vite/manifest.json'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'portal_authentication_required'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal session endpoint accepted cross-site Fetch Metadata.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal session rejection lacks its unique no-store/CSP boundary.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The removed public raw Portal command relay is not a fixed HTTP 404 tombstone.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '"$cloud_url/portal/api/commands")" == 404'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '"$cloud_url/portal/api/projects")" == 401'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The anonymous public typed Portal project view did not return HTTP 401.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The anonymous public typed Portal project mutation did not return HTTP 401.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public typed Portal project mutation accepted a cross-site write.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The anonymous public Portal logout boundary did not return HTTP 204.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'portal.websocket_required'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal HTTP event response lacks Upgrade: websocket.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'Sec-WebSocket-Protocol: sciforge.portal.v1'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'portal_login_rejected'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal callback replay did not remain fail-closed after consuming the transaction.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" '__Host-sciforge-portal-login='
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'value.searchParams.get("client_id") !== "sciforge-cloud-console"'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'The public Portal login redirect lacks its unique no-store/CSP boundary.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'No successful browser login, real-token, or cross-team E2E claim is made.'
+assert_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'createHash("sha256").update(body).digest("hex")'
+assert_not_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" "stat -c"
+assert_not_contains "$SCRIPT_DIR/verify-a-https-oidc-test-external.sh" 'sha256sum'
+assert_not_contains "$DEPLOY_DIR/.env.example" 'sciforge-desktop,sciforge-web-mobile,sciforge-cloud-console'
 
 assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_A_HTTPS_OIDC_TEST_IPV4='
 assert_contains "$DEPLOY_DIR/.env.example" 'SCIFORGE_A_HTTPS_OIDC_TEST_STATE_DIR=/srv/sciforge-collaboration/a-https-oidc-test'
@@ -459,6 +651,16 @@ assert_contains "$SCRIPT_DIR/verify.sh" 'zulip_binding_requests'
 assert_contains "$SCRIPT_DIR/verify.sh" "pairingResponse.status !== 401"
 assert_contains "$SCRIPT_DIR/verify.sh" "meResponse.status !== 401"
 assert_contains "$SCRIPT_DIR/verify.sh" "confirmResponse.status !== 401"
+assert_contains "$SCRIPT_DIR/verify.sh" 'node /app/verify-portal-assets.mjs'
+assert_contains "$SCRIPT_DIR/verify.sh" 'expected_schema_version" == 9'
+assert_contains "$SCRIPT_DIR/verify.sh" 'portal_bounded_read_index_receipt'
+assert_contains "$SCRIPT_DIR/verify.sh" 'portal_hard_cap_violation_count'
+assert_contains "$SCRIPT_DIR/verify.sh" 'HAVING count(*)>1000'
+assert_contains "$SCRIPT_DIR/verify.sh" 'HAVING count(*)>50000'
+assert_contains "$SCRIPT_DIR/verify.sh" 'HAVING count(*)>10000'
+assert_contains "$SCRIPT_DIR/verify.sh" 'actual.predicate IS NOT DISTINCT FROM expected.predicate'
+assert_contains "$SCRIPT_DIR/verify.sh" 'ten exact Portal/coordination bounded-read indexes'
+assert_contains "$SCRIPT_DIR/verify.sh" 'human_answers_project_created_answer_idx'
 
 assert_contains "$DEPLOY_DIR/README.md" 'AllowStreamLocalForwarding no'
 assert_contains "$DEPLOY_DIR/README.md" '精确返回 `503`'

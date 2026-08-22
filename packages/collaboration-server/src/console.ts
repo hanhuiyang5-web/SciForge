@@ -151,6 +151,7 @@ const CONSOLE_HTML = `<!doctype html>
             <form class="command-form warning-form" data-command="task-cancel">
               <h3>取消 Task <em>Owner User</em></h3>
               <label>Task ID<input name="taskId" required placeholder="tsk_…" spellcheck="false"></label>
+              <label>当前 executionId<input name="executionId" required placeholder="exe_…" spellcheck="false"></label>
               <label>Task expectedRevision<input name="expectedRevision" type="number" min="1" required></label>
               <button class="button danger-line" type="submit">确认取消</button>
             </form>
@@ -161,6 +162,7 @@ const CONSOLE_HTML = `<!doctype html>
             <p class="permission-note">同一 assignee 重试仅接受 failed / rejected，可由 Owner User 或 Coordinator Agent 发起；更换 assignee 的主动改派仅限 Owner User。</p>
             <p class="microcopy">服务端根据目标 Agent 是否为当前 assignee 判定“重试”或“改派”；主动换人可用于掉线的 active Task。</p>
             <label>Task ID<input name="taskId" required placeholder="tsk_…" spellcheck="false"></label>
+            <label>当前 executionId<input name="executionId" required placeholder="exe_…" spellcheck="false"></label>
             <label>Task expectedRevision<input name="expectedRevision" type="number" min="1" required></label>
             <label>目标 Assignee Agent ID<input name="assigneeAgentId" required placeholder="agt_…" spellcheck="false"></label>
             <button class="button" type="submit">提交 task.retry</button>
@@ -517,6 +519,10 @@ const CONSOLE_JS = `(() => {
     byId('actor-label').textContent = '未连接'
   })
   byId('revoke-credential').addEventListener('click', () => {
+    if (state.actorKind !== 'agent') {
+      globalThis.alert('OIDC User 请使用退出登录或由身份提供方撤销 Token；此操作仅适用于当前 Agent 凭据。')
+      return
+    }
     if (!globalThis.confirm('确认撤销当前应用凭据？成功后该凭据立即失效。')) return
     void send(envelope('credential.revoke_current', true), 'user-get').then((result) => {
       if (!result.ok) return
@@ -551,10 +557,11 @@ const CONSOLE_JS = `(() => {
   }))
   bindCommand('[data-command="task-get"]', 'task', (form) => ({ ...envelope('task.get', false), taskId: value(form, 'taskId') }))
   bindCommand('[data-command="task-cancel"]', 'task', (form) => ({
-    ...envelope('task.transition', true), taskId: value(form, 'taskId'), expectedRevision: integerValue(form, 'expectedRevision'), status: 'cancelled'
+    ...envelope('task.transition', true), taskId: value(form, 'taskId'), executionId: value(form, 'executionId'),
+    expectedRevision: integerValue(form, 'expectedRevision'), status: 'cancelled'
   }))
   bindCommand('[data-command="task-retry"]', 'task', (form) => ({
-    ...envelope('task.retry', true), taskId: value(form, 'taskId'), expectedRevision: integerValue(form, 'expectedRevision'),
+    ...envelope('task.retry', true), taskId: value(form, 'taskId'), executionId: value(form, 'executionId'), expectedRevision: integerValue(form, 'expectedRevision'),
     assigneeAgentId: value(form, 'assigneeAgentId')
   }))
   bindCommand('[data-command="inbox-pull"]', 'inbox', (form) => ({

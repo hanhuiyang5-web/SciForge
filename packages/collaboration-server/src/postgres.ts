@@ -38,12 +38,22 @@ import type {
   StoredHumanRequest,
   StoredHumanAnswer,
   StoredManagedContainer,
-  StoredManagedContainerJob
+  StoredManagedContainerJob,
+  WorkerDirectoryEntryView
 } from './model.js'
 import type {
+  ActiveProjectMembershipCount,
   CollaborationReadRepository,
   CollaborationRepository,
-  CollaborationTransaction
+  CollaborationTransaction,
+  PortalProjectWakeWatermarks,
+  ProjectCoordinationMaterializationBytes,
+  ProjectCoordinationMaterializationCounts,
+  ProjectMemberRemovalBlockers,
+  ProjectSummaryPage,
+  ProjectSummaryPageQuery,
+  WorkerDirectoryPageQuery,
+  WorkerDirectoryRepositoryPage
 } from './repository.js'
 
 type SqlRow = Record<string, unknown>
@@ -158,6 +168,21 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     }
   }
 
+  async readSnapshot<T>(work: (repository: CollaborationReadRepository) => Promise<T>): Promise<T> {
+    const connection = await this.pool.connect()
+    try {
+      await connection.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      const result = await work(new PostgresReadRepository(connection))
+      await connection.query('COMMIT')
+      return result
+    } catch (error) {
+      await connection.query('ROLLBACK').catch(() => undefined)
+      throw translateDatabaseError(error)
+    } finally {
+      connection.release()
+    }
+  }
+
   async pruneExpired(now: string): Promise<{
     inboxMessages: number
     receipts: number
@@ -243,6 +268,9 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   getOidcIdentityByIssuerSubject(issuer: string, subject: string): Promise<StoredOidcIdentity | null> {
     return this.read().getOidcIdentityByIssuerSubject(issuer, subject)
   }
+  hasActiveOidcIdentityForUser(userId: string, issuer: string): Promise<boolean> {
+    return this.read().hasActiveOidcIdentityForUser(userId, issuer)
+  }
   getDeviceEnrollment(enrollmentId: string): Promise<StoredDeviceEnrollment | null> {
     return this.read().getDeviceEnrollment(enrollmentId)
   }
@@ -278,6 +306,10 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   getParticipant(userId: string): Promise<StoredParticipant | null> { return this.read().getParticipant(userId) }
   listEndpointsForUser(userId: string): Promise<StoredEndpoint[]> { return this.read().listEndpointsForUser(userId) }
   listAgentsForUser(userId: string): Promise<StoredAgent[]> { return this.read().listAgentsForUser(userId) }
+  listUsableOwnedAgentsBounded(userId: string, limit: number): Promise<StoredAgent[]> {
+    return this.read().listUsableOwnedAgentsBounded(userId, limit)
+  }
+  listAllAgents(): Promise<StoredAgent[]> { return this.read().listAllAgents() }
   listAgentsForDevice(deviceId: string): Promise<StoredAgent[]> { return this.read().listAgentsForDevice(deviceId) }
   getAgentCapabilityProfile(agentId: string): Promise<StoredAgentCapabilityProfile | null> {
     return this.read().getAgentCapabilityProfile(agentId)
@@ -313,6 +345,10 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().listHumanAnswersForProject(projectId)
   }
   getProject(projectId: string): Promise<StoredProject | null> { return this.read().getProject(projectId) }
+  listProjectsForUser(userId: string): Promise<StoredProject[]> { return this.read().listProjectsForUser(userId) }
+  listProjectSummaryPageForUser(input: ProjectSummaryPageQuery): Promise<ProjectSummaryPage> {
+    return this.read().listProjectSummaryPageForUser(input)
+  }
   listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]> {
     return this.read().listActiveProjectsForCoordinator(agentId)
   }
@@ -320,17 +356,79 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return this.read().getProjectMember(projectId, userId)
   }
   listProjectMembers(projectId: string): Promise<StoredProjectMember[]> { return this.read().listProjectMembers(projectId) }
+  listProjectMembersByUserIds(projectId: string, userIds: readonly string[]): Promise<StoredProjectMember[]> {
+    return this.read().listProjectMembersByUserIds(projectId, userIds)
+  }
+  listActiveProjectMembersBounded(projectId: string, limit: number): Promise<StoredProjectMember[]> {
+    return this.read().listActiveProjectMembersBounded(projectId, limit)
+  }
+  countActiveProjectMembers(projectId: string): Promise<number> {
+    return this.read().countActiveProjectMembers(projectId)
+  }
+  getProjectMemberRemovalBlockers(
+    projectId: string,
+    userIds: readonly string[],
+    now: string
+  ): Promise<ProjectMemberRemovalBlockers> {
+    return this.read().getProjectMemberRemovalBlockers(projectId, userIds, now)
+  }
+  listActiveProjectMemberViewsBounded(
+    projectId: string,
+    limit: number
+  ): Promise<Array<StoredProjectMember & { displayName: string }>> {
+    return this.read().listActiveProjectMemberViewsBounded(projectId, limit)
+  }
+  getProjectCoordinationMaterializationCounts(
+    projectId: string
+  ): Promise<ProjectCoordinationMaterializationCounts> {
+    return this.read().getProjectCoordinationMaterializationCounts(projectId)
+  }
+  getProjectCoordinationMaterializationBytes(
+    projectId: string
+  ): Promise<ProjectCoordinationMaterializationBytes> {
+    return this.read().getProjectCoordinationMaterializationBytes(projectId)
+  }
+  countProjectRecords(projectId: string): Promise<number> {
+    return this.read().countProjectRecords(projectId)
+  }
+  countProjectHumanRequests(projectId: string): Promise<number> {
+    return this.read().countProjectHumanRequests(projectId)
+  }
   countProjectTasks(projectId: string, round?: number): Promise<number> { return this.read().countProjectTasks(projectId, round) }
   countOpenProjectTasks(projectId: string): Promise<number> { return this.read().countOpenProjectTasks(projectId) }
   listOpenTasksForAgent(agentId: string): Promise<StoredTask[]> { return this.read().listOpenTasksForAgent(agentId) }
   getTask(taskId: string): Promise<StoredTask | null> { return this.read().getTask(taskId) }
   listProjectTasks(projectId: string): Promise<StoredTask[]> { return this.read().listProjectTasks(projectId) }
+  listProjectTasksBounded(projectId: string, afterTaskId: string | undefined, limit: number): Promise<StoredTask[]> {
+    return this.read().listProjectTasksBounded(projectId, afterTaskId, limit)
+  }
   getProjectRecord(id: string): Promise<StoredProjectRecord | null> { return this.read().getProjectRecord(id) }
   getTaskResultForExecution(taskId: string, executionId: string): Promise<StoredProjectRecord | null> {
     return this.read().getTaskResultForExecution(taskId, executionId)
   }
   listProjectRecords(projectId: string, acceptedOnly: boolean): Promise<StoredProjectRecord[]> {
     return this.read().listProjectRecords(projectId, acceptedOnly)
+  }
+  listProjectRecordsBounded(
+    projectId: string,
+    afterProjectRecordId: string | undefined,
+    limit: number
+  ): Promise<StoredProjectRecord[]> {
+    return this.read().listProjectRecordsBounded(projectId, afterProjectRecordId, limit)
+  }
+  listTargetHumanRequestsForProjectBounded(
+    projectId: string,
+    targetUserId: string,
+    afterHumanRequestId: string | undefined,
+    limit: number
+  ): Promise<StoredHumanRequest[]> {
+    return this.read().listTargetHumanRequestsForProjectBounded(projectId, targetUserId, afterHumanRequestId, limit)
+  }
+  getPortalProjectWakeWatermarks(projectId: string, targetUserId: string): Promise<PortalProjectWakeWatermarks> {
+    return this.read().getPortalProjectWakeWatermarks(projectId, targetUserId)
+  }
+  getWorkerDirectoryPage(input: WorkerDirectoryPageQuery): Promise<WorkerDirectoryRepositoryPage> {
+    return this.read().getWorkerDirectoryPage(input)
   }
   getResourceRef(id: string): Promise<StoredResourceRef | null> { return this.read().getResourceRef(id) }
   getCredential(id: string): Promise<StoredCredential | null> { return this.read().getCredential(id) }
@@ -470,6 +568,17 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapOidcIdentity(result.rows[0]) : null
   }
 
+  async hasActiveOidcIdentityForUser(userId: string, issuer: string): Promise<boolean> {
+    const result = await this.sql.query<{ present: unknown }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM sciforge_collaboration.oidc_identities
+         WHERE user_id=$1 AND issuer=$2 AND status='active'
+       ) AS present`,
+      [userId, issuer]
+    )
+    return result.rows[0]?.present === true
+  }
+
   async getDeviceEnrollment(enrollmentId: string): Promise<StoredDeviceEnrollment | null> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.device_enrollments WHERE enrollment_id=$1`,
@@ -590,6 +699,30 @@ class PostgresReadRepository implements CollaborationReadRepository {
 
   async listAgentsForUser(userId: string): Promise<StoredAgent[]> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.agent_nodes WHERE owner_user_id=$1 ORDER BY updated_at,agent_id`, [userId])
+    return result.rows.map(mapAgent)
+  }
+
+  async listUsableOwnedAgentsBounded(userId: string, limit: number): Promise<StoredAgent[]> {
+    const result = await this.sql.query(
+      `SELECT agent.*
+       FROM sciforge_collaboration.agent_nodes AS agent
+       INNER JOIN sciforge_collaboration.user_principals AS owner
+         ON owner.user_id=agent.owner_user_id AND owner.status='active'
+       INNER JOIN sciforge_collaboration.devices AS device
+         ON device.device_id=agent.device_id AND device.user_id=agent.owner_user_id AND device.status='active'
+       WHERE agent.owner_user_id=$1 AND agent.status='active'
+         AND agent.node_type IN ('desktop','server')
+       ORDER BY agent.agent_id
+       LIMIT $2`,
+      [userId, boundedReadLimit(limit)]
+    )
+    return result.rows.map(mapAgent)
+  }
+
+  async listAllAgents(): Promise<StoredAgent[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.agent_nodes ORDER BY owner_user_id,agent_id`
+    )
     return result.rows.map(mapAgent)
   }
 
@@ -721,6 +854,106 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows[0] ? mapProject(result.rows[0]) : null
   }
 
+  async listProjectsForUser(userId: string): Promise<StoredProject[]> {
+    const result = await this.sql.query(
+      `SELECT project.*
+       FROM sciforge_collaboration.projects AS project
+       INNER JOIN sciforge_collaboration.project_members AS member
+         ON member.project_id=project.project_id
+       WHERE member.user_id=$1 AND member.active=true
+       ORDER BY project.updated_at DESC,project.project_id`,
+      [userId]
+    )
+    return result.rows.map(mapProject)
+  }
+
+  async listProjectSummaryPageForUser(input: ProjectSummaryPageQuery): Promise<ProjectSummaryPage> {
+    const limit = boundedPageSize(input.limit)
+    const result = await this.sql.query(
+      `WITH project_page AS (
+         SELECT project.*,member.role AS portal_role
+         FROM sciforge_collaboration.projects AS project
+         INNER JOIN sciforge_collaboration.project_members AS member
+           ON member.project_id=project.project_id
+          AND member.user_id=$1
+          AND member.active=true
+         WHERE ($2::text[] IS NULL OR project.status=ANY($2::text[]))
+           AND ($3::timestamptz IS NULL OR project.updated_at < $3::timestamptz
+             OR (project.updated_at = $3::timestamptz AND project.project_id > $4))
+         ORDER BY project.updated_at DESC,project.project_id ASC
+         LIMIT $5
+       )
+       SELECT project_page.*,
+         member_counts.portal_member_count,
+         record_counts.portal_pending_result_count,
+         task_counts.portal_task_offered,task_counts.portal_task_accepted,
+         task_counts.portal_task_rejected,task_counts.portal_task_running,
+         task_counts.portal_task_needs_human,task_counts.portal_task_succeeded,
+         task_counts.portal_task_failed,task_counts.portal_task_cancelled
+       FROM project_page
+       CROSS JOIN LATERAL (
+         SELECT count(*) AS portal_member_count
+         FROM sciforge_collaboration.project_members AS project_member
+         WHERE project_member.project_id=project_page.project_id AND project_member.active=true
+       ) AS member_counts
+       CROSS JOIN LATERAL (
+         SELECT count(*) AS portal_pending_result_count
+         FROM sciforge_collaboration.project_records AS project_record
+         WHERE project_record.project_id=project_page.project_id
+           AND project_record.kind='task_result' AND project_record.status='candidate'
+       ) AS record_counts
+       CROSS JOIN LATERAL (
+         SELECT
+           count(*) FILTER (WHERE task.status='offered') AS portal_task_offered,
+           count(*) FILTER (WHERE task.status='accepted') AS portal_task_accepted,
+           count(*) FILTER (WHERE task.status='rejected') AS portal_task_rejected,
+           count(*) FILTER (WHERE task.status='in_progress') AS portal_task_running,
+           count(*) FILTER (WHERE task.status='needs_human') AS portal_task_needs_human,
+           count(*) FILTER (WHERE task.status='completed') AS portal_task_succeeded,
+           count(*) FILTER (WHERE task.status='failed') AS portal_task_failed,
+           count(*) FILTER (WHERE task.status='cancelled') AS portal_task_cancelled
+         FROM sciforge_collaboration.tasks AS task
+         WHERE task.project_id=project_page.project_id
+       ) AS task_counts
+       ORDER BY project_page.updated_at DESC,project_page.project_id ASC`,
+      [
+        input.userId,
+        input.statuses ?? null,
+        input.after?.updatedAt ?? null,
+        input.after?.projectId ?? null,
+        limit + 1
+      ]
+    )
+    const rows = result.rows.slice(0, limit)
+    return {
+      items: rows.map((row) => {
+        const project = mapProject(row)
+        return {
+          projectId: project.projectId,
+          displayName: project.displayName,
+          goal: project.goal,
+          status: project.status === 'failed' ? 'cancelled' : project.status,
+          role: string(row, 'portal_role') as StoredProjectMember['role'],
+          memberCount: number(row.portal_member_count),
+          taskCounts: {
+            offered: number(row.portal_task_offered),
+            accepted: number(row.portal_task_accepted),
+            rejected: number(row.portal_task_rejected),
+            running: number(row.portal_task_running),
+            needsHuman: number(row.portal_task_needs_human),
+            succeeded: number(row.portal_task_succeeded),
+            failed: number(row.portal_task_failed),
+            cancelled: number(row.portal_task_cancelled)
+          },
+          pendingResultCount: number(row.portal_pending_result_count),
+          revision: project.revision,
+          updatedAt: project.updatedAt
+        }
+      }),
+      hasMore: result.rows.length > limit
+    }
+  }
+
   async listActiveProjectsForCoordinator(agentId: string): Promise<StoredProject[]> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.projects
@@ -743,6 +976,207 @@ class PostgresReadRepository implements CollaborationReadRepository {
       [projectId]
     )
     return result.rows.map(mapMember)
+  }
+
+  async listProjectMembersByUserIds(projectId: string, userIds: readonly string[]): Promise<StoredProjectMember[]> {
+    if (userIds.length === 0) return []
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.project_members
+       WHERE project_id=$1 AND user_id=ANY($2::text[])
+       ORDER BY user_id`,
+      [projectId, [...userIds]]
+    )
+    return result.rows.map(mapMember)
+  }
+
+  async listActiveProjectMembersBounded(projectId: string, limit: number): Promise<StoredProjectMember[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.project_members
+       WHERE project_id=$1 AND active=true
+       ORDER BY user_id
+       LIMIT $2`,
+      [projectId, boundedReadLimit(limit)]
+    )
+    return result.rows.map(mapMember)
+  }
+
+  async countActiveProjectMembers(projectId: string): Promise<number> {
+    const result = await this.sql.query<{ count: unknown }>(
+      `SELECT count(*) AS count FROM sciforge_collaboration.project_members
+       WHERE project_id=$1 AND active=true`,
+      [projectId]
+    )
+    return number(result.rows[0]?.count)
+  }
+
+  async countProjectRecords(projectId: string): Promise<number> {
+    const result = await this.sql.query<{ count: unknown }>(
+      `SELECT count(*) AS count
+       FROM sciforge_collaboration.project_records
+       WHERE project_id=$1`,
+      [projectId]
+    )
+    return number(result.rows[0]?.count)
+  }
+
+  async countProjectHumanRequests(projectId: string): Promise<number> {
+    const result = await this.sql.query<{ count: unknown }>(
+      `SELECT count(*) AS count
+       FROM sciforge_collaboration.human_requests
+       WHERE project_id=$1`,
+      [projectId]
+    )
+    return number(result.rows[0]?.count)
+  }
+
+  async getProjectMemberRemovalBlockers(
+    projectId: string,
+    userIds: readonly string[],
+    now: string
+  ): Promise<ProjectMemberRemovalBlockers> {
+    if (userIds.length === 0) return { openTaskUserIds: [], pendingHumanRequestUserIds: [] }
+    const result = await this.sql.query<{ blocker_kind: unknown; user_id: unknown }>(
+      `WITH blockers AS (
+         SELECT DISTINCT 'open_task'::text AS blocker_kind,task.assignee_user_id AS user_id
+         FROM sciforge_collaboration.tasks AS task
+         WHERE task.project_id=$1
+           AND task.assignee_user_id=ANY($2::text[])
+           AND task.status IN ('offered','accepted','in_progress','needs_human')
+         UNION ALL
+         SELECT DISTINCT 'pending_human'::text AS blocker_kind,request.target_user_id AS user_id
+         FROM sciforge_collaboration.human_requests AS request
+         WHERE request.project_id=$1
+           AND request.target_user_id=ANY($2::text[])
+           AND request.status='pending'
+           AND request.expires_at>$3::timestamptz
+       )
+       SELECT blocker_kind,user_id FROM blockers ORDER BY blocker_kind,user_id`,
+      [projectId, [...userIds], now]
+    )
+    const openTaskUserIds: string[] = []
+    const pendingHumanRequestUserIds: string[] = []
+    for (const row of result.rows) {
+      const destination = string(row, 'blocker_kind') === 'open_task'
+        ? openTaskUserIds
+        : pendingHumanRequestUserIds
+      destination.push(string(row, 'user_id'))
+    }
+    return { openTaskUserIds, pendingHumanRequestUserIds }
+  }
+
+  async listActiveProjectMemberViewsBounded(
+    projectId: string,
+    limit: number
+  ): Promise<Array<StoredProjectMember & { displayName: string }>> {
+    const result = await this.sql.query(
+      `SELECT member.*,principal.display_name AS portal_display_name
+       FROM sciforge_collaboration.project_members AS member
+       INNER JOIN sciforge_collaboration.user_principals AS principal ON principal.user_id=member.user_id
+       WHERE member.project_id = $1 AND member.active=true
+       ORDER BY member.user_id
+       LIMIT $2`,
+      [projectId, boundedReadLimit(limit)]
+    )
+    return result.rows.map((row) => ({ ...mapMember(row), displayName: string(row, 'portal_display_name') }))
+  }
+
+  async getProjectCoordinationMaterializationCounts(
+    projectId: string
+  ): Promise<ProjectCoordinationMaterializationCounts> {
+    const result = await this.sql.query<{
+      active_member_rows: unknown
+      task_rows: unknown
+      record_rows: unknown
+      human_request_rows: unknown
+      human_answer_rows: unknown
+    }>(
+      `WITH active_member_count AS (
+         SELECT count(*)::text AS row_count
+         FROM sciforge_collaboration.project_members
+         WHERE project_id=$1 AND active=true
+       ), task_count AS (
+         SELECT count(*)::text AS row_count
+         FROM sciforge_collaboration.tasks WHERE project_id=$1
+       ), record_count AS (
+         SELECT count(*)::text AS row_count
+         FROM sciforge_collaboration.project_records WHERE project_id=$1
+       ), human_request_count AS (
+         SELECT count(*)::text AS row_count
+         FROM sciforge_collaboration.human_requests WHERE project_id=$1
+       ), human_answer_count AS (
+         SELECT count(*)::text AS row_count
+         FROM sciforge_collaboration.human_answers WHERE project_id=$1
+       )
+       SELECT
+         active_member_count.row_count AS active_member_rows,
+         task_count.row_count AS task_rows,
+         record_count.row_count AS record_rows,
+         human_request_count.row_count AS human_request_rows,
+         human_answer_count.row_count AS human_answer_rows
+       FROM active_member_count,task_count,record_count,human_request_count,human_answer_count`,
+      [projectId]
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error('Repository coordination materialization count preflight returned no row.')
+    return {
+      activeMembers: nonNegativeIntegerText(row.active_member_rows),
+      tasks: nonNegativeIntegerText(row.task_rows),
+      records: nonNegativeIntegerText(row.record_rows),
+      humanRequests: nonNegativeIntegerText(row.human_request_rows),
+      humanAnswers: nonNegativeIntegerText(row.human_answer_rows)
+    }
+  }
+
+  async getProjectCoordinationMaterializationBytes(
+    projectId: string
+  ): Promise<ProjectCoordinationMaterializationBytes> {
+    const result = await this.sql.query<{
+      active_member_bytes: unknown
+      task_bytes: unknown
+      record_bytes: unknown
+      human_request_bytes: unknown
+      human_answer_bytes: unknown
+    }>(
+      `WITH active_member_bytes AS (
+         SELECT COALESCE(sum(octet_length(to_jsonb(member_view)::text)),0)::text AS serialized_bytes
+         FROM (
+           SELECT member.*,principal.display_name AS portal_display_name
+           FROM sciforge_collaboration.project_members AS member
+           INNER JOIN sciforge_collaboration.user_principals AS principal
+             ON principal.user_id=member.user_id
+           WHERE member.project_id=$1 AND member.active=true
+         ) AS member_view
+       ), task_bytes AS (
+         SELECT COALESCE(sum(octet_length(to_jsonb(task_row)::text)),0)::text AS serialized_bytes
+         FROM sciforge_collaboration.tasks AS task_row WHERE task_row.project_id=$1
+       ), record_bytes AS (
+         SELECT COALESCE(sum(octet_length(to_jsonb(record_row)::text)),0)::text AS serialized_bytes
+         FROM sciforge_collaboration.project_records AS record_row WHERE record_row.project_id=$1
+       ), human_request_bytes AS (
+         SELECT COALESCE(sum(octet_length(to_jsonb(request_row)::text)),0)::text AS serialized_bytes
+         FROM sciforge_collaboration.human_requests AS request_row WHERE request_row.project_id=$1
+       ), human_answer_bytes AS (
+         SELECT COALESCE(sum(octet_length(to_jsonb(answer_row)::text)),0)::text AS serialized_bytes
+         FROM sciforge_collaboration.human_answers AS answer_row WHERE answer_row.project_id=$1
+       )
+       SELECT
+         active_member_bytes.serialized_bytes AS active_member_bytes,
+         task_bytes.serialized_bytes AS task_bytes,
+         record_bytes.serialized_bytes AS record_bytes,
+         human_request_bytes.serialized_bytes AS human_request_bytes,
+         human_answer_bytes.serialized_bytes AS human_answer_bytes
+       FROM active_member_bytes,task_bytes,record_bytes,human_request_bytes,human_answer_bytes`,
+      [projectId]
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error('Repository coordination materialization byte preflight returned no row.')
+    return {
+      activeMembers: nonNegativeIntegerText(row.active_member_bytes),
+      tasks: nonNegativeIntegerText(row.task_bytes),
+      records: nonNegativeIntegerText(row.record_bytes),
+      humanRequests: nonNegativeIntegerText(row.human_request_bytes),
+      humanAnswers: nonNegativeIntegerText(row.human_answer_bytes)
+    }
   }
 
   async countProjectTasks(projectId: string, coordinationRound?: number): Promise<number> {
@@ -788,6 +1222,21 @@ class PostgresReadRepository implements CollaborationReadRepository {
     return result.rows.map(mapTask)
   }
 
+  async listProjectTasksBounded(
+    projectId: string,
+    afterTaskId: string | undefined,
+    limit: number
+  ): Promise<StoredTask[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.tasks
+       WHERE project_id=$1 AND ($2::text IS NULL OR task_id > $2)
+       ORDER BY task_id
+       LIMIT $3`,
+      [projectId, afterTaskId ?? null, boundedReadLimit(limit)]
+    )
+    return result.rows.map(mapTask)
+  }
+
   async getProjectRecord(projectRecordId: string): Promise<StoredProjectRecord | null> {
     const result = await this.sql.query(`SELECT * FROM sciforge_collaboration.project_records WHERE project_record_id = $1`, [projectRecordId])
     return result.rows[0] ? mapRecord(result.rows[0]) : null
@@ -814,6 +1263,158 @@ class PostgresReadRepository implements CollaborationReadRepository {
       [projectId, acceptedOnly]
     )
     return result.rows.map(mapRecord)
+  }
+
+  async listProjectRecordsBounded(
+    projectId: string,
+    afterProjectRecordId: string | undefined,
+    limit: number
+  ): Promise<StoredProjectRecord[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.project_records
+       WHERE project_id=$1 AND ($2::text IS NULL OR project_record_id > $2)
+       ORDER BY project_record_id
+       LIMIT $3`,
+      [projectId, afterProjectRecordId ?? null, boundedReadLimit(limit)]
+    )
+    return result.rows.map(mapRecord)
+  }
+
+  async listTargetHumanRequestsForProjectBounded(
+    projectId: string,
+    targetUserId: string,
+    afterHumanRequestId: string | undefined,
+    limit: number
+  ): Promise<StoredHumanRequest[]> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.human_requests
+       WHERE project_id=$1 AND target_user_id=$2
+         AND ($3::text IS NULL OR human_request_id > $3)
+       ORDER BY human_request_id
+       LIMIT $4`,
+      [projectId, targetUserId, afterHumanRequestId ?? null, boundedReadLimit(limit)]
+    )
+    return result.rows.map(mapHumanRequest)
+  }
+
+  async getPortalProjectWakeWatermarks(
+    projectId: string,
+    targetUserId: string
+  ): Promise<PortalProjectWakeWatermarks> {
+    const result = await this.sql.query<{
+      task_count: unknown
+      task_revision_sum: unknown
+      record_count: unknown
+      record_revision_sum: unknown
+      human_request_count: unknown
+      human_request_revision_sum: unknown
+    }>(
+      `WITH task_watermark AS (
+         SELECT count(*)::text AS task_count,
+           COALESCE(sum(revision),0)::text AS task_revision_sum
+         FROM sciforge_collaboration.tasks
+         WHERE project_id=$1
+       ), record_watermark AS (
+         SELECT count(*)::text AS record_count,
+           COALESCE(sum(revision),0)::text AS record_revision_sum
+         FROM sciforge_collaboration.project_records
+         WHERE project_id=$1
+       ), human_watermark AS (
+         SELECT count(*)::text AS human_request_count,
+           COALESCE(sum(revision),0)::text AS human_request_revision_sum
+         FROM sciforge_collaboration.human_requests
+         WHERE project_id=$1 AND target_user_id=$2
+       )
+       SELECT * FROM task_watermark
+       CROSS JOIN record_watermark
+       CROSS JOIN human_watermark`,
+      [projectId, targetUserId]
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error('Portal Project watermark query returned no row.')
+    return {
+      taskCount: nonNegativeIntegerText(row.task_count),
+      taskRevisionSum: nonNegativeIntegerText(row.task_revision_sum),
+      recordCount: nonNegativeIntegerText(row.record_count),
+      recordRevisionSum: nonNegativeIntegerText(row.record_revision_sum),
+      humanRequestCount: nonNegativeIntegerText(row.human_request_count),
+      humanRequestRevisionSum: nonNegativeIntegerText(row.human_request_revision_sum)
+    }
+  }
+
+  async getWorkerDirectoryPage(input: WorkerDirectoryPageQuery): Promise<WorkerDirectoryRepositoryPage> {
+    const limit = boundedPageSize(input.limit)
+    const eligibility = `
+      FROM sciforge_collaboration.agent_nodes AS agent
+      INNER JOIN sciforge_collaboration.user_principals AS owner
+        ON owner.user_id=agent.owner_user_id AND owner.status='active'
+      INNER JOIN sciforge_collaboration.devices AS device
+        ON device.device_id=agent.device_id AND device.user_id=agent.owner_user_id AND device.status='active'
+      INNER JOIN sciforge_collaboration.agent_capability_profiles AS profile
+        ON profile.agent_id=agent.agent_id AND profile.owner_user_id=agent.owner_user_id
+      WHERE agent.status='active'
+        AND agent.node_type IN ('desktop','server')
+        AND agent.last_seen_at IS NOT NULL
+        AND profile.expires_at > $2::timestamptz
+        AND EXISTS (
+          SELECT 1 FROM sciforge_collaboration.oidc_identities AS identity
+          WHERE identity.user_id=agent.owner_user_id AND identity.issuer=$1 AND identity.status='active'
+        )`
+    const statsResult = await this.sql.query(
+      `WITH eligible AS (
+         SELECT agent.node_type,
+           (agent.connection_status='online'
+             AND agent.last_seen_at >= $2::timestamptz - interval '60 seconds'
+             AND agent.last_seen_at <= $2::timestamptz + interval '60 seconds') AS portal_online,
+           EXISTS (
+             SELECT 1 FROM sciforge_collaboration.tasks AS task
+             WHERE task.assignee_agent_id=agent.agent_id
+               AND task.status IN ('accepted','in_progress','needs_human')
+           ) AS portal_busy
+         ${eligibility}
+       )
+       SELECT count(*) AS total,
+         count(*) FILTER (WHERE portal_online AND NOT portal_busy) AS online,
+         count(*) FILTER (WHERE portal_online AND portal_busy) AS busy,
+         count(*) FILTER (WHERE NOT portal_online) AS offline,
+         count(*) FILTER (WHERE node_type='desktop') AS desktop,
+         count(*) FILTER (WHERE node_type='server') AS server
+       FROM eligible`,
+      [input.issuer, input.readAt]
+    )
+    const pageResult = await this.sql.query(
+      `SELECT agent.owner_user_id,agent.agent_id,agent.display_name,agent.node_type,
+         profile.os_family,profile.os_architecture,profile.runtime_ids,profile.capabilities,profile.gpu,
+         agent.last_seen_at,profile.expires_at AS profile_expires_at,agent.revision,
+         CASE WHEN agent.connection_status='online'
+               AND agent.last_seen_at >= $2::timestamptz - interval '60 seconds'
+               AND agent.last_seen_at <= $2::timestamptz + interval '60 seconds'
+           THEN CASE WHEN EXISTS (
+             SELECT 1 FROM sciforge_collaboration.tasks AS task
+             WHERE task.assignee_agent_id=agent.agent_id
+               AND task.status IN ('accepted','in_progress','needs_human')
+           ) THEN 'busy' ELSE 'online' END
+           ELSE 'offline'
+         END AS portal_status
+       ${eligibility}
+         AND ($3::text IS NULL OR agent.agent_id > $3)
+       ORDER BY agent.agent_id ASC
+       LIMIT $4`,
+      [input.issuer, input.readAt, input.afterAgentId ?? null, limit + 1]
+    )
+    const statsRow = statsResult.rows[0] ?? {}
+    return {
+      stats: {
+        total: number(statsRow.total),
+        online: number(statsRow.online),
+        busy: number(statsRow.busy),
+        offline: number(statsRow.offline),
+        desktop: number(statsRow.desktop),
+        server: number(statsRow.server)
+      },
+      items: pageResult.rows.slice(0, limit).map(mapWorkerDirectoryEntry),
+      hasMore: pageResult.rows.length > limit
+    }
   }
 
   async getResourceRef(resourceRefId: string): Promise<StoredResourceRef | null> {
@@ -928,6 +1529,34 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     for (const key of keys) {
       await this.sql.query(`SELECT pg_advisory_xact_lock($1::bigint)`, [key])
     }
+  }
+
+  async lockProjectMembershipUsers(userIds: readonly string[]): Promise<void> {
+    for (const userId of [...new Set(userIds)].sort(compareStableStrings)) {
+      await this.sql.query(
+        `SELECT pg_advisory_xact_lock($1::bigint)`,
+        [advisoryLockKey(['project-membership-user', userId])]
+      )
+    }
+  }
+
+  async countActiveProjectMembershipsByUserIds(
+    userIds: readonly string[]
+  ): Promise<ActiveProjectMembershipCount[]> {
+    const stableUserIds = [...new Set(userIds)].sort(compareStableStrings)
+    if (stableUserIds.length === 0) return []
+    const result = await this.sql.query<{ user_id: unknown; count: unknown }>(
+      `SELECT user_id,count(*) AS count
+       FROM sciforge_collaboration.project_members
+       WHERE active=true AND user_id=ANY($1::text[])
+       GROUP BY user_id
+       ORDER BY user_id`,
+      [stableUserIds]
+    )
+    return result.rows.map((row) => ({
+      userId: string(row, 'user_id'),
+      count: number(row.count)
+    }))
   }
 
   async getUserForUpdate(userId: string): Promise<StoredUser | null> {
@@ -1604,6 +2233,25 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     )
   }
 
+  async expireHumanRequestIfPending(
+    humanRequestId: string,
+    targetUserId: string,
+    expectedRevision: number,
+    expiredAt: string
+  ): Promise<boolean> {
+    const result = await this.sql.query(
+      `UPDATE sciforge_collaboration.human_requests
+       SET status='expired',revision=revision+1,updated_at=$4
+       WHERE human_request_id=$1
+         AND target_user_id=$2
+         AND revision=$3
+         AND status='pending'
+         AND expires_at<=$4`,
+      [humanRequestId, targetUserId, expectedRevision, expiredAt]
+    )
+    return result.rowCount === 1
+  }
+
   async updateHumanRequest(request: StoredHumanRequest, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.human_requests SET status=$2,revision=$3,updated_at=$4
@@ -1684,6 +2332,16 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     expectRevision(result.rowCount)
   }
 
+  async upsertProjectMember(member: StoredProjectMember): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.project_members(project_id,user_id,role,active,created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (project_id,user_id) DO UPDATE
+       SET role=EXCLUDED.role,active=EXCLUDED.active`,
+      [member.projectId, member.userId, member.role, member.active, member.createdAt]
+    )
+  }
+
   async insertTask(task: StoredTask): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.tasks
@@ -1737,7 +2395,7 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
         accepted_by_agent_id,accepted_at,revision,created_at,updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$16,$17,$18,$19)`,
       [record.projectRecordId, record.projectId, record.kind, record.status, record.summary,
-        record.authorUserId ?? null, record.authorAgentId ?? null, record.sourceTaskId ?? null,
+        record.authorUserId, record.authorAgentId ?? null, record.sourceTaskId ?? null,
         record.sourceExecutionId ?? null, record.sourceRevision ?? null, JSON.stringify(record.criterionEvidence),
         JSON.stringify(record.resourceRefIds), record.logSummary ?? null, record.acceptedByUserId ?? null,
         record.acceptedByAgentId ?? null, record.acceptedAt ?? null, record.revision, record.createdAt,
@@ -1791,6 +2449,31 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
         resource.revision, resource.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
+  }
+
+  async supersedeExpiredInboxMessages(
+    recipient: InboxRecipient,
+    expiredAt: string
+  ): Promise<StoredInboxCursor | null> {
+    const locked = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.inbox_cursors
+       WHERE recipient_kind=$1 AND recipient_id=$2
+       FOR UPDATE`,
+      [recipient.kind, recipient.id]
+    )
+    if (!locked.rows[0]) return null
+    const cursor = mapCursor(locked.rows[0])
+    await this.sql.query(
+      `UPDATE sciforge_collaboration.inbox_messages
+       SET disposition='superseded',superseded_at=$4
+       WHERE recipient_kind=$1
+         AND recipient_id=$2
+         AND sequence>$3
+         AND disposition='active'
+         AND expires_at<=$4`,
+      [recipient.kind, recipient.id, cursor.ackedSequence, expiredAt]
+    )
+    return cursor
   }
 
   async supersedeCoordinatorInbox(
@@ -1946,6 +2629,10 @@ function advisoryLockKey(parts: readonly string[]): string {
   return createHash('sha256').update(JSON.stringify(parts), 'utf8').digest().readBigInt64BE(0).toString()
 }
 
+function compareStableStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 function compareSignedIntegerStrings(left: string, right: string): number {
   const leftValue = BigInt(left)
   const rightValue = BigInt(right)
@@ -2072,6 +2759,23 @@ const IDENTITY_VALIDATION_CONSTRAINTS = new Set([
 function string(row: SqlRow, key: string): string { return String(row[key]) }
 function optionalString(row: SqlRow, key: string): string | undefined { return row[key] == null ? undefined : String(row[key]) }
 function number(value: unknown): number { return Number(value ?? 0) }
+function boundedReadLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 10_001) {
+    throw new Error('Repository bounded-read limit is invalid.')
+  }
+  return value
+}
+function boundedPageSize(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 50) {
+    throw new Error('Repository page size is invalid.')
+  }
+  return value
+}
+function nonNegativeIntegerText(value: unknown): string {
+  const text = String(value ?? '')
+  if (!/^\d+$/u.test(text)) throw new Error('Repository watermark is not a non-negative integer.')
+  return text
+}
 function iso(value: unknown): string { return value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString() }
 function optionalIso(value: unknown): string | undefined { return value == null ? undefined : iso(value) }
 function digest(value: unknown): string { return Buffer.isBuffer(value) ? value.toString('hex') : String(value) }
@@ -2177,6 +2881,32 @@ function mapAgentCapabilityProfile(row: SqlRow): StoredAgentCapabilityProfile {
     updatedAt: iso(row.updated_at)
   }
 }
+function mapWorkerDirectoryEntry(row: SqlRow): WorkerDirectoryEntryView {
+  const capabilities = jsonArray(row.capabilities) as StoredAgentCapabilityProfile['capabilities']
+  const gpu = jsonArray(row.gpu) as StoredAgentCapabilityProfile['gpu']
+  return {
+    ownerUserId: string(row, 'owner_user_id'),
+    agentId: string(row, 'agent_id'),
+    displayName: string(row, 'display_name'),
+    nodeType: string(row, 'node_type') as WorkerDirectoryEntryView['nodeType'],
+    os: {
+      family: string(row, 'os_family') as WorkerDirectoryEntryView['os']['family'],
+      architecture: string(row, 'os_architecture') as WorkerDirectoryEntryView['os']['architecture']
+    },
+    runtimeIds: [...new Set(jsonStrings(row.runtime_ids))].sort((left, right) => left.localeCompare(right)),
+    capabilityIds: [...new Set(capabilities.map((capability) => capability.capabilityId))]
+      .sort((left, right) => left.localeCompare(right)),
+    gpu: gpu.map((entry) => ({
+      ...(entry.vendor ? { vendor: entry.vendor } : {}),
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.memoryGB !== undefined ? { memoryGB: entry.memoryGB } : {})
+    })),
+    status: string(row, 'portal_status') as WorkerDirectoryEntryView['status'],
+    lastSeenAt: iso(row.last_seen_at),
+    profileExpiresAt: iso(row.profile_expires_at),
+    revision: number(row.revision)
+  }
+}
 function mapCredential(row: SqlRow): StoredCredential {
   return { credentialId: string(row, 'credential_id'), kind: string(row, 'kind') as StoredCredential['kind'],
     subjectUserId: string(row, 'subject_user_id'), subjectAgentId: optionalString(row, 'subject_agent_id'), tokenDigest: digest(row.token_digest),
@@ -2220,7 +2950,7 @@ function mapTask(row: SqlRow): StoredTask {
 function mapRecord(row: SqlRow): StoredProjectRecord {
   return { projectRecordId: string(row, 'project_record_id'), projectId: string(row, 'project_id'),
     kind: string(row, 'kind') as StoredProjectRecord['kind'], status: string(row, 'status') as StoredProjectRecord['status'],
-    summary: string(row, 'summary'), authorUserId: optionalString(row, 'author_user_id'), authorAgentId: optionalString(row, 'author_agent_id'),
+    summary: string(row, 'summary'), authorUserId: string(row, 'author_user_id'), authorAgentId: optionalString(row, 'author_agent_id'),
     sourceTaskId: optionalString(row, 'source_task_id'), sourceExecutionId: optionalString(row, 'source_execution_id'),
     sourceRevision: row.source_revision == null ? undefined : number(row.source_revision),
     criterionEvidence: jsonArray(row.criterion_evidence) as StoredProjectRecord['criterionEvidence'],

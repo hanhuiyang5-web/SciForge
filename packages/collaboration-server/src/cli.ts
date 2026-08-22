@@ -7,6 +7,7 @@ import {
   FileProviderSecretReader,
   loadProviderConfiguration
 } from './provider-runtime.js'
+import { PortalAssetStore } from './portal-assets.js'
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   process.stdout.write([
@@ -54,13 +55,17 @@ const oidcAudience = process.env.SCIFORGE_COLLABORATION_OIDC_AUDIENCE?.trim() ||
 if (oidcAudience !== 'sciforge-cloud-api') {
   throw new Error('SCIFORGE_COLLABORATION_OIDC_AUDIENCE must equal sciforge-cloud-api.')
 }
+const portalEnabled = booleanEnvironment('SCIFORGE_COLLABORATION_PORTAL_ENABLED', false)
+const requiredAuthorizedParties = ['sciforge-desktop', 'sciforge-web-mobile']
 const oidcAuthorizedParties = optionalCsvEnvironment('SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES') ??
-  ['sciforge-desktop', 'sciforge-web-mobile']
-if (oidcAuthorizedParties.length !== 2 ||
+  requiredAuthorizedParties
+if (oidcAuthorizedParties.length !== requiredAuthorizedParties.length ||
     !oidcAuthorizedParties.includes('sciforge-desktop') ||
     !oidcAuthorizedParties.includes('sciforge-web-mobile')) {
-  throw new Error('OIDC authorized parties must be exactly sciforge-desktop,sciforge-web-mobile.')
+  throw new Error(`OIDC authorized parties must be exactly ${requiredAuthorizedParties.join(',')}.`)
 }
+
+const portal = portalEnabled ? await loadPortalConfiguration(oidcIssuer) : undefined
 
 const runtime = createCollaborationServerRuntime({
   pool,
@@ -74,6 +79,7 @@ const runtime = createCollaborationServerRuntime({
       allowedAuthorizedParties: oidcAuthorizedParties,
       allowInsecureLoopback: booleanEnvironment('SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK', false)
     } } : {}),
+  ...(portal ? { portal } : {}),
   ...(providerConfiguration && providerSecretReader
     ? { providerRuntimeFactory: ({ repository, service, authentication }) => createInstalledProviderRuntime({
         pool, repository, service, authentication,
@@ -128,4 +134,44 @@ function booleanEnvironment(name: string, fallback: boolean): boolean {
   if (value === 'true') return true
   if (value === 'false') return false
   throw new Error(`Invalid boolean environment variable ${name}.`)
+}
+
+async function loadPortalConfiguration(oidcIssuer: string | undefined) {
+  const exactIssuer = 'https://login-test.sciforge.cn/realms/SciForge'
+  const publicOrigin = requiredEnvironment('SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN')
+  const clientId = requiredEnvironment('SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID')
+  const redirectUri = requiredEnvironment('SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI')
+  if (oidcIssuer !== exactIssuer || publicOrigin !== 'https://cloud-test.sciforge.cn' ||
+      clientId !== 'sciforge-cloud-console' ||
+      redirectUri !== 'https://cloud-test.sciforge.cn/portal/auth/callback') {
+    throw new Error('Portal is restricted to the fixed a-https-oidc-test identity and HTTPS profile.')
+  }
+  if (!booleanEnvironment('SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED', false)) {
+    throw new Error('Portal requires the fixed test-only Worker directory gate.')
+  }
+  const assetDirectory = requiredEnvironment('SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR')
+  return {
+    assets: await PortalAssetStore.load(assetDirectory),
+    publicOrigin,
+    clientId,
+    clientSecret: requiredSecretEnvironment('SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET'),
+    redirectUri,
+    testWorkerDirectoryEnabled: true
+  }
+}
+
+function requiredSecretEnvironment(name: string): string {
+  const value = process.env[name]
+  if (!value || value.length < 32 || value.length > 4_096 || hasAsciiControl(value)) {
+    throw new Error(`Missing or invalid secret environment variable ${name}.`)
+  }
+  return value
+}
+
+function hasAsciiControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
 }

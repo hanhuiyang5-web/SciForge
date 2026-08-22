@@ -17,6 +17,7 @@ import type {
   ProviderLocatorValue,
   ProjectBudgets,
   ProjectCapabilityDirectoryView,
+  ProjectListPageView,
   ProjectRecordKind,
   StoredActionConfirmation,
   StoredAgent,
@@ -43,12 +44,17 @@ import type {
   StoredConfirmableAction,
   StoredWorkerRequirement,
   StoredAuthorizationRequirement,
-  TaskStatus
+  TaskStatus,
+  WorkerDirectoryPageView,
+  OwnedAgentListView
 } from './model.js'
 import type {
   CollaborationReadRepository,
   CollaborationRepository,
-  CollaborationTransaction
+  CollaborationTransaction,
+  PortalProjectWakeWatermarks,
+  ProjectCoordinationMaterializationBytes,
+  ProjectCoordinationMaterializationCounts
 } from './repository.js'
 
 export type InboxAvailabilityNotifier = {
@@ -62,6 +68,7 @@ export type CollaborationServiceOptions = {
   pairingTtlMs?: number
   inboxRetentionMs?: number
   receiptRetentionMs?: number
+  testWorkerDirectoryEnabled?: boolean
 }
 
 type CommandResult<T extends Record<string, unknown>> = {
@@ -91,6 +98,51 @@ const DEFAULT_BUDGETS: ProjectBudgets = {
   maxCoordinationRounds: 20
 }
 
+export const MAX_ACTIVE_PROJECT_MEMBERSHIPS_PER_USER = 1_000
+export const MAX_PROJECT_RECORDS_PER_PROJECT = 50_000
+export const MAX_HUMAN_REQUESTS_PER_PROJECT = 10_000
+
+// The canonical Desktop coordination response intentionally remains a full snapshot.
+// Keep its worst-case application-heap footprint small relative to the 768 MiB
+// production container: a 4 MiB serialized ceiling plus conservative per-row and
+// fixed overhead leaves ample room for PostgreSQL decoding, domain objects, contract
+// projection, and concurrent requests. Canonical Desktop reads fail closed above this
+// ceiling; User-facing inspection remains available through the independently paged Portal view.
+export const MAX_PROJECT_COORDINATION_MATERIALIZED_BYTES = 4 * 1024 * 1024
+export const MAX_PROJECT_COORDINATION_MATERIALIZED_ROWS = 8_000
+const PROJECT_COORDINATION_MATERIALIZATION_ROW_OVERHEAD_BYTES = 512
+const PROJECT_COORDINATION_MATERIALIZATION_FIXED_OVERHEAD_BYTES = 64 * 1024
+const MAX_PROJECT_COORDINATION_TASKS = 10_000
+
+// Portal collection pages fetch one extra row to produce independent stable cursors,
+// so a 10k-task/50k-record canonical Project is never materialized in the application
+// heap. Active membership is protected separately by the canonical 1000-member invariant.
+const PORTAL_COORDINATION_LIMITS = Object.freeze({
+  activeMembers: 1_000
+})
+const PORTAL_COORDINATION_PAGE_DEFAULTS = Object.freeze({
+  tasks: 50,
+  records: 50,
+  humanRequests: 25
+})
+const PORTAL_COORDINATION_PAGE_MAXIMUMS = Object.freeze({
+  tasks: 100,
+  records: 100,
+  humanRequests: 50
+})
+
+function portalTaskVersion(watermarks: PortalProjectWakeWatermarks): string {
+  return `tasks:${watermarks.taskCount}:${watermarks.taskRevisionSum}`
+}
+
+function portalRecordVersion(watermarks: PortalProjectWakeWatermarks): string {
+  return `records:${watermarks.recordCount}:${watermarks.recordRevisionSum}`
+}
+
+function portalHumanVersion(watermarks: PortalProjectWakeWatermarks): string {
+  return `human:${watermarks.humanRequestCount}:${watermarks.humanRequestRevisionSum}`
+}
+
 const COORDINATOR_HUMAN_SOURCE_MESSAGE_TYPES = new Set([
   'project.started',
   'project.input.received',
@@ -117,6 +169,7 @@ export class CollaborationService {
   private readonly now: () => Date
   private readonly inboxRetentionMs: number
   private readonly receiptRetentionMs: number
+  private readonly testWorkerDirectoryEnabled: boolean
 
   constructor(options: CollaborationServiceOptions) {
     this.repository = options.repository
@@ -124,6 +177,7 @@ export class CollaborationService {
     this.now = options.now ?? (() => new Date())
     this.inboxRetentionMs = bounded(options.inboxRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
     this.receiptRetentionMs = bounded(options.receiptRetentionMs ?? 30 * 86_400_000, 86_400_000, 90 * 86_400_000)
+    this.testWorkerDirectoryEnabled = options.testWorkerDirectoryEnabled === true
   }
 
   async beginPairing(input: {
@@ -1140,6 +1194,9 @@ export class CollaborationService {
       if (!member?.active) fail('permission_denied', 'HumanNeeded target must be an active Project member.')
       if (project.status !== 'active') fail('invalid_state_transition', 'HumanNeeded requires an active Project.')
       if (new Date(input.expiresAt).getTime() <= new Date(at).getTime()) fail('request_expired', 'HumanNeeded expiry must be in the future.')
+      if (await tx.countProjectHumanRequests(project.projectId) >= MAX_HUMAN_REQUESTS_PER_PROJECT) {
+        fail('validation_failed', 'A Project may have at most 10000 HumanNeeded requests.')
+      }
       const source = input.source
       let task: StoredTask | undefined
       if (source.kind === 'worker') {
@@ -1245,14 +1302,30 @@ export class CollaborationService {
   }): Promise<StoredHumanAnswer> {
     assertText(input.answer, 'answer', 1, 32_000)
     const commandAt = this.timestamp()
-    // Expiry is authoritative state, not a rejected-answer side effect. Persist it
-    // before the business transaction so request_expired cannot roll it back.
-    await this.repository.pruneExpired(commandAt)
+    const initialRequest = required(
+      await this.repository.getHumanRequest(input.humanRequestId),
+      'HumanNeeded request'
+    )
+    authorize({ actor, operation: 'human_answer', targetUserId: initialRequest.targetUserId,
+      requiredAssurance: initialRequest.requiredAssurance })
+    if (initialRequest.status === 'pending' && initialRequest.expiresAt <= commandAt) {
+      // Expiry is authoritative state, not a rejected-answer side effect. Scope the
+      // durable transition to the already-authorized request before the rejected
+      // command audit transaction so it cannot be rolled back with that rejection.
+      await this.repository.transaction((tx) => tx.expireHumanRequestIfPending(
+        initialRequest.humanRequestId,
+        initialRequest.targetUserId,
+        initialRequest.revision,
+        commandAt
+      ))
+    }
+    // The explicit atOverride freezes every main-transaction expiry check at
+    // command admission, even if lock acquisition crosses the wall-clock expiry.
     return this.commit(actor, 'human.answer', input.idempotencyKey, input, async (tx, at) => {
-      const initialRequest = required(await tx.getHumanRequest(input.humanRequestId), 'HumanNeeded request')
-      const project = required(await tx.getProjectForUpdate(initialRequest.projectId), 'Project')
-      authorize({ actor, operation: 'human_answer', targetUserId: initialRequest.targetUserId,
-        requiredAssurance: initialRequest.requiredAssurance })
+      const currentRequest = required(await tx.getHumanRequest(input.humanRequestId), 'HumanNeeded request')
+      const project = required(await tx.getProjectForUpdate(currentRequest.projectId), 'Project')
+      authorize({ actor, operation: 'human_answer', targetUserId: currentRequest.targetUserId,
+        requiredAssurance: currentRequest.requiredAssurance })
       if (input.sourceLocator) {
         const [endpoint, binding] = await Promise.all([
           tx.getEndpoint(actor.humanEndpointId),
@@ -1261,11 +1334,11 @@ export class CollaborationService {
         ])
         if (!endpoint || endpoint.status !== 'active' || endpoint.userId !== actor.userId ||
             endpoint.provider !== input.sourceLocator.provider || endpoint.realmId !== input.sourceLocator.realmId ||
-            !binding || binding.status !== 'active' || binding.projectId !== initialRequest.projectId) {
+            !binding || binding.status !== 'active' || binding.projectId !== currentRequest.projectId) {
           fail('not_found', 'The provider answer does not originate from the active Project endpoint binding.')
         }
       }
-      if (initialRequest.status !== 'pending' || initialRequest.expiresAt <= at) {
+      if (currentRequest.status !== 'pending' || currentRequest.expiresAt <= at) {
         fail('request_expired', 'The HumanNeeded request is no longer current.')
       }
       const request = required(await tx.getHumanRequestForUpdate(input.humanRequestId), 'HumanNeeded request')
@@ -1330,8 +1403,11 @@ export class CollaborationService {
     return this.commit(actor, 'project.create', input.idempotencyKey, { ...input, memberUserIds, budgets }, async (tx, at) => {
       for (const userId of memberUserIds) {
         const user = required(await tx.getUser(userId), 'Project member')
-        if (user.status !== 'active') fail('credential_revoked', 'Every Project member must be active.')
+        if (user.status !== 'active' || !await tx.hasActiveOidcIdentityForUser(userId, actor.issuer)) {
+          fail('permission_denied', 'Every Project member must be an active User from the same OIDC issuer.')
+        }
       }
+      await assertActiveProjectMembershipCapacity(tx, memberUserIds)
       const coordinatorRoute = await prepareAgentRouteLocks(tx, [{
         agentId: input.coordinatorAgentId,
         label: 'Coordinator Agent',
@@ -1703,6 +1779,9 @@ export class CollaborationService {
       if (input.status === 'failed' && !input.safeFailureCode) fail('validation_failed', 'Failed tasks require a safe failure code.')
       let resultRecord: StoredProjectRecord | undefined
       if (input.status === 'completed' && result) {
+        if (await tx.countProjectRecords(project.projectId) >= MAX_PROJECT_RECORDS_PER_PROJECT) {
+          fail('validation_failed', 'A Project may have at most 50000 records.')
+        }
         const validCriterionIds = new Set(task.completionCriteria.map((criterion) => criterion.criterionId))
         const citedResources = new Set(result.resourceRefIds)
         for (const evidence of result.criterionEvidence) {
@@ -2048,6 +2127,9 @@ export class CollaborationService {
         return { response: entityResponse('project_record.created', existing), resourceKind: 'project_record',
           resourceId: existing.projectRecordId }
       }
+      if (await tx.countProjectRecords(project.projectId) >= MAX_PROJECT_RECORDS_PER_PROJECT) {
+        fail('validation_failed', 'A Project may have at most 50000 records.')
+      }
       const resourceRefIds = [...new Set(input.resourceRefIds ?? [])]
       if (resourceRefIds.length > 1_000) fail('validation_failed', 'ProjectRecord ResourceRef list is too large.')
       for (const resourceRefId of resourceRefIds) {
@@ -2321,20 +2403,208 @@ export class CollaborationService {
     }).then(responseEntity<StoredResourceRef>)
   }
 
+  async listProjects(actor: UserActor, input: {
+    statuses?: Array<'draft' | 'active' | 'paused' | 'completed' | 'cancelled'>
+    cursor?: string
+    limit: number
+  }): Promise<ProjectListPageView> {
+    assertPageLimit(input.limit)
+    return this.repository.readSnapshot(async (repository) => {
+      const page = await repository.listProjectSummaryPageForUser({
+        userId: actor.userId,
+        ...(input.statuses ? { statuses: [...new Set(input.statuses.flatMap((status) => (
+          status === 'cancelled' ? ['cancelled', 'failed'] as const : [status]
+        )))] } : {}),
+        ...(input.cursor ? { after: decodeProjectPageCursor(input.cursor) } : {}),
+        limit: input.limit
+      })
+      const last = page.items.at(-1)
+      return {
+        items: page.items,
+        ...(page.hasMore && last
+          ? { nextCursor: encodePageCursor('projects', `${last.updatedAt}\u001f${last.projectId}`) }
+          : {})
+      }
+    })
+  }
+
+  async listOwnedAgents(actor: UserActor): Promise<OwnedAgentListView> {
+    return this.repository.readSnapshot(async (repository) => {
+      const agents = await repository.listUsableOwnedAgentsBounded(actor.userId, 101)
+      const items = agents
+        .slice(0, 100)
+        .map((agent) => ({
+          agentId: agent.agentId,
+          displayName: agent.displayName,
+          nodeType: agent.nodeType as 'desktop' | 'server',
+          connectionStatus: agent.connectionStatus,
+          ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),
+          revision: agent.revision
+        }))
+      return { items }
+    })
+  }
+
+  async getWorkerDirectoryPage(actor: UserActor, input: {
+    cursor?: string
+    limit: number
+  }): Promise<WorkerDirectoryPageView> {
+    if (!this.testWorkerDirectoryEnabled) {
+      fail('not_found', 'The test Worker directory is not enabled in this environment.')
+    }
+    assertPageLimit(input.limit)
+    const readAt = this.timestamp()
+    return this.repository.readSnapshot(async (repository) => {
+      const currentIdentity = await repository.getOidcIdentity(actor.identityId)
+      if (!currentIdentity || currentIdentity.status !== 'active' || currentIdentity.userId !== actor.userId ||
+          currentIdentity.issuer !== actor.issuer || currentIdentity.subject !== actor.subject) {
+        fail('credential_revoked', 'The OIDC identity is no longer eligible for the test Worker directory.')
+      }
+      const page = await repository.getWorkerDirectoryPage({
+        issuer: actor.issuer,
+        readAt,
+        ...(input.cursor ? { afterAgentId: decodePageCursor(input.cursor, 'workers') } : {}),
+        limit: input.limit
+      })
+      const last = page.items.at(-1)
+      return {
+        stats: page.stats,
+        items: page.items,
+        ...(page.hasMore && last ? { nextCursor: encodePageCursor('workers', last.agentId) } : {}),
+        readAt
+      }
+    })
+  }
+
+  async updateProjectMembers(actor: UserActor, input: {
+    projectId: string
+    expectedRevision: number
+    addMemberUserIds: string[]
+    removeMemberUserIds: string[]
+    idempotencyKey: string
+  }): Promise<StoredProject> {
+    return this.commit(actor, 'project.members.update', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      const ownerMembership = await tx.getProjectMember(project.projectId, actor.userId)
+      authorize({ actor, operation: 'project_admin', projectRole: ownerMembership?.role })
+      expectRevision(project.revision, input.expectedRevision)
+      if (project.status !== 'active' && project.status !== 'paused') {
+        fail('invalid_state_transition', 'Membership can change only while a Project is active or paused.')
+      }
+      const additions = [...new Set(input.addMemberUserIds)].sort(compareStable)
+      const removals = [...new Set(input.removeMemberUserIds)].sort(compareStable)
+      if (additions.length + removals.length === 0 || additions.some((userId) => removals.includes(userId))) {
+        fail('validation_failed', 'Project membership additions and removals must be non-empty and disjoint.')
+      }
+      const targetUserIds = [...new Set([...additions, ...removals])].sort(compareStable)
+      const [coordinator, memberRows, activeMemberCount] = await Promise.all([
+        tx.getAgent(project.coordinatorAgentId),
+        tx.listProjectMembersByUserIds(project.projectId, targetUserIds),
+        tx.countActiveProjectMembers(project.projectId)
+      ])
+      const requiredCoordinator = required(coordinator, 'Coordinator Agent')
+      const memberMap = new Map(memberRows.map((member) => [member.userId, member]))
+      for (const userId of additions) {
+        const user = required(await tx.getUser(userId), 'Added Project member')
+        if (user.status !== 'active' || !await tx.hasActiveOidcIdentityForUser(userId, actor.issuer)) {
+          fail('permission_denied', 'An added Project member must be an active User from the same OIDC issuer.')
+        }
+        if (memberMap.get(userId)?.active) {
+          fail('invalid_state_transition', 'The added User is already an active Project member.')
+        }
+      }
+      await assertActiveProjectMembershipCapacity(tx, additions)
+      for (const userId of removals) {
+        const member = memberMap.get(userId)
+        if (!member?.active) fail('not_found', 'The removed User is not an active Project member.')
+        if (userId === project.ownerUserId) {
+          fail('invalid_state_transition', 'The Project owner cannot be removed.')
+        }
+        if (userId === requiredCoordinator.ownerUserId) {
+          fail('invalid_state_transition', 'The current Coordinator owner cannot be removed.')
+        }
+      }
+      if (activeMemberCount + additions.length - removals.length > 1_000) {
+        fail('validation_failed', 'A Project may have at most 1000 active members.')
+      }
+      const blockers = removals.length > 0
+        ? await tx.getProjectMemberRemovalBlockers(project.projectId, removals, at)
+        : { openTaskUserIds: [], pendingHumanRequestUserIds: [] }
+      const openTaskUsers = new Set(blockers.openTaskUserIds)
+      const pendingHumanRequestUsers = new Set(blockers.pendingHumanRequestUserIds)
+      for (const userId of removals) {
+        if (openTaskUsers.has(userId)) {
+          fail('invalid_state_transition', 'A member with an open Task cannot be removed.')
+        }
+        if (pendingHumanRequestUsers.has(userId)) {
+          fail('invalid_state_transition', 'A member with pending HumanNeeded work cannot be removed.')
+        }
+      }
+      for (const userId of additions) {
+        const existing = memberMap.get(userId)
+        await tx.upsertProjectMember({
+          projectId: project.projectId,
+          userId,
+          role: existing?.role ?? 'member',
+          active: true,
+          createdAt: existing?.createdAt ?? at
+        })
+      }
+      for (const userId of removals) {
+        const existing = memberMap.get(userId)!
+        await tx.upsertProjectMember({ ...existing, active: false })
+      }
+      const updated: StoredProject = {
+        ...project,
+        revision: project.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateProject(updated, project.revision)
+      const notificationPayload = {
+        protocolVersion: '1.0' as const,
+        type: 'project.members.updated' as const,
+        projectId: project.projectId,
+        revision: updated.revision,
+        addedUserIds: additions,
+        removedUserIds: removals
+      }
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const affectedUsers = new Set([
+        project.ownerUserId,
+        requiredCoordinator.ownerUserId,
+        ...additions,
+        ...removals
+      ])
+      for (const userId of [...affectedUsers].sort(compareStable)) {
+        const message = await this.appendInbox(tx, { kind: 'user', id: userId },
+          'project.members.updated', notificationPayload, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+      const coordinatorMessage = await this.appendInbox(tx, { kind: 'agent', id: requiredCoordinator.agentId },
+        'project.members.updated', notificationPayload, at)
+      notifications.push({ recipient: coordinatorMessage.recipient, sequence: coordinatorMessage.sequence })
+      return {
+        response: entityResponse('project.updated', updated),
+        resourceKind: 'project',
+        resourceId: project.projectId,
+        notifications
+      }
+    }).then(responseEntity<StoredProject>)
+  }
+
   async getProject(actor: AuthContext, projectId: string): Promise<{
     project: StoredProject
     members: StoredProjectMember[]
-    records: StoredProjectRecord[]
   }> {
     if (actor.kind === 'system') fail('permission_denied', 'System context is not an interactive Project member.')
     const project = required(await this.repository.getProject(projectId), 'Project')
     const member = await this.repository.getProjectMember(projectId, actor.userId)
     authorize({ actor, operation: 'project_read', projectMember: Boolean(member?.active) })
-    const [members, records] = await Promise.all([
-      this.repository.listProjectMembers(projectId),
-      this.repository.listProjectRecords(projectId, true)
-    ])
-    return { project, members, records }
+    const members = await this.repository.listActiveProjectMembersBounded(projectId, 1_001)
+    if (members.length > 1_000) {
+      fail('internal_error', 'The Project active-member invariant was violated.')
+    }
+    return { project, members }
   }
 
   async getProjectCoordinationView(actor: UserActor | AgentActor, projectId: string): Promise<{
@@ -2347,36 +2617,177 @@ export class CollaborationService {
     readAt: string
   }> {
     const readAt = this.timestamp()
-    await this.repository.pruneExpired(readAt)
-    return this.repository.transaction(async (tx) => {
-      const actorMember = await tx.getProjectMember(projectId, actor.userId)
+    return this.repository.readSnapshot(async (repository) => {
+      const actorMember = await repository.getProjectMember(projectId, actor.userId)
       authorize({ actor, operation: 'project_read', projectMember: Boolean(actorMember?.active) })
-      const project = required(await tx.getProjectForUpdate(projectId), 'Project')
+      const project = required(await repository.getProject(projectId), 'Project')
       if (actor.kind === 'agent_device' && actor.agentId !== project.coordinatorAgentId) {
         fail('coordinator_mismatch', 'Only the current Coordinator Agent may use an Agent credential for the coordination view.')
       }
       if (actor.kind === 'user' && actorMember?.role !== 'owner') {
         fail('permission_denied', 'Only the Project owner User or current Coordinator Agent may read the coordination view.')
       }
-      const memberRows = await tx.listProjectMembers(projectId)
-      const members = await Promise.all(memberRows.filter((member) => member.active).map(async (member) => ({
-        ...member,
-        displayName: required(await tx.getUser(member.userId), 'Project member').displayName
-      })))
+      const materializationCounts = await repository.getProjectCoordinationMaterializationCounts(projectId)
+      const materializationRows = assertProjectCoordinationMaterializationCounts(materializationCounts)
+      const materializationBytes = await repository.getProjectCoordinationMaterializationBytes(projectId)
+      assertProjectCoordinationMaterializationBytes(project, materializationRows, materializationBytes)
+      const members = await repository.listActiveProjectMemberViewsBounded(projectId, 1_001)
+      if (members.length > 1_000) {
+        fail('internal_error', 'The Project active-member invariant was violated.')
+      }
       const [tasks, records, humanRequests, humanAnswers] = await Promise.all([
-        tx.listProjectTasks(projectId),
-        tx.listProjectRecords(projectId, false),
-        tx.listHumanRequestsForProject(projectId),
-        tx.listHumanAnswersForProject(projectId)
+        repository.listProjectTasks(projectId),
+        repository.listProjectRecords(projectId, false),
+        repository.listHumanRequestsForProject(projectId),
+        repository.listHumanAnswersForProject(projectId)
       ])
-      return {
+      const view = {
         project,
         members: members.sort((left, right) => compareStable(left.userId, right.userId)),
         tasks: tasks.sort((left, right) => compareStable(left.taskId, right.taskId)),
         records: records.sort((left, right) => compareStable(left.projectRecordId, right.projectRecordId)),
-        humanRequests: humanRequests.sort((left, right) => compareStable(left.humanRequestId, right.humanRequestId)),
+        humanRequests: humanRequests
+          .map((request) => (
+            request.status === 'pending' && !isTimestampAfter(request.expiresAt, readAt)
+              ? { ...request, status: 'expired' as const }
+              : request
+          ))
+          .sort((left, right) => compareStable(left.humanRequestId, right.humanRequestId)),
         humanAnswers: humanAnswers.sort((left, right) => compareStable(left.humanAnswerId, right.humanAnswerId)),
         readAt
+      }
+      assertProjectCoordinationMaterializedBytes(view)
+      return view
+    })
+  }
+
+  async getPortalProjectCoordinationView(actor: UserActor, projectId: string, input: {
+    tasksCursor?: string
+    recordsCursor?: string
+    humanCursor?: string
+    tasksLimit?: number
+    recordsLimit?: number
+    humanLimit?: number
+  } = {}): Promise<{
+    project: StoredProject
+    members: Array<StoredProjectMember & { displayName: string }>
+    tasks: StoredTask[]
+    records: StoredProjectRecord[]
+    humanRequests: StoredHumanRequest[]
+    pagination: {
+      tasks: { limit: number; version: string; nextCursor?: string }
+      records: { limit: number; version: string; nextCursor?: string }
+      humanRequests: { limit: number; version: string; nextCursor?: string }
+    }
+    readAt: string
+  }> {
+    const readAt = this.timestamp()
+    const tasksLimit = integer(input.tasksLimit ?? PORTAL_COORDINATION_PAGE_DEFAULTS.tasks,
+      'tasksLimit', 1, PORTAL_COORDINATION_PAGE_MAXIMUMS.tasks)
+    const recordsLimit = integer(input.recordsLimit ?? PORTAL_COORDINATION_PAGE_DEFAULTS.records,
+      'recordsLimit', 1, PORTAL_COORDINATION_PAGE_MAXIMUMS.records)
+    const humanLimit = integer(input.humanLimit ?? PORTAL_COORDINATION_PAGE_DEFAULTS.humanRequests,
+      'humanLimit', 1, PORTAL_COORDINATION_PAGE_MAXIMUMS.humanRequests)
+    const afterTaskId = input.tasksCursor
+      ? decodeCoordinationPageCursor(input.tasksCursor, 'coordination.tasks', projectId, 'tsk_')
+      : undefined
+    const afterProjectRecordId = input.recordsCursor
+      ? decodeCoordinationPageCursor(input.recordsCursor, 'coordination.records', projectId, 'rec_')
+      : undefined
+    const afterHumanRequestId = input.humanCursor
+      ? decodeCoordinationPageCursor(input.humanCursor, 'coordination.human', projectId, 'hrq_')
+      : undefined
+    return this.repository.readSnapshot(async (repository) => {
+      const actorMember = await repository.getProjectMember(projectId, actor.userId)
+      authorize({ actor, operation: 'project_read', projectMember: Boolean(actorMember?.active) })
+      const project = required(await repository.getProject(projectId), 'Project')
+      if (actorMember?.role !== 'owner') {
+        fail('permission_denied', 'Only the Project owner User may read the Portal coordination view.')
+      }
+      const [memberRows, tasks, records, humanRequests, watermarks] = await Promise.all([
+        repository.listActiveProjectMemberViewsBounded(projectId, PORTAL_COORDINATION_LIMITS.activeMembers + 1),
+        repository.listProjectTasksBounded(projectId, afterTaskId, tasksLimit + 1),
+        repository.listProjectRecordsBounded(projectId, afterProjectRecordId, recordsLimit + 1),
+        repository.listTargetHumanRequestsForProjectBounded(
+          projectId,
+          actor.userId,
+          afterHumanRequestId,
+          humanLimit + 1
+        ),
+        repository.getPortalProjectWakeWatermarks(projectId, actor.userId)
+      ])
+      assertPortalCoordinationBound('active members', memberRows, PORTAL_COORDINATION_LIMITS.activeMembers)
+      const taskPage = tasks.slice(0, tasksLimit)
+      const recordPage = records.slice(0, recordsLimit)
+      const humanRequestPage = humanRequests.slice(0, humanLimit)
+      const projectedHumanRequests = humanRequestPage.map((request) => (
+        request.status === 'pending' && !isTimestampAfter(request.expiresAt, readAt)
+          ? { ...request, status: 'expired' as const }
+          : request
+      ))
+      return {
+        project,
+        members: memberRows,
+        tasks: taskPage,
+        records: recordPage,
+        humanRequests: projectedHumanRequests.sort((left, right) => compareStable(left.humanRequestId, right.humanRequestId)),
+        pagination: {
+          tasks: {
+            limit: tasksLimit,
+            version: portalTaskVersion(watermarks),
+            ...(tasks.length > tasksLimit && taskPage.length > 0
+              ? { nextCursor: encodeCoordinationPageCursor(
+                  'coordination.tasks', projectId, taskPage.at(-1)!.taskId
+                ) }
+              : {})
+          },
+          records: {
+            limit: recordsLimit,
+            version: portalRecordVersion(watermarks),
+            ...(records.length > recordsLimit && recordPage.length > 0
+              ? { nextCursor: encodeCoordinationPageCursor(
+                  'coordination.records', projectId, recordPage.at(-1)!.projectRecordId
+                ) }
+              : {})
+          },
+          humanRequests: {
+            limit: humanLimit,
+            version: portalHumanVersion(watermarks),
+            ...(humanRequests.length > humanLimit && humanRequestPage.length > 0
+              ? { nextCursor: encodeCoordinationPageCursor(
+                  'coordination.human', projectId, humanRequestPage.at(-1)!.humanRequestId
+                ) }
+              : {})
+          }
+        },
+        readAt
+      }
+    })
+  }
+
+  async getPortalProjectWakeSnapshot(actor: UserActor, projectId: string): Promise<{
+    projectId: string
+    projectRevision: number
+    projectVersion: string
+    taskVersion: string
+    recordVersion: string
+    humanVersion: string
+  }> {
+    return this.repository.readSnapshot(async (repository) => {
+      const actorMember = await repository.getProjectMember(projectId, actor.userId)
+      authorize({ actor, operation: 'project_read', projectMember: Boolean(actorMember?.active) })
+      const project = required(await repository.getProject(projectId), 'Project')
+      if (actorMember?.role !== 'owner') {
+        fail('permission_denied', 'Only the Project owner User may subscribe to Portal Project events.')
+      }
+      const watermarks = await repository.getPortalProjectWakeWatermarks(projectId, actor.userId)
+      return {
+        projectId,
+        projectRevision: project.revision,
+        projectVersion: `project:${project.revision}`,
+        taskVersion: portalTaskVersion(watermarks),
+        recordVersion: portalRecordVersion(watermarks),
+        humanVersion: portalHumanVersion(watermarks)
       }
     })
   }
@@ -2385,7 +2796,7 @@ export class CollaborationService {
     actor: UserActor | AgentActor,
     confirmationId: string
   ): Promise<StoredActionConfirmation> {
-    await this.repository.pruneExpired(this.timestamp())
+    const readAt = this.timestamp()
     const confirmation = required(
       await this.repository.getActionConfirmation(confirmationId),
       'Action confirmation'
@@ -2395,6 +2806,9 @@ export class CollaborationService {
       : actor.agentId === confirmation.coordinatorAgentId
     if (!mayRead) {
       fail('permission_denied', 'The action confirmation belongs to another Project actor.')
+    }
+    if (confirmation.status === 'approved' && confirmation.expiresAt <= readAt) {
+      return { ...confirmation, status: 'superseded' }
     }
     return confirmation
   }
@@ -2469,50 +2883,55 @@ export class CollaborationService {
     actor: UserActor | AgentActor,
     projectId: string
   ): Promise<ProjectCapabilityDirectoryView> {
-    const actorMember = await this.repository.getProjectMember(projectId, actor.userId)
-    authorize({ actor, operation: 'project_read', projectMember: Boolean(actorMember?.active) })
-    const project = required(await this.repository.getProject(projectId), 'Project')
-    if (project.status !== 'active') {
-      fail('invalid_state_transition', 'Capability directory is available only for an active Project.')
-    }
-    const members = (await this.repository.listProjectMembers(projectId)).filter((member) => member.active)
     const now = this.timestamp()
-    const agents = (await Promise.all(members.map(async (member) => {
-      const user = await this.repository.getUser(member.userId)
-      if (!user || user.status !== 'active') return []
-      return (await Promise.all((await this.repository.listAgentsForUser(member.userId))
-        .filter((agent): agent is StoredAgent & { lastSeenAt: string } => (
-          agent.status === 'active' && agent.lastSeenAt !== undefined
-        ))
-        .map(async (agent) => ({ agent, usable: await isUsableAgent(this.repository, agent, user),
-          profile: await this.repository.getAgentCapabilityProfile(agent.agentId),
-          busy: (await this.repository.listOpenTasksForAgent(agent.agentId))
-            .some((task) => ['accepted', 'in_progress', 'needs_human'].includes(task.status)) }))))
-        .filter((entry): entry is {
-          agent: StoredAgent & { lastSeenAt: string }
-          usable: boolean
-          profile: StoredAgentCapabilityProfile
-          busy: boolean
-        } => (
-          entry.usable && entry.profile !== null && entry.profile.expiresAt > now &&
-          entry.profile.ownerUserId === entry.agent.ownerUserId
-        ))
-    }))).flat()
-      .sort((left, right) => left.agent.ownerUserId === right.agent.ownerUserId
-        ? compareStable(left.agent.agentId, right.agent.agentId)
-        : compareStable(left.agent.ownerUserId, right.agent.ownerUserId))
-      .map(({ agent, profile, busy }): ProjectCapabilityDirectoryView['agents'][number] => ({
-        agentId: agent.agentId,
-        ownerUserId: agent.ownerUserId,
-        displayName: agent.displayName,
-        nodeType: agent.nodeType,
-        capabilities: profile.capabilities.map((capability) => capability.capabilityId).sort(compareStable),
-        status: agent.connectionStatus === 'offline' ? 'offline' : busy ? 'busy' : 'online',
-        lastSeenAt: agent.lastSeenAt,
-        profile,
-        revision: agent.revision
-      }))
-    return { projectId: project.projectId, projectRevision: project.revision, agents }
+    return this.repository.readSnapshot(async (repository) => {
+      const actorMember = await repository.getProjectMember(projectId, actor.userId)
+      authorize({ actor, operation: 'project_read', projectMember: Boolean(actorMember?.active) })
+      const project = required(await repository.getProject(projectId), 'Project')
+      if (project.status !== 'active') {
+        fail('invalid_state_transition', 'Capability directory is available only for an active Project.')
+      }
+      const members = await repository.listActiveProjectMembersBounded(projectId, 1_001)
+      if (members.length > 1_000) {
+        fail('internal_error', 'The Project active-member invariant was violated.')
+      }
+      const agents = (await Promise.all(members.map(async (member) => {
+        const user = await repository.getUser(member.userId)
+        if (!user || user.status !== 'active') return []
+        return (await Promise.all((await repository.listAgentsForUser(member.userId))
+          .filter((agent): agent is StoredAgent & { lastSeenAt: string } => (
+            agent.status === 'active' && agent.lastSeenAt !== undefined
+          ))
+          .map(async (agent) => ({ agent, usable: await isUsableAgent(repository, agent, user),
+            profile: await repository.getAgentCapabilityProfile(agent.agentId),
+            busy: (await repository.listOpenTasksForAgent(agent.agentId))
+              .some((task) => ['accepted', 'in_progress', 'needs_human'].includes(task.status)) }))))
+          .filter((entry): entry is {
+            agent: StoredAgent & { lastSeenAt: string }
+            usable: boolean
+            profile: StoredAgentCapabilityProfile
+            busy: boolean
+          } => (
+            entry.usable && entry.profile !== null && isTimestampAfter(entry.profile.expiresAt, now) &&
+            entry.profile.ownerUserId === entry.agent.ownerUserId
+          ))
+      }))).flat()
+        .sort((left, right) => left.agent.ownerUserId === right.agent.ownerUserId
+          ? compareStable(left.agent.agentId, right.agent.agentId)
+          : compareStable(left.agent.ownerUserId, right.agent.ownerUserId))
+        .map(({ agent, profile, busy }): ProjectCapabilityDirectoryView['agents'][number] => ({
+          agentId: agent.agentId,
+          ownerUserId: agent.ownerUserId,
+          displayName: agent.displayName,
+          nodeType: agent.nodeType,
+          capabilities: profile.capabilities.map((capability) => capability.capabilityId).sort(compareStable),
+          status: deriveWorkerPresence(agent, busy, now),
+          lastSeenAt: agent.lastSeenAt,
+          profile,
+          revision: agent.revision
+        }))
+      return { projectId: project.projectId, projectRevision: project.revision, agents }
+    })
   }
 
   async pullInbox(actor: AuthContext, input: { afterSequence: number; limit: number }): Promise<{
@@ -2525,14 +2944,14 @@ export class CollaborationService {
     const limit = integer(input.limit, 'limit', 1, 1_000)
     const readAt = this.timestamp()
     // Expired, unacknowledged messages remain sequence-preserving tombstones.
-    // Materialize them before the read so a consumer never observes an
-    // invisible active gap that it cannot safely acknowledge.
-    await this.repository.pruneExpired(readAt)
-    const [messages, cursor] = await Promise.all([
-      this.repository.pullInbox(recipient, afterSequence, limit, readAt),
-      this.repository.getInboxCursor(recipient)
-    ])
-    return { messages, ackedSequence: cursor?.ackedSequence ?? 0, nextSequence: cursor?.nextSequence ?? 1 }
+    // Lock this recipient's cursor first, then materialize only its tombstones
+    // and read the page in one short transaction so cursor and page agree.
+    return this.repository.transaction(async (tx) => {
+      const cursor = await tx.supersedeExpiredInboxMessages(recipient, readAt)
+      if (!cursor) return { messages: [], ackedSequence: 0, nextSequence: 1 }
+      const messages = await tx.pullInbox(recipient, afterSequence, limit, readAt)
+      return { messages, ackedSequence: cursor.ackedSequence, nextSequence: cursor.nextSequence }
+    })
   }
 
   async ackInbox(actor: AuthContext, input: { throughSequence: number; idempotencyKey: string }): Promise<{
@@ -3070,6 +3489,161 @@ function contractTaskStatus(status: TaskStatus):
   return status
 }
 
+const WORKER_PRESENCE_LEASE_MS = 60_000
+
+function deriveWorkerPresence(
+  agent: Pick<StoredAgent, 'connectionStatus' | 'lastSeenAt'>,
+  busy: boolean,
+  at: string
+): 'online' | 'busy' | 'offline' {
+  const lastSeen = agent.lastSeenAt ? new Date(agent.lastSeenAt).getTime() : Number.NaN
+  const now = new Date(at).getTime()
+  const online = agent.connectionStatus === 'online' && Number.isFinite(lastSeen) && Number.isFinite(now) &&
+    now - lastSeen <= WORKER_PRESENCE_LEASE_MS && lastSeen <= now + 60_000
+  return online ? (busy ? 'busy' : 'online') : 'offline'
+}
+
+function isTimestampAfter(value: string, boundary: string): boolean {
+  const timestamp = new Date(value).getTime()
+  const boundaryTimestamp = new Date(boundary).getTime()
+  return Number.isFinite(timestamp) && Number.isFinite(boundaryTimestamp) && timestamp > boundaryTimestamp
+}
+
+function assertPageLimit(limit: number): void {
+  integer(limit, 'limit', 1, 50)
+}
+
+function assertPortalCoordinationBound(label: string, values: readonly unknown[], maximum: number): void {
+  if (values.length > maximum) {
+    fail('payload_too_large', `The Portal coordination ${label} exceed the fixed bounded view.`)
+  }
+}
+
+function assertProjectCoordinationMaterializationCounts(
+  counts: ProjectCoordinationMaterializationCounts
+): bigint {
+  const metrics = [
+    ['activeMembers', counts.activeMembers, 1_000],
+    ['tasks', counts.tasks, MAX_PROJECT_COORDINATION_TASKS],
+    ['records', counts.records, MAX_PROJECT_RECORDS_PER_PROJECT],
+    ['humanRequests', counts.humanRequests, MAX_HUMAN_REQUESTS_PER_PROJECT],
+    ['humanAnswers', counts.humanAnswers, MAX_HUMAN_REQUESTS_PER_PROJECT]
+  ] as const
+  let rowCount = 0n
+  for (const [label, count, maximumRows] of metrics) {
+    const collectionRows = projectCoordinationPreflightInteger(count, `${label}.rowCount`)
+    if (collectionRows > BigInt(maximumRows)) failProjectCoordinationMaterializationLimit()
+    rowCount += collectionRows
+  }
+  if (rowCount > BigInt(MAX_PROJECT_COORDINATION_MATERIALIZED_ROWS)) {
+    failProjectCoordinationMaterializationLimit()
+  }
+  return rowCount
+}
+
+function assertProjectCoordinationMaterializationBytes(
+  project: StoredProject,
+  rowCount: bigint,
+  bytes: ProjectCoordinationMaterializationBytes
+): void {
+  const metrics = [
+    ['activeMembers', bytes.activeMembers],
+    ['tasks', bytes.tasks],
+    ['records', bytes.records],
+    ['humanRequests', bytes.humanRequests],
+    ['humanAnswers', bytes.humanAnswers]
+  ] as const
+  let serializedBytes = 0n
+  for (const [label, value] of metrics) {
+    serializedBytes += projectCoordinationPreflightInteger(value, `${label}.serializedBytes`)
+  }
+  const projectBytes = BigInt(Buffer.byteLength(JSON.stringify(project), 'utf8'))
+  const conservativeBytes = serializedBytes +
+    rowCount * BigInt(PROJECT_COORDINATION_MATERIALIZATION_ROW_OVERHEAD_BYTES) +
+    projectBytes + BigInt(PROJECT_COORDINATION_MATERIALIZATION_FIXED_OVERHEAD_BYTES)
+  if (conservativeBytes > BigInt(MAX_PROJECT_COORDINATION_MATERIALIZED_BYTES)) {
+    failProjectCoordinationMaterializationLimit()
+  }
+}
+
+function assertProjectCoordinationMaterializedBytes(view: unknown): void {
+  const bytes = Buffer.byteLength(JSON.stringify(view), 'utf8')
+  if (bytes > MAX_PROJECT_COORDINATION_MATERIALIZED_BYTES) {
+    failProjectCoordinationMaterializationLimit()
+  }
+}
+
+function projectCoordinationPreflightInteger(value: string, label: string): bigint {
+  if (!/^(0|[1-9]\d*)$/u.test(value)) {
+    fail('internal_error', `The Project coordination preflight ${label} is invalid.`)
+  }
+  return BigInt(value)
+}
+
+function failProjectCoordinationMaterializationLimit(): never {
+  fail('payload_too_large', 'The Project coordination view exceeds the fixed materialization limit.')
+}
+
+function encodePageCursor(scope: string, key: string): string {
+  return `p1.${Buffer.from(`${scope}\u0000${key}`, 'utf8').toString('base64url')}`
+}
+
+function decodePageCursor(cursor: string, scope: string): string {
+  const match = /^p1\.([A-Za-z0-9_-]{1,2048})$/u.exec(cursor)
+  if (!match) fail('validation_failed', 'The page cursor is malformed.')
+  let decoded: string
+  try {
+    decoded = Buffer.from(match[1]!, 'base64url').toString('utf8')
+  } catch {
+    fail('validation_failed', 'The page cursor is malformed.')
+  }
+  const prefix = `${scope}\u0000`
+  if (!decoded!.startsWith(prefix) || decoded!.length <= prefix.length || decoded!.length > prefix.length + 512 ||
+      encodePageCursor(scope, decoded!.slice(prefix.length)) !== cursor) {
+    fail('validation_failed', 'The page cursor does not belong to this directory.')
+  }
+  return decoded!.slice(prefix.length)
+}
+
+function decodeProjectPageCursor(cursor: string): { updatedAt: string; projectId: string } {
+  const key = decodePageCursor(cursor, 'projects')
+  const separator = key.indexOf('\u001f')
+  if (separator < 1 || separator !== key.lastIndexOf('\u001f') || separator >= key.length - 1) {
+    fail('validation_failed', 'The Project page cursor is malformed.')
+  }
+  const updatedAt = key.slice(0, separator)
+  const projectId = key.slice(separator + 1)
+  const timestamp = new Date(updatedAt)
+  if (!Number.isFinite(timestamp.getTime()) || timestamp.toISOString() !== updatedAt ||
+      !/^prj_[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
+    fail('validation_failed', 'The Project page cursor is malformed.')
+  }
+  return { updatedAt, projectId }
+}
+
+function encodeCoordinationPageCursor(scope: string, projectId: string, entityId: string): string {
+  return encodePageCursor(scope, `${projectId}\u001f${entityId}`)
+}
+
+function decodeCoordinationPageCursor(
+  cursor: string,
+  scope: string,
+  projectId: string,
+  entityPrefix: 'tsk_' | 'rec_' | 'hrq_'
+): string {
+  const key = decodePageCursor(cursor, scope)
+  const separator = key.indexOf('\u001f')
+  if (separator < 1 || separator !== key.lastIndexOf('\u001f') || separator >= key.length - 1 ||
+      key.slice(0, separator) !== projectId) {
+    fail('validation_failed', 'The coordination page cursor does not belong to this Project.')
+  }
+  const entityId = key.slice(separator + 1)
+  if (!entityId.startsWith(entityPrefix) || !/^[A-Za-z0-9_-]{12,160}$/u.test(entityId)) {
+    fail('validation_failed', 'The coordination page cursor is malformed.')
+  }
+  return entityId
+}
+
 async function lockProviderLocator(tx: CollaborationTransaction, locator: ProviderLocatorValue): Promise<void> {
   await tx.lockIdempotency('provider-locator', stableDigest({
     provider: locator.provider,
@@ -3152,6 +3726,29 @@ function assertCapabilityRequirements(
 
 function compareStable(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
+}
+
+async function assertActiveProjectMembershipCapacity(
+  tx: CollaborationTransaction,
+  userIds: readonly string[]
+): Promise<void> {
+  const stableUserIds = [...new Set(userIds)].sort(compareStable)
+  if (stableUserIds.length === 0) return
+  await tx.lockProjectMembershipUsers(stableUserIds)
+  const countRows = await tx.countActiveProjectMembershipsByUserIds(stableUserIds)
+  const counts = new Map<string, number>()
+  for (const row of countRows) {
+    if (!stableUserIds.includes(row.userId) || !Number.isSafeInteger(row.count) || row.count < 0 ||
+        counts.has(row.userId)) {
+      fail('internal_error', 'The active Project membership count invariant could not be verified.')
+    }
+    counts.set(row.userId, row.count)
+  }
+  if (stableUserIds.some((userId) => (
+    (counts.get(userId) ?? 0) >= MAX_ACTIVE_PROJECT_MEMBERSHIPS_PER_USER
+  ))) {
+    fail('validation_failed', 'A User may belong to at most 1000 active Projects.')
+  }
 }
 
 function clearTaskAttemptOutputs(task: StoredTask): StoredTask {

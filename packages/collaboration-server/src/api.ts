@@ -49,6 +49,7 @@ import { stableDigest } from './crypto.js'
 import { CollaborationServiceError } from './errors.js'
 import type { IdentityService } from './identity-service.js'
 import type { CollaborationService } from './service.js'
+import type { PortalHttpHandler } from './portal.js'
 
 export const COLLABORATION_SERVER_ID = 'sciforge.collaboration-server'
 export const COLLABORATION_SERVER_VERSION = '0.1.0'
@@ -81,6 +82,7 @@ export type CollaborationHttpOptions = {
   basePath?: string
   maxBodyBytes?: number
   now?: () => Date
+  portal?: PortalHttpHandler
 }
 
 export function createCollaborationHttpServer(options: CollaborationHttpOptions): Server {
@@ -101,6 +103,7 @@ async function handle(
   limiter: AnonymousBootstrapLimiter
 ): Promise<void> {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
+  if (options.portal && await options.portal.handle(request, response, url)) return
   if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === `${basePath}/console`) {
     response.writeHead(308, {
       location: `${basePath}/console/`,
@@ -149,15 +152,7 @@ async function handle(
       limiter.consume(request.socket.remoteAddress ?? 'unknown', command.type)
     }
     const actor = await resolveActor(request, command, options)
-    let body: RestResponse
-    try {
-      body = await dispatch(command, actor, options)
-    } catch (error) {
-      if (actor && error instanceof CollaborationServiceError && !error.auditRecorded) {
-        await options.service.recordRejectedBoundary(actor, command.type, error).catch(() => undefined)
-      }
-      throw error
-    }
+    const body = await dispatchAuditedCollaborationCommand(command, actor, options)
     const validated = restResponseSchema.parse(body)
     sendJson(response, 200, validated)
   } catch (error) {
@@ -332,7 +327,11 @@ async function resolveActor(
   return options.authentication.resolveBearer(token)
 }
 
-async function dispatch(command: RestRequest, actor: AuthContext | null, options: CollaborationHttpOptions): Promise<RestResponse> {
+export async function dispatchCollaborationCommand(
+  command: RestRequest,
+  actor: AuthContext | null,
+  options: CollaborationHttpOptions
+): Promise<RestResponse> {
   const { service } = options
   switch (command.type) {
     case 'pairing.begin': {
@@ -392,6 +391,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         idempotencyKey: command.idempotencyKey
       })))
     }
+    case 'agent.owned.list': return entityResponse(command, {
+      schemaVersion: 1,
+      type: 'owned_agent_list',
+      ...(await service.listOwnedAgents(requiredUser(actor)))
+    })
     case 'agent.rotate_credential': {
       const result = await service.rotateAgentCredential(requiredUser(actor), { agentId: command.agentId,
         expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })
@@ -473,6 +477,23 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const view = await service.getProject(user, project.projectId)
       return entityResponse(command, toProject(project, view.members))
     }
+    case 'project.list': return entityResponse(command, {
+      schemaVersion: 1,
+      type: 'project_list_page',
+      ...(await service.listProjects(requiredUser(actor), {
+        statuses: command.statuses,
+        cursor: command.cursor,
+        limit: command.limit
+      }))
+    })
+    case 'worker.directory.page': return entityResponse(command, {
+      schemaVersion: 1,
+      type: 'worker_directory_page',
+      ...(await service.getWorkerDirectoryPage(requiredUser(actor), {
+        cursor: command.cursor,
+        limit: command.limit
+      }))
+    })
     case 'project.get': {
       const view = await service.getProject(requiredActor(actor), command.projectId)
       return entityResponse(command, toProject(view.project, view.members))
@@ -483,6 +504,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       )))
     case 'project.capability_directory.get': return entityResponse(command,
       toProjectCapabilityDirectory(await service.getProjectCapabilityDirectory(requiredHumanOrAgent(actor), command.projectId)))
+    case 'project.members.update': {
+      const project = await service.updateProjectMembers(requiredUser(actor), command)
+      const view = await service.getProject(requiredActor(actor), project.projectId)
+      return entityResponse(command, toProject(project, view.members))
+    }
     case 'project.transition': {
       const project = await service.transitionProject(requiredHumanOrAgent(actor), command)
       const view = await service.getProject(requiredActor(actor), project.projectId)
@@ -600,6 +626,21 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
         requestHash: receipt.requestDigest, status: 'succeeded', resultHash: stableDigest(receipt.response),
         createdAt: receipt.createdAt } })
     }
+  }
+}
+
+export async function dispatchAuditedCollaborationCommand(
+  command: RestRequest,
+  actor: AuthContext | null,
+  options: CollaborationHttpOptions
+): Promise<RestResponse> {
+  try {
+    return await dispatchCollaborationCommand(command, actor, options)
+  } catch (error) {
+    if (actor && error instanceof CollaborationServiceError && !error.auditRecorded) {
+      await options.service.recordRejectedBoundary(actor, command.type, error).catch(() => undefined)
+    }
+    throw error
   }
 }
 

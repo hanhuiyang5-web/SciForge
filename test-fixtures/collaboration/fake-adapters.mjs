@@ -337,6 +337,19 @@ export class FakeCollaborationRepository {
     }
   }
 
+  async readSnapshot(work) {
+    this.#assertOpen()
+    const previous = this.transactionTail
+    let release
+    this.transactionTail = new Promise((resolve) => { release = resolve })
+    await previous
+    try {
+      return await work(this)
+    } finally {
+      release()
+    }
+  }
+
   async lockIdempotency() {}
 
   // Fake transactions are globally serialized, so both advisory-lock APIs are
@@ -344,6 +357,22 @@ export class FakeCollaborationRepository {
   async lockOidcIdentity() {}
 
   async lockZulipBindingIdentity() {}
+
+  async lockProjectMembershipUsers() {}
+
+  async countActiveProjectMembershipsByUserIds(userIds) {
+    const targets = new Set(userIds)
+    const counts = new Map([...targets].map((userId) => [userId, 0]))
+    for (const member of this.state.projectMembers.values()) {
+      if (member.active && targets.has(member.userId)) {
+        counts.set(member.userId, (counts.get(member.userId) ?? 0) + 1)
+      }
+    }
+    return [...counts.entries()]
+      .filter(([, count]) => count > 0)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([userId, count]) => ({ userId, count }))
+  }
 
   async getUser(userId) {
     return copy(this.state.users.get(userId) ?? null)
@@ -370,6 +399,12 @@ export class FakeCollaborationRepository {
     return copy([...this.state.oidcIdentities.values()].find((identity) => (
       identity.issuer === issuer && identity.subject === subject
     )) ?? null)
+  }
+
+  async hasActiveOidcIdentityForUser(userId, issuer) {
+    return [...this.state.oidcIdentities.values()].some((identity) => (
+      identity.userId === userId && identity.issuer === issuer && identity.status === 'active'
+    ))
   }
 
   async getOidcIdentityForUpdate(identityId) {
@@ -746,6 +781,25 @@ export class FakeCollaborationRepository {
     return copy([...this.state.agents.values()].filter((item) => item.ownerUserId === userId))
   }
 
+  async listUsableOwnedAgentsBounded(userId, limit) {
+    return copy([...this.state.agents.values()]
+      .filter((agent) => {
+        const owner = this.state.users.get(agent.ownerUserId)
+        const device = agent.deviceId ? this.state.devices.get(agent.deviceId) : undefined
+        return agent.ownerUserId === userId && agent.status === 'active' &&
+          (agent.nodeType === 'desktop' || agent.nodeType === 'server') && owner?.status === 'active' &&
+          device?.status === 'active' && device.userId === agent.ownerUserId
+      })
+      .sort((left, right) => left.agentId.localeCompare(right.agentId))
+      .slice(0, limit))
+  }
+
+  async listAllAgents() {
+    return copy([...this.state.agents.values()].sort((left, right) => (
+      left.ownerUserId.localeCompare(right.ownerUserId) || left.agentId.localeCompare(right.agentId)
+    )))
+  }
+
   async listAgentsForDevice(deviceId) {
     return copy([...this.state.agents.values()].filter((item) => item.deviceId === deviceId))
   }
@@ -920,6 +974,16 @@ export class FakeCollaborationRepository {
     this.state.humanRequests.set(request.humanRequestId, copy(request))
   }
 
+  async expireHumanRequestIfPending(humanRequestId, targetUserId, expectedRevision, expiredAt) {
+    const request = this.state.humanRequests.get(humanRequestId)
+    if (!request || request.targetUserId !== targetUserId || request.revision !== expectedRevision ||
+        request.status !== 'pending' || request.expiresAt > expiredAt) return false
+    request.status = 'expired'
+    request.revision += 1
+    request.updatedAt = expiredAt
+    return true
+  }
+
   async updateHumanRequest(request, expectedRevision) {
     revisionUpdate(this.state.humanRequests, request.humanRequestId, request, expectedRevision)
   }
@@ -930,6 +994,14 @@ export class FakeCollaborationRepository {
 
   async listHumanRequestsForProject(projectId) {
     return copy([...this.state.humanRequests.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async listTargetHumanRequestsForProjectBounded(projectId, targetUserId, afterHumanRequestId, limit) {
+    return copy([...this.state.humanRequests.values()]
+      .filter((item) => item.projectId === projectId && item.targetUserId === targetUserId &&
+        (!afterHumanRequestId || item.humanRequestId > afterHumanRequestId))
+      .sort((left, right) => left.humanRequestId.localeCompare(right.humanRequestId))
+      .slice(0, limit))
   }
 
   async listHumanAnswersForProject(projectId) {
@@ -973,6 +1045,62 @@ export class FakeCollaborationRepository {
     return copy(this.state.projects.get(projectId) ?? null)
   }
 
+  async listProjectsForUser(userId) {
+    const projectIds = new Set([...this.state.projectMembers.values()]
+      .filter((member) => member.userId === userId && member.active)
+      .map((member) => member.projectId))
+    return copy([...this.state.projects.values()]
+      .filter((project) => projectIds.has(project.projectId))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) ||
+        left.projectId.localeCompare(right.projectId)))
+  }
+
+  async listProjectSummaryPageForUser(input) {
+    const projects = [...this.state.projects.values()]
+      .filter((project) => {
+        const member = this.state.projectMembers.get(`${project.projectId}:${input.userId}`)
+        if (!member?.active || (input.statuses && !input.statuses.includes(project.status))) return false
+        if (!input.after) return true
+        return project.updatedAt < input.after.updatedAt ||
+          (project.updatedAt === input.after.updatedAt && project.projectId > input.after.projectId)
+      })
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) ||
+        left.projectId.localeCompare(right.projectId))
+    const rows = projects.slice(0, input.limit + 1)
+    return copy({
+      items: rows.slice(0, input.limit).map((project) => {
+        const member = this.state.projectMembers.get(`${project.projectId}:${input.userId}`)
+        const tasks = [...this.state.tasks.values()].filter((task) => task.projectId === project.projectId)
+        const taskCounts = {
+          offered: 0, accepted: 0, rejected: 0, running: 0,
+          needsHuman: 0, succeeded: 0, failed: 0, cancelled: 0
+        }
+        const taskStatusKey = {
+          offered: 'offered', accepted: 'accepted', rejected: 'rejected', in_progress: 'running',
+          needs_human: 'needsHuman', completed: 'succeeded', failed: 'failed', cancelled: 'cancelled'
+        }
+        for (const task of tasks) taskCounts[taskStatusKey[task.status]] += 1
+        return {
+          projectId: project.projectId,
+          displayName: project.displayName,
+          goal: project.goal,
+          status: project.status === 'failed' ? 'cancelled' : project.status,
+          role: member.role,
+          memberCount: [...this.state.projectMembers.values()].filter((item) => (
+            item.projectId === project.projectId && item.active
+          )).length,
+          taskCounts,
+          pendingResultCount: [...this.state.projectRecords.values()].filter((record) => (
+            record.projectId === project.projectId && record.kind === 'task_result' && record.status === 'candidate'
+          )).length,
+          revision: project.revision,
+          updatedAt: project.updatedAt
+        }
+      }),
+      hasMore: rows.length > input.limit
+    })
+  }
+
   async insertProject(project, members) {
     if (this.state.projects.has(project.projectId)) throw new Error('fake repository duplicate project')
     this.state.projects.set(project.projectId, copy(project))
@@ -983,12 +1111,99 @@ export class FakeCollaborationRepository {
     revisionUpdate(this.state.projects, project.projectId, project, expectedRevision)
   }
 
+  async upsertProjectMember(member) {
+    const key = `${member.projectId}:${member.userId}`
+    const current = this.state.projectMembers.get(key)
+    this.state.projectMembers.set(key, copy({
+      ...member,
+      createdAt: current?.createdAt ?? member.createdAt
+    }))
+  }
+
   async getProjectMember(projectId, userId) {
     return copy(this.state.projectMembers.get(`${projectId}:${userId}`) ?? null)
   }
 
   async listProjectMembers(projectId) {
     return copy([...this.state.projectMembers.values()].filter((item) => item.projectId === projectId))
+  }
+
+  async listProjectMembersByUserIds(projectId, userIds) {
+    const targets = new Set(userIds)
+    return copy([...this.state.projectMembers.values()]
+      .filter((item) => item.projectId === projectId && targets.has(item.userId))
+      .sort((left, right) => left.userId.localeCompare(right.userId)))
+  }
+
+  async listActiveProjectMembersBounded(projectId, limit) {
+    return copy([...this.state.projectMembers.values()]
+      .filter((item) => item.projectId === projectId && item.active)
+      .sort((left, right) => left.userId.localeCompare(right.userId))
+      .slice(0, limit))
+  }
+
+  async countActiveProjectMembers(projectId) {
+    return [...this.state.projectMembers.values()]
+      .filter((item) => item.projectId === projectId && item.active).length
+  }
+
+  async countProjectRecords(projectId) {
+    return [...this.state.projectRecords.values()]
+      .filter((item) => item.projectId === projectId).length
+  }
+
+  async countProjectHumanRequests(projectId) {
+    return [...this.state.humanRequests.values()]
+      .filter((item) => item.projectId === projectId).length
+  }
+
+  async listActiveProjectMemberViewsBounded(projectId, limit) {
+    return copy([...this.state.projectMembers.values()]
+      .filter((item) => item.projectId === projectId && item.active)
+      .sort((left, right) => left.userId.localeCompare(right.userId))
+      .map((member) => ({ ...member, displayName: this.state.users.get(member.userId)?.displayName }))
+      .slice(0, limit))
+  }
+
+  async getProjectCoordinationMaterializationCounts(projectId) {
+    const count = (values, include) => {
+      let rowCount = 0n
+      for (const value of values) {
+        if (!include(value)) continue
+        rowCount += 1n
+      }
+      return String(rowCount)
+    }
+    return {
+      activeMembers: count(this.state.projectMembers.values(),
+        (member) => member.projectId === projectId && member.active),
+      tasks: count(this.state.tasks.values(), (task) => task.projectId === projectId),
+      records: count(this.state.projectRecords.values(), (record) => record.projectId === projectId),
+      humanRequests: count(this.state.humanRequests.values(), (request) => request.projectId === projectId),
+      humanAnswers: count(this.state.humanAnswers.values(), (answer) => answer.projectId === projectId)
+    }
+  }
+
+  async getProjectCoordinationMaterializationBytes(projectId) {
+    const bytes = (values, include, project) => {
+      let serializedBytes = 0n
+      for (const value of values) {
+        if (!include(value)) continue
+        serializedBytes += BigInt(Buffer.byteLength(JSON.stringify(project(value)), 'utf8'))
+      }
+      return String(serializedBytes)
+    }
+    return {
+      activeMembers: bytes(this.state.projectMembers.values(),
+        (member) => member.projectId === projectId && member.active,
+        (member) => ({ ...member, displayName: this.state.users.get(member.userId)?.displayName })),
+      tasks: bytes(this.state.tasks.values(), (task) => task.projectId === projectId, (task) => task),
+      records: bytes(this.state.projectRecords.values(), (record) => record.projectId === projectId, (record) => record),
+      humanRequests: bytes(this.state.humanRequests.values(),
+        (request) => request.projectId === projectId, (request) => request),
+      humanAnswers: bytes(this.state.humanAnswers.values(),
+        (answer) => answer.projectId === projectId, (answer) => answer)
+    }
   }
 
   async countProjectTasks(projectId, coordinationRound) {
@@ -1023,6 +1238,28 @@ export class FakeCollaborationRepository {
     return copy([...this.state.tasks.values()].filter((item) => item.projectId === projectId))
   }
 
+  async getProjectMemberRemovalBlockers(projectId, userIds, now) {
+    const candidates = new Set(userIds)
+    const openStatuses = new Set(['offered', 'accepted', 'in_progress', 'needs_human'])
+    return copy({
+      openTaskUserIds: [...new Set([...this.state.tasks.values()]
+        .filter((item) => item.projectId === projectId && candidates.has(item.assigneeUserId) &&
+          openStatuses.has(item.status))
+        .map((item) => item.assigneeUserId))].sort(),
+      pendingHumanRequestUserIds: [...new Set([...this.state.humanRequests.values()]
+        .filter((item) => item.projectId === projectId && candidates.has(item.targetUserId) &&
+          item.status === 'pending' && item.expiresAt > now)
+        .map((item) => item.targetUserId))].sort()
+    })
+  }
+
+  async listProjectTasksBounded(projectId, afterTaskId, limit) {
+    return copy([...this.state.tasks.values()]
+      .filter((item) => item.projectId === projectId && (!afterTaskId || item.taskId > afterTaskId))
+      .sort((left, right) => left.taskId.localeCompare(right.taskId))
+      .slice(0, limit))
+  }
+
   async getProjectForUpdate(projectId) {
     return copy(this.state.projects.get(projectId) ?? null)
   }
@@ -1052,6 +1289,81 @@ export class FakeCollaborationRepository {
     return copy([...this.state.projectRecords.values()].filter((item) => (
       item.projectId === projectId && (!acceptedOnly || item.status === 'accepted')
     )))
+  }
+
+  async listProjectRecordsBounded(projectId, afterProjectRecordId, limit) {
+    return copy([...this.state.projectRecords.values()]
+      .filter((item) => item.projectId === projectId &&
+        (!afterProjectRecordId || item.projectRecordId > afterProjectRecordId))
+      .sort((left, right) => left.projectRecordId.localeCompare(right.projectRecordId))
+      .slice(0, limit))
+  }
+
+  async getPortalProjectWakeWatermarks(projectId, targetUserId) {
+    const tasks = [...this.state.tasks.values()].filter((item) => item.projectId === projectId)
+    const records = [...this.state.projectRecords.values()].filter((item) => item.projectId === projectId)
+    const requests = [...this.state.humanRequests.values()].filter((item) => (
+      item.projectId === projectId && item.targetUserId === targetUserId
+    ))
+    const revisionSum = (items) => String(items.reduce((total, item) => total + item.revision, 0))
+    return {
+      taskCount: String(tasks.length),
+      taskRevisionSum: revisionSum(tasks),
+      recordCount: String(records.length),
+      recordRevisionSum: revisionSum(records),
+      humanRequestCount: String(requests.length),
+      humanRequestRevisionSum: revisionSum(requests)
+    }
+  }
+
+  async getWorkerDirectoryPage(input) {
+    const readAt = new Date(input.readAt).getTime()
+    const entries = [...this.state.agents.values()].flatMap((agent) => {
+      const owner = this.state.users.get(agent.ownerUserId)
+      const device = agent.deviceId ? this.state.devices.get(agent.deviceId) : undefined
+      const profile = this.state.capabilityProfiles.get(agent.agentId)
+      const sameIssuer = [...this.state.oidcIdentities.values()].some((identity) => (
+        identity.userId === agent.ownerUserId && identity.issuer === input.issuer && identity.status === 'active'
+      ))
+      if (agent.status !== 'active' || (agent.nodeType !== 'desktop' && agent.nodeType !== 'server') ||
+          !agent.lastSeenAt || owner?.status !== 'active' || device?.status !== 'active' ||
+          device.userId !== agent.ownerUserId || !sameIssuer || !profile ||
+          profile.ownerUserId !== agent.ownerUserId || new Date(profile.expiresAt).getTime() <= readAt) return []
+      const lastSeen = new Date(agent.lastSeenAt).getTime()
+      const online = agent.connectionStatus === 'online' && readAt - lastSeen <= 60_000 && lastSeen <= readAt + 60_000
+      const busy = [...this.state.tasks.values()].some((task) => (
+        task.assigneeAgentId === agent.agentId && ['accepted', 'in_progress', 'needs_human'].includes(task.status)
+      ))
+      return [{
+        ownerUserId: agent.ownerUserId,
+        agentId: agent.agentId,
+        displayName: agent.displayName,
+        nodeType: agent.nodeType,
+        os: { family: profile.osFamily, architecture: profile.osArchitecture },
+        runtimeIds: [...new Set(profile.runtimeIds)].sort(),
+        capabilityIds: [...new Set(profile.capabilities.map((capability) => capability.capabilityId))].sort(),
+        gpu: profile.gpu.map((gpu) => ({
+          ...(gpu.vendor ? { vendor: gpu.vendor } : {}),
+          ...(gpu.model ? { model: gpu.model } : {}),
+          ...(gpu.memoryGB !== undefined ? { memoryGB: gpu.memoryGB } : {})
+        })),
+        status: online ? (busy ? 'busy' : 'online') : 'offline',
+        lastSeenAt: agent.lastSeenAt,
+        profileExpiresAt: profile.expiresAt,
+        revision: agent.revision
+      }]
+    }).sort((left, right) => left.agentId.localeCompare(right.agentId))
+    const stats = {
+      total: entries.length,
+      online: entries.filter((entry) => entry.status === 'online').length,
+      busy: entries.filter((entry) => entry.status === 'busy').length,
+      offline: entries.filter((entry) => entry.status === 'offline').length,
+      desktop: entries.filter((entry) => entry.nodeType === 'desktop').length,
+      server: entries.filter((entry) => entry.nodeType === 'server').length
+    }
+    const remaining = entries.filter((entry) => !input.afterAgentId || entry.agentId > input.afterAgentId)
+    const rows = remaining.slice(0, input.limit + 1)
+    return copy({ stats, items: rows.slice(0, input.limit), hasMore: rows.length > input.limit })
   }
 
   async getTaskResultForExecution(taskId, executionId) {
@@ -1126,6 +1438,19 @@ export class FakeCollaborationRepository {
   async getInboxMessageById(recipient, messageId) {
     return copy((this.state.inboxes.get(recipientKey(recipient)) ?? [])
       .find((item) => item.messageId === messageId) ?? null)
+  }
+
+  async supersedeExpiredInboxMessages(recipient, expiredAt) {
+    const key = recipientKey(recipient)
+    const cursor = this.state.inboxCursors.get(key)
+    if (!cursor) return null
+    for (const message of this.state.inboxes.get(key) ?? []) {
+      if (message.sequence <= cursor.ackedSequence || message.disposition !== 'active' ||
+          message.expiresAt > expiredAt) continue
+      message.disposition = 'superseded'
+      message.supersededAt = expiredAt
+    }
+    return copy(cursor)
   }
 
   async supersedeCoordinatorInbox(projectId, recipientAgentId, supersededAt) {

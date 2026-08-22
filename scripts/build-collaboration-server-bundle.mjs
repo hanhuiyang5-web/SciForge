@@ -28,12 +28,18 @@ const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git'
 const manifestFilename = 'RELEASE_MANIFEST.json'
 const domainSdkPackageName = '@sciforge/domain-sdk'
 const collaborationContractsPackageName = '@sciforge/collaboration-contracts'
+const collaborationPortalPackageName = '@sciforge/collaboration-portal'
 const contractArtifactPrefix = 'artifacts/protocol-1.0/'
 const contractArtifactManifestFilename = 'ARTIFACT_MANIFEST.json'
 const contractCommitPlaceholder = '__SCIFORGE_COLLABORATION_COMMIT__'
+const collaborationDatabaseSchemaVersion = 9
 const maximumUnpackedArchiveBytes = 128 * 1024 * 1024
 const tarBlockBytes = 512
 const immutableSnapshotGuardFilename = '.sciforge-collaboration-bundle-snapshot-guard.json'
+const portalBasePath = '/portal/'
+const portalViteManifestPath = 'dist/.vite/manifest.json'
+const portalIntegrityManifestPath = 'dist/ASSET_INTEGRITY.json'
+export const COLLABORATION_PORTAL_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; manifest-src 'none'"
 export const IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT = Object.freeze({
   path: 'SCIFORGE_COLLABORATION_BUNDLE_INTERNAL_GUARD_PATH',
   token: 'SCIFORGE_COLLABORATION_BUNDLE_INTERNAL_GUARD_TOKEN'
@@ -115,6 +121,13 @@ const aHttpsTestEdgeAssets = Object.freeze({
 })
 const aHttpsOidcTestAssets = Object.freeze({
   ...aHttpsSharedEdgeAssets,
+  portalComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-cloud-portal.yml'
+  }),
+  portalAssetVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-portal-assets.mjs'
+  }),
   identityEdgeCaddyfileSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/Caddyfile.a-https-oidc-test'
   }),
@@ -169,6 +182,17 @@ export const COLLABORATION_RELEASE_PACKAGES = Object.freeze([
     directory: 'packages/collaboration-provider-zulip',
     name: '@sciforge/collaboration-provider-zulip',
     requiredFiles: Object.freeze(['package.json', 'README.md', 'sciforge.provider.json']),
+    requiredPrefixes: Object.freeze(['dist/'])
+  }),
+  Object.freeze({
+    directory: 'packages/collaboration-portal',
+    name: collaborationPortalPackageName,
+    packageFromDirectory: true,
+    requiredFiles: Object.freeze([
+      'package.json',
+      portalViteManifestPath,
+      portalIntegrityManifestPath
+    ]),
     requiredPrefixes: Object.freeze(['dist/'])
   }),
   Object.freeze({
@@ -715,6 +739,11 @@ export function validateContractArtifactFiles(files, expectedCommitInput) {
   if (manifest?.contractCommit !== expectedCommit) {
     throw new Error('Contract artifact manifest commit does not match the release commit.')
   }
+  if (manifest?.databaseSchemaVersion !== collaborationDatabaseSchemaVersion) {
+    throw new Error(
+      `Contract artifact database schema version must be ${collaborationDatabaseSchemaVersion}.`
+    )
+  }
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
     throw new Error('Contract artifact manifest has no file inventory.')
   }
@@ -764,6 +793,151 @@ export function validateContractArtifactFiles(files, expectedCommitInput) {
   }
 
   return Object.freeze({ manifest, files: normalizedFiles })
+}
+
+function normalizePortalAssetPath(path) {
+  const normalized = normalizePackPath(path)
+  if (
+    normalized !== path ||
+    normalized.length > 256 ||
+    normalized.startsWith('.vite/') ||
+    normalized === 'ASSET_INTEGRITY.json' ||
+    normalized.endsWith('.map') ||
+    (normalized !== 'index.html' && !/^assets\/[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(normalized))
+  ) {
+    throw new Error(`Portal integrity manifest has an invalid asset path: ${String(path)}`)
+  }
+  return normalized
+}
+
+function collectViteRuntimePaths(value, paths = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectViteRuntimePaths(item, paths)
+    return paths
+  }
+  if (value === null || typeof value !== 'object') return paths
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === 'file' && typeof nested === 'string') paths.add(normalizePortalAssetPath(nested))
+    if ((key === 'css' || key === 'assets') && Array.isArray(nested)) {
+      for (const path of nested) paths.add(normalizePortalAssetPath(path))
+    }
+    if (key !== 'file' && key !== 'css' && key !== 'assets') {
+      collectViteRuntimePaths(nested, paths)
+    }
+  }
+  return paths
+}
+
+export function validatePortalAssetFiles(files) {
+  if (!(files instanceof Map)) {
+    throw new Error('Packed collaboration portal files must be a Map.')
+  }
+  const viteManifestContent = files.get(portalViteManifestPath)
+  const integrityManifestContent = files.get(portalIntegrityManifestPath)
+  if (!viteManifestContent || !integrityManifestContent) {
+    throw new Error('Portal archive is missing its Vite or integrity manifest.')
+  }
+
+  const viteManifest = parseJson(viteManifestContent, portalViteManifestPath)
+  if (
+    !viteManifest ||
+    typeof viteManifest !== 'object' ||
+    Array.isArray(viteManifest) ||
+    Object.keys(viteManifest).length === 0 ||
+    !Object.values(viteManifest).some((entry) => entry?.isEntry === true)
+  ) {
+    throw new Error('Portal Vite manifest has no entry asset.')
+  }
+  const integrityManifest = parseJson(integrityManifestContent, portalIntegrityManifestPath)
+  if (
+    !integrityManifest ||
+    typeof integrityManifest !== 'object' ||
+    Array.isArray(integrityManifest) ||
+    JSON.stringify(Object.keys(integrityManifest).sort()) !==
+      JSON.stringify(['basePath', 'files', 'schemaVersion']) ||
+    integrityManifest.schemaVersion !== 1 ||
+    integrityManifest.basePath !== portalBasePath ||
+    !Array.isArray(integrityManifest.files) ||
+    integrityManifest.files.length < 2 ||
+    integrityManifest.files.length > 256
+  ) {
+    throw new Error('Portal integrity manifest has an invalid schema or base path.')
+  }
+
+  const describedPaths = new Set()
+  const portalAssets = []
+  let previousPath = ''
+  let totalAssetBytes = 0
+  for (const entry of integrityManifest.files) {
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      Array.isArray(entry) ||
+      JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['bytes', 'path', 'sha256'])
+    ) {
+      throw new Error('Portal integrity manifest has an invalid file entry.')
+    }
+    const relativePath = normalizePortalAssetPath(entry.path)
+    if (relativePath <= previousPath) {
+      throw new Error('Portal integrity manifest files must be strictly sorted and unique.')
+    }
+    previousPath = relativePath
+    describedPaths.add(relativePath)
+    const content = files.get(`dist/${relativePath}`)
+    if (!content) throw new Error(`Portal integrity manifest references missing ${relativePath}.`)
+    if (!Number.isSafeInteger(entry.bytes) || entry.bytes <= 0 ||
+        entry.bytes > 4 * 1024 * 1024 || entry.bytes !== content.byteLength) {
+      throw new Error(`Portal asset byte count mismatch for ${relativePath}.`)
+    }
+    totalAssetBytes += entry.bytes
+    if (totalAssetBytes > 12 * 1024 * 1024) {
+      throw new Error('Portal assets exceed the bounded release size.')
+    }
+    if (!/^[0-9a-f]{64}$/u.test(entry.sha256) || entry.sha256 !== sha256Content(content)) {
+      throw new Error(`Portal asset SHA-256 mismatch for ${relativePath}.`)
+    }
+    if (
+      content.includes(Buffer.from('SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET')) ||
+      content.includes(Buffer.from('replace_with_portal_client_secret'))
+    ) {
+      throw new Error(`Portal browser asset contains a forbidden secret marker: ${relativePath}`)
+    }
+    portalAssets.push(Object.freeze({
+      path: relativePath,
+      bytes: entry.bytes,
+      sha256: entry.sha256
+    }))
+  }
+  if (!describedPaths.has('index.html')) {
+    throw new Error('Portal integrity manifest must describe index.html.')
+  }
+
+  const viteRuntimePaths = collectViteRuntimePaths(viteManifest)
+  for (const relativePath of viteRuntimePaths) {
+    if (!describedPaths.has(relativePath)) {
+      throw new Error(`Portal Vite manifest references an unlisted asset: ${relativePath}`)
+    }
+  }
+
+  const actualArchivePaths = [...files.keys()].sort()
+  const expectedArchivePaths = [
+    'package.json',
+    portalViteManifestPath,
+    portalIntegrityManifestPath,
+    ...portalAssets.map(({ path }) => `dist/${path}`)
+  ].sort()
+  if (JSON.stringify(actualArchivePaths) !== JSON.stringify(expectedArchivePaths)) {
+    throw new Error('Portal archive contains an unlisted or unexpected file.')
+  }
+
+  return Object.freeze({
+    assets: Object.freeze(portalAssets),
+    basePath: portalBasePath,
+    integrityManifestPath: portalIntegrityManifestPath,
+    integrityManifestSha256: sha256Content(integrityManifestContent),
+    viteManifestPath: portalViteManifestPath,
+    viteManifestSha256: sha256Content(viteManifestContent)
+  })
 }
 
 function readTarString(header, offset, length) {
@@ -874,6 +1048,10 @@ async function verifyPackedPackageArchive(archivePath, packed, specification, ex
       .map(([relativePath, content]) => [relativePath.slice(contractArtifactPrefix.length), content]))
     validateContractArtifactFiles(artifactFiles, expectedCommit)
   }
+  if (specification.name === collaborationPortalPackageName) {
+    return validatePortalAssetFiles(files)
+  }
+  return undefined
 }
 
 async function defaultGenerateContractArtifactFiles(commit) {
@@ -1175,6 +1353,7 @@ export async function buildCollaborationServerBundle({
     }
     const workspacePackages = await readWorkspacePackages(root)
     const packedPackages = []
+    let portalAssetProfile
 
     log('Checking collaboration provider composition.')
     await runCommand({
@@ -1188,7 +1367,9 @@ export async function buildCollaborationServerBundle({
       await rm(join(root, specification.directory, 'dist'), { recursive: true, force: true })
       await runCommand({
         command: npmCommand,
-        args: ['--workspace', specification.name, 'run', specification.buildScript ?? 'build'],
+        args: specification.packageFromDirectory
+          ? ['--prefix', specification.directory, 'run', specification.buildScript ?? 'build']
+          : ['--workspace', specification.name, 'run', specification.buildScript ?? 'build'],
         cwd: root
       })
     }
@@ -1211,6 +1392,8 @@ export async function buildCollaborationServerBundle({
         ? [contractsPackageDirectory]
         : specification.name === domainSdkPackageName
           ? [domainSdkPackageDirectory]
+          : specification.packageFromDirectory
+            ? [join(root, specification.directory)]
           : ['--workspace', specification.name]
       const packResult = await runCommand({
         command: npmCommand,
@@ -1237,12 +1420,15 @@ export async function buildCollaborationServerBundle({
       if (!archiveDetails.isFile()) {
         throw new Error(`npm pack did not create a regular archive for ${specification.name}.`)
       }
-      await verifyPackedPackageArchive(
+      const archiveVerification = await verifyPackedPackageArchive(
         join(stagingDirectory, packed.filename),
         packed,
         specification,
         approvedCommit
       )
+      if (specification.name === collaborationPortalPackageName) {
+        portalAssetProfile = archiveVerification
+      }
       packedPackages.push(packed)
     }
     await rm(contractsPackageDirectory, { recursive: true, force: true })
@@ -1295,6 +1481,15 @@ export async function buildCollaborationServerBundle({
         sha256: await sha256File(join(stagingDirectory, packed.filename))
       })
     }
+    if (!portalAssetProfile) {
+      throw new Error('The collaboration portal archive did not produce a verified asset profile.')
+    }
+    const portalReleasePackage = releasePackages.find(({ name }) => (
+      name === collaborationPortalPackageName
+    ))
+    if (!portalReleasePackage) {
+      throw new Error('The collaboration portal archive is missing from the release package set.')
+    }
     const edgeProfile = {}
     const selectedEdgeAssets = aHttpsOidcTest
       ? aHttpsOidcTestAssets
@@ -1340,7 +1535,7 @@ export async function buildCollaborationServerBundle({
         )
       : undefined
     const manifest = {
-      schemaVersion: aHttpsOidcTest ? 3 : 1,
+      schemaVersion: aHttpsOidcTest ? 4 : 1,
       artifact: 'sciforge-collaboration-server-bundle',
       contractCommit: approvedCommit,
       releaseMode: teamPrivateAcceptance
@@ -1371,6 +1566,29 @@ export async function buildCollaborationServerBundle({
               identityEdgeNetwork: 'sciforge-keycloak_identity-edge',
               identityAcceptanceHarnessSha256,
               multiWorkerAcceptanceHarnessSha256,
+              portalEnabled: true,
+              portalMode: 'confidential-bff',
+              portalPackageArchive: portalReleasePackage.filename,
+              portalPackageSha256: portalReleasePackage.sha256,
+              portalBasePath,
+              portalAuthPathPrefix: '/portal/auth/',
+              portalApiPathPrefix: '/portal/api/',
+              portalEventsPath: '/portal/events',
+              portalAssetDirectory: '/app/node_modules/@sciforge/collaboration-portal/dist',
+              portalViteManifestPath: portalAssetProfile.viteManifestPath,
+              portalViteManifestSha256: portalAssetProfile.viteManifestSha256,
+              portalIntegrityManifestPath: portalAssetProfile.integrityManifestPath,
+              portalIntegrityManifestSha256: portalAssetProfile.integrityManifestSha256,
+              portalAssets: portalAssetProfile.assets,
+              portalPublicOrigin: 'https://cloud-test.sciforge.cn',
+              portalAuthorizedParty: 'sciforge-cloud-console',
+              portalOidcClientId: 'sciforge-cloud-console',
+              portalOidcRedirectUri: 'https://cloud-test.sciforge.cn/portal/auth/callback',
+              portalHumanNeededMode: 'display-only',
+              portalTestWorkerDirectoryEnabled: true,
+              portalSessionIdleSeconds: 1800,
+              portalSessionAbsoluteSeconds: 28800,
+              portalContentSecurityPolicy: COLLABORATION_PORTAL_CSP,
               edgeCaddyImage: aHttpsTestEdgeImage,
               ...edgeProfile
             }

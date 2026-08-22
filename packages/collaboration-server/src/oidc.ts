@@ -59,6 +59,17 @@ export type VerifiedOidcIdentity = Readonly<{
   displayName?: string
 }>
 
+export type VerifiedOidcIdToken = Readonly<{
+  issuer: string
+  subject: string
+  audience: readonly string[]
+  issuedAt: number
+  notBefore: number
+  expiresAt: number
+  authTime: number
+  nonce: string
+}>
+
 export type OidcAccessTokenVerifierOptions = Readonly<{
   issuer: string
   audience?: string
@@ -96,6 +107,7 @@ type ParsedJwt = Readonly<{
   signingInput: Buffer
   signature: Buffer
   kid: string
+  typ?: string
   claims: JsonRecord
 }>
 
@@ -174,6 +186,34 @@ export class OidcAccessTokenVerifier {
   }
 
   async verifyAccessToken(token: string): Promise<VerifiedOidcIdentity> {
+    const parsed = await this.verifySignature(token)
+    return validateClaims(parsed.claims, {
+      issuer: this.issuer,
+      audience: this.audience,
+      allowedAuthorizedParties: this.allowedAuthorizedParties,
+      nowSeconds: Math.floor(this.nowMilliseconds() / 1_000),
+      clockToleranceSeconds: this.clockToleranceSeconds
+    })
+  }
+
+  async verifyIdToken(
+    token: string,
+    options: Readonly<{ clientId: string; nonce: string }>
+  ): Promise<VerifiedOidcIdToken> {
+    const clientId = boundedIdentifier(options.clientId, 'OIDC client ID')
+    const expectedNonce = boundedNonce(options.nonce)
+    const parsed = await this.verifySignature(token)
+    if (parsed.typ === 'at+jwt') throw claimError()
+    return validateIdTokenClaims(parsed.claims, {
+      issuer: this.issuer,
+      clientId,
+      expectedNonce,
+      nowSeconds: Math.floor(this.nowMilliseconds() / 1_000),
+      clockToleranceSeconds: this.clockToleranceSeconds
+    })
+  }
+
+  private async verifySignature(token: string): Promise<ParsedJwt> {
     const parsed = parseJwt(token)
     const key = await this.verificationKey(parsed.kid)
     let signatureValid = false
@@ -188,13 +228,7 @@ export class OidcAccessTokenVerifier {
     if (!signatureValid) {
       throw new OidcVerificationError('oidc_signature_invalid', 'The OIDC access token signature is invalid.')
     }
-    return validateClaims(parsed.claims, {
-      issuer: this.issuer,
-      audience: this.audience,
-      allowedAuthorizedParties: this.allowedAuthorizedParties,
-      nowSeconds: Math.floor(this.nowMilliseconds() / 1_000),
-      clockToleranceSeconds: this.clockToleranceSeconds
-    })
+    return parsed
   }
 
   private async verificationKey(kid: string): Promise<KeyObject> {
@@ -404,6 +438,7 @@ function parseJwt(token: string): ParsedJwt {
     signingInput: Buffer.from(`${encodedHeader}.${encodedPayload}`, 'ascii'),
     signature,
     kid: header.kid,
+    ...(typeof header.typ === 'string' ? { typ: header.typ } : {}),
     claims
   })
 }
@@ -486,6 +521,52 @@ function validateClaims(
   })
 }
 
+function validateIdTokenClaims(
+  claims: JsonRecord,
+  options: {
+    issuer: string
+    clientId: string
+    expectedNonce: string
+    nowSeconds: number
+    clockToleranceSeconds: number
+  }
+): VerifiedOidcIdToken {
+  if (claims.iss !== options.issuer) throw claimError()
+  const subject = boundedClaimString(claims.sub, 512)
+  const audience = validateAudience(claims.aud)
+  if (!audience.includes(options.clientId)) throw claimError()
+  if (claims.azp !== undefined && boundedClaimString(claims.azp, 128) !== options.clientId) throw claimError()
+  if (audience.length > 1 && claims.azp === undefined) throw claimError()
+  const nonce = boundedNonce(claims.nonce)
+  if (nonce !== options.expectedNonce) throw claimError()
+
+  const expiresAt = numericDate(claims.exp)
+  const issuedAt = numericDate(claims.iat)
+  const notBefore = claims.nbf === undefined ? issuedAt : numericDate(claims.nbf)
+  const authTime = numericDate(claims.auth_time)
+  const latestAllowed = options.nowSeconds + options.clockToleranceSeconds
+  if (expiresAt <= options.nowSeconds - options.clockToleranceSeconds) {
+    throw new OidcVerificationError('oidc_token_expired', 'The OIDC token has expired.')
+  }
+  if (notBefore > latestAllowed) {
+    throw new OidcVerificationError('oidc_token_not_active', 'The OIDC token is not active.')
+  }
+  if (issuedAt > latestAllowed || authTime > latestAllowed || expiresAt <= notBefore ||
+      expiresAt <= issuedAt || authTime > issuedAt) {
+    throw claimError()
+  }
+  return Object.freeze({
+    issuer: options.issuer,
+    subject,
+    audience: Object.freeze(audience),
+    issuedAt,
+    notBefore,
+    expiresAt,
+    authTime,
+    nonce
+  })
+}
+
 function validateAudience(value: unknown): string[] {
   if (typeof value === 'string') return [boundedClaimString(value, 256)]
   if (!Array.isArray(value) || value.length === 0 || value.length > 16) throw claimError()
@@ -524,6 +605,11 @@ function boundedClaimString(value: unknown, maximumLength: number): string {
     const code = value.charCodeAt(index)
     if (code <= 0x1f || code === 0x7f) throw claimError()
   }
+  return value
+}
+
+function boundedNonce(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43,128}$/u.test(value)) throw claimError()
   return value
 }
 

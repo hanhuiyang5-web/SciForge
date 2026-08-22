@@ -10,6 +10,7 @@ A_HTTPS_TEST_EDGE_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-https-test-edge.ym
 A_HTTPS_TEST_EDGE_CADDYFILE="$PRIVATE_DEPLOY_DIR/Caddyfile.a-https-test-edge"
 A_HTTPS_OIDC_TEST_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-https-oidc-test.yml"
 A_HTTPS_OIDC_TEST_CADDYFILE="$PRIVATE_DEPLOY_DIR/Caddyfile.a-https-oidc-test"
+A_CLOUD_PORTAL_COMPOSE_FILE="$PRIVATE_DEPLOY_DIR/compose.a-cloud-portal.yml"
 BUNDLE_DIR="$PRIVATE_DEPLOY_DIR/bundle"
 RELEASE_EXPECTED_SCHEMA_VERSION=""
 RELEASE_EXPECTED_TABLES=""
@@ -35,6 +36,10 @@ A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME=login-test.sciforge.cn
 A_HTTPS_OIDC_TEST_ISSUER=https://login-test.sciforge.cn/realms/SciForge
 A_HTTPS_OIDC_TEST_AUDIENCE=sciforge-cloud-api
 A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile
+A_CLOUD_PORTAL_ASSET_DIR=/app/node_modules/@sciforge/collaboration-portal/dist
+A_CLOUD_PORTAL_CLIENT_ID=sciforge-cloud-console
+A_CLOUD_PORTAL_REDIRECT_URI=https://cloud-test.sciforge.cn/portal/auth/callback
+A_CLOUD_PORTAL_CSP="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; manifest-src 'none'"
 A_HTTPS_OIDC_TEST_PUBLIC_IPV4=47.76.230.118
 A_HTTPS_OIDC_TEST_APP_NETWORK=sciforge-collaboration-private_private-edge
 A_HTTPS_OIDC_TEST_DATABASE_NETWORK=sciforge-collaboration-private_database
@@ -377,6 +382,30 @@ validate_release_bundle() {
   local manifest_identity_edge_network
   local manifest_identity_acceptance_harness_sha256
   local manifest_multi_worker_acceptance_harness_sha256
+  local manifest_portal_enabled
+  local manifest_portal_mode
+  local manifest_portal_package_archive
+  local manifest_portal_package_sha256
+  local manifest_portal_base_path
+  local manifest_portal_auth_path_prefix
+  local manifest_portal_api_path_prefix
+  local manifest_portal_events_path
+  local manifest_portal_asset_directory
+  local manifest_portal_vite_manifest_path
+  local manifest_portal_vite_manifest_sha256
+  local manifest_portal_integrity_manifest_path
+  local manifest_portal_integrity_manifest_sha256
+  local manifest_portal_public_origin
+  local manifest_portal_authorized_party
+  local manifest_portal_oidc_client_id
+  local manifest_portal_oidc_redirect_uri
+  local manifest_portal_human_needed_mode
+  local manifest_portal_test_worker_directory_enabled
+  local manifest_portal_session_idle_seconds
+  local manifest_portal_session_absolute_seconds
+  local manifest_portal_content_security_policy
+  local manifest_portal_compose_sha256
+  local manifest_portal_asset_verify_script_sha256
   local manifest_edge_caddy_image
   local manifest_edge_backup_script_sha256
   local manifest_edge_backup_restore_verify_script_sha256
@@ -410,6 +439,7 @@ validate_release_bundle() {
   local domain_sdk_packages=0
   local contract_packages=0
   local provider_packages=0
+  local portal_packages=0
   local server_packages=0
   local tarball
   local basename
@@ -441,7 +471,7 @@ validate_release_bundle() {
   shopt -s nullglob
   tarballs=("$BUNDLE_DIR"/*.tgz)
   shopt -u nullglob
-  (( ${#tarballs[@]} == 4 )) || die "Bundle must contain exactly four tarballs."
+  (( ${#tarballs[@]} == 5 )) || die "Bundle must contain exactly five tarballs."
   for tarball in "${tarballs[@]}"; do
     [[ -f "$tarball" && ! -L "$tarball" ]] || die "Tarball must be a regular, non-symlink file."
     basename="$(basename "$tarball")"
@@ -449,6 +479,7 @@ validate_release_bundle() {
       sciforge-domain-sdk-*.tgz) ((domain_sdk_packages += 1)) ;;
       sciforge-collaboration-contracts-*.tgz) ((contract_packages += 1)) ;;
       sciforge-collaboration-provider-zulip-*.tgz) ((provider_packages += 1)) ;;
+      sciforge-collaboration-portal-*.tgz) ((portal_packages += 1)) ;;
       sciforge-collaboration-server-*.tgz) ((server_packages += 1)) ;;
       *) die "Unexpected tarball in release bundle: $basename" ;;
     esac
@@ -456,8 +487,9 @@ validate_release_bundle() {
       || die "Tarball does not contain package/package.json: $basename"
     allowed_files["$basename"]=1
   done
-  (( domain_sdk_packages == 1 && contract_packages == 1 && provider_packages == 1 && server_packages == 1 )) \
-    || die "Bundle must contain one domain SDK, one contracts, one Zulip provider, and one server tarball."
+  (( domain_sdk_packages == 1 && contract_packages == 1 && provider_packages == 1 \
+      && portal_packages == 1 && server_packages == 1 )) \
+    || die "Bundle must contain one domain SDK, one contracts, one Zulip provider, one Portal, and one server tarball."
 
   manifest_schema_version="$(awk '$1 == "\"schemaVersion\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
   manifest_artifact="$(awk -F'"' '$2 == "artifact" { print $4 }' "$manifest_file")"
@@ -476,6 +508,28 @@ validate_release_bundle() {
   manifest_identity_edge_network="$(awk -F'"' '$2 == "identityEdgeNetwork" { print $4 }' "$manifest_file")"
   manifest_identity_acceptance_harness_sha256="$(awk -F'"' '$2 == "identityAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
   manifest_multi_worker_acceptance_harness_sha256="$(awk -F'"' '$2 == "multiWorkerAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_enabled="$(awk '$1 == "\"portalEnabled\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
+  manifest_portal_mode="$(awk -F'"' '$2 == "portalMode" { print $4 }' "$manifest_file")"
+  manifest_portal_package_archive="$(awk -F'"' '$2 == "portalPackageArchive" { print $4 }' "$manifest_file")"
+  manifest_portal_package_sha256="$(awk -F'"' '$2 == "portalPackageSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_base_path="$(awk -F'"' '$2 == "portalBasePath" { print $4 }' "$manifest_file")"
+  manifest_portal_auth_path_prefix="$(awk -F'"' '$2 == "portalAuthPathPrefix" { print $4 }' "$manifest_file")"
+  manifest_portal_api_path_prefix="$(awk -F'"' '$2 == "portalApiPathPrefix" { print $4 }' "$manifest_file")"
+  manifest_portal_events_path="$(awk -F'"' '$2 == "portalEventsPath" { print $4 }' "$manifest_file")"
+  manifest_portal_asset_directory="$(awk -F'"' '$2 == "portalAssetDirectory" { print $4 }' "$manifest_file")"
+  manifest_portal_vite_manifest_path="$(awk -F'"' '$2 == "portalViteManifestPath" { print $4 }' "$manifest_file")"
+  manifest_portal_vite_manifest_sha256="$(awk -F'"' '$2 == "portalViteManifestSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_integrity_manifest_path="$(awk -F'"' '$2 == "portalIntegrityManifestPath" { print $4 }' "$manifest_file")"
+  manifest_portal_integrity_manifest_sha256="$(awk -F'"' '$2 == "portalIntegrityManifestSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_public_origin="$(awk -F'"' '$2 == "portalPublicOrigin" { print $4 }' "$manifest_file")"
+  manifest_portal_authorized_party="$(awk -F'"' '$2 == "portalAuthorizedParty" { print $4 }' "$manifest_file")"
+  manifest_portal_oidc_client_id="$(awk -F'"' '$2 == "portalOidcClientId" { print $4 }' "$manifest_file")"
+  manifest_portal_oidc_redirect_uri="$(awk -F'"' '$2 == "portalOidcRedirectUri" { print $4 }' "$manifest_file")"
+  manifest_portal_human_needed_mode="$(awk -F'"' '$2 == "portalHumanNeededMode" { print $4 }' "$manifest_file")"
+  manifest_portal_test_worker_directory_enabled="$(awk '$1 == "\"portalTestWorkerDirectoryEnabled\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
+  manifest_portal_session_idle_seconds="$(awk '$1 == "\"portalSessionIdleSeconds\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
+  manifest_portal_session_absolute_seconds="$(awk '$1 == "\"portalSessionAbsoluteSeconds\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
+  manifest_portal_content_security_policy="$(awk -F'"' '$2 == "portalContentSecurityPolicy" { print $4 }' "$manifest_file")"
   manifest_edge_caddy_image="$(awk -F'"' '$2 == "edgeCaddyImage" { print $4 }' "$manifest_file")"
   manifest_edge_backup_script_sha256="$(awk -F'"' '$2 == "edgeBackupScriptSha256" { print $4 }' "$manifest_file")"
   manifest_edge_backup_restore_verify_script_sha256="$(awk -F'"' '$2 == "edgeBackupRestoreVerifyScriptSha256" { print $4 }' "$manifest_file")"
@@ -501,6 +555,8 @@ validate_release_bundle() {
   manifest_identity_edge_disable_script_sha256="$(awk -F'"' '$2 == "identityEdgeDisableScriptSha256" { print $4 }' "$manifest_file")"
   manifest_identity_edge_external_verify_script_sha256="$(awk -F'"' '$2 == "identityEdgeExternalVerifyScriptSha256" { print $4 }' "$manifest_file")"
   manifest_identity_edge_verify_script_sha256="$(awk -F'"' '$2 == "identityEdgeVerifyScriptSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_compose_sha256="$(awk -F'"' '$2 == "portalComposeSha256" { print $4 }' "$manifest_file")"
+  manifest_portal_asset_verify_script_sha256="$(awk -F'"' '$2 == "portalAssetVerifyScriptSha256" { print $4 }' "$manifest_file")"
   mapfile -t manifest_filenames < <(awk -F'"' '$2 == "filename" { print $4 }' "$manifest_file")
   [[ "$manifest_artifact" == sciforge-collaboration-server-bundle \
       && "$manifest_commit" == "$expected_commit" ]] \
@@ -571,7 +627,7 @@ validate_release_bundle() {
       ;;
     a-https-oidc-test)
       validate_commit "$manifest_base_commit"
-      [[ "$manifest_schema_version" == 3 \
+      [[ "$manifest_schema_version" == 4 \
           && "$manifest_deployment_boundary" == public-https-oidc-test \
           && "$manifest_hostname" == "$A_HTTPS_OIDC_TEST_HOSTNAME" \
           && "$manifest_identity_hostname" == "$A_HTTPS_OIDC_TEST_IDENTITY_HOSTNAME" \
@@ -584,14 +640,51 @@ validate_release_bundle() {
           && "$manifest_identity_edge_network" == "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" \
           && "$manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
           && "$manifest_multi_worker_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_portal_enabled" == true \
+          && "$manifest_portal_mode" == confidential-bff \
+          && "$manifest_portal_package_archive" == sciforge-collaboration-portal-*.tgz \
+          && "$manifest_portal_package_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_portal_base_path" == /portal/ \
+          && "$manifest_portal_auth_path_prefix" == /portal/auth/ \
+          && "$manifest_portal_api_path_prefix" == /portal/api/ \
+          && "$manifest_portal_events_path" == /portal/events \
+          && "$manifest_portal_asset_directory" == "$A_CLOUD_PORTAL_ASSET_DIR" \
+          && "$manifest_portal_vite_manifest_path" == dist/.vite/manifest.json \
+          && "$manifest_portal_vite_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_portal_integrity_manifest_path" == dist/ASSET_INTEGRITY.json \
+          && "$manifest_portal_integrity_manifest_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_portal_public_origin" == "$A_HTTPS_OIDC_TEST_ORIGIN" \
+          && "$manifest_portal_authorized_party" == "$A_CLOUD_PORTAL_CLIENT_ID" \
+          && "$manifest_portal_oidc_client_id" == "$A_CLOUD_PORTAL_CLIENT_ID" \
+          && "$manifest_portal_oidc_redirect_uri" == "$A_CLOUD_PORTAL_REDIRECT_URI" \
+          && "$manifest_portal_human_needed_mode" == display-only \
+          && "$manifest_portal_test_worker_directory_enabled" == true \
+          && "$manifest_portal_session_idle_seconds" == 1800 \
+          && "$manifest_portal_session_absolute_seconds" == 28800 \
+          && "$manifest_portal_content_security_policy" == "$A_CLOUD_PORTAL_CSP" \
           && "$manifest_edge_caddy_image" == "$A_HTTPS_OIDC_TEST_IMAGE" ]] \
-        || die "A HTTPS OIDC test manifest must retain its exact dual-SNI identity boundary."
+        || die "A HTTPS OIDC test manifest must retain its exact dual-SNI Portal identity boundary."
+      [[ -f "$BUNDLE_DIR/$manifest_portal_package_archive" \
+          && ! -L "$BUNDLE_DIR/$manifest_portal_package_archive" \
+          && "$(sha256sum "$BUNDLE_DIR/$manifest_portal_package_archive" | awk '{print $1}')" == \
+            "$manifest_portal_package_sha256" ]] \
+        || die "The fixed Portal package archive does not match the release manifest."
+      [[ "$(awk -F'"' '$2 == "path" { count += 1 } END { print count + 0 }' "$manifest_file")" -gt 0 ]] \
+        || die "The fixed Portal asset inventory is empty."
+      if grep -Eiq 'portalOidcClientSecret|SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET|client_secret' \
+          "$manifest_file"; then
+        die "The release manifest contains forbidden Portal secret material."
+      fi
       validate_fixed_edge_asset "$A_HTTPS_OIDC_TEST_CADDYFILE" \
         "$manifest_identity_edge_caddyfile_sha256"
       validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/common.sh" \
         "$manifest_edge_common_script_sha256"
       validate_fixed_edge_asset "$A_HTTPS_OIDC_TEST_COMPOSE_FILE" \
         "$manifest_identity_edge_compose_sha256"
+      validate_fixed_edge_asset "$A_CLOUD_PORTAL_COMPOSE_FILE" \
+        "$manifest_portal_compose_sha256"
+      validate_fixed_edge_asset "$COMMON_SCRIPT_DIR/verify-portal-assets.mjs" \
+        "$manifest_portal_asset_verify_script_sha256" true
       validate_fixed_edge_asset "$PRIVATE_DEPLOY_DIR/.dockerignore" \
         "$manifest_edge_dockerignore_sha256"
       validate_fixed_edge_asset "$COMPOSE_FILE" \
@@ -625,8 +718,8 @@ validate_release_bundle() {
       ;;
     *) die "RELEASE_MANIFEST.json contains an unsupported release mode." ;;
   esac
-  (( ${#manifest_filenames[@]} == 4 )) \
-    || die "RELEASE_MANIFEST.json must describe exactly four packages."
+  (( ${#manifest_filenames[@]} == 5 )) \
+    || die "RELEASE_MANIFEST.json must describe exactly five packages."
   for manifest_filename in "${manifest_filenames[@]}"; do
     [[ -n "${allowed_files[$manifest_filename]:-}" ]] \
       || die "RELEASE_MANIFEST.json references an unexpected package archive."
@@ -670,7 +763,7 @@ validate_release_bundle() {
     [[ -z "${seen_files[$filename]:-}" ]] || die "SHA256SUMS contains a duplicate file entry."
     seen_files["$filename"]=1
   done < "$BUNDLE_DIR/SHA256SUMS"
-  (( line_count == 8 && ${#seen_files[@]} == 8 )) || die "SHA256SUMS must cover exactly all eight release inputs."
+  (( line_count == 9 && ${#seen_files[@]} == 9 )) || die "SHA256SUMS must cover exactly all nine release inputs."
   for filename in "${!allowed_files[@]}"; do
     [[ -n "${seen_files[$filename]:-}" ]] || die "SHA256SUMS does not cover every release input."
   done
@@ -833,6 +926,13 @@ prepare_compose_environment() {
   local oidc_audience
   local oidc_authorized_parties
   local oidc_issuer
+  local portal_asset_dir=""
+  local portal_client_id=""
+  local portal_client_secret=""
+  local portal_enabled=""
+  local portal_public_origin=""
+  local portal_redirect_uri=""
+  local portal_test_worker_directory_enabled=""
   local postgres_cpus
   local postgres_memory
   local postgres_pids
@@ -866,6 +966,25 @@ prepare_compose_environment() {
   deployment_mode=core-only-private
   if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
     deployment_mode=oidc-test-private
+    [[ -f "$A_CLOUD_PORTAL_COMPOSE_FILE" && ! -L "$A_CLOUD_PORTAL_COMPOSE_FILE" ]] \
+      || die "The fixed A Cloud Portal Compose overlay is missing or unsafe."
+    portal_enabled="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_ENABLED true)"
+    portal_asset_dir="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR \
+      "$A_CLOUD_PORTAL_ASSET_DIR")"
+    portal_public_origin="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN \
+      "$A_HTTPS_OIDC_TEST_ORIGIN")"
+    portal_client_id="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID \
+      "$A_CLOUD_PORTAL_CLIENT_ID")"
+    portal_redirect_uri="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI \
+      "$A_CLOUD_PORTAL_REDIRECT_URI")"
+    portal_test_worker_directory_enabled="$(fixed_compose_value "$ENV_FILE" \
+      SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED true)"
+    printf -v portal_client_secret '%s' \
+      "$(dotenv_value "$ENV_FILE" SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET)"
+    [[ ${#portal_client_secret} -ge 32 && ${#portal_client_secret} -le 512 \
+        && "$portal_client_secret" != *[[:space:]]* \
+        && "$portal_client_secret" != replace_* ]] \
+      || die "SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET must be a non-placeholder Keycloak secret of 32-512 non-whitespace characters."
   fi
   postgres_cpus="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_CPUS 1.5)"
   postgres_memory="$(fixed_compose_value "$ENV_FILE" SCIFORGE_COLLAB_POSTGRES_MEMORY 2g)"
@@ -892,6 +1011,16 @@ prepare_compose_environment() {
   export SCIFORGE_COLLABORATION_OIDC_AUDIENCE="$oidc_audience"
   export SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES="$oidc_authorized_parties"
   export SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK="$oidc_allow_insecure_loopback"
+  if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+    export SCIFORGE_COLLABORATION_PORTAL_ENABLED="$portal_enabled"
+    export SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR="$portal_asset_dir"
+    export SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN="$portal_public_origin"
+    export SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID="$portal_client_id"
+    printf -v SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET '%s' "$portal_client_secret"
+    export SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET
+    export SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI="$portal_redirect_uri"
+    export SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED="$portal_test_worker_directory_enabled"
+  fi
   export SCIFORGE_COLLAB_DEPLOYMENT_MODE="$deployment_mode"
   export SCIFORGE_COLLAB_POSTGRES_CPUS="$postgres_cpus"
   export SCIFORGE_COLLAB_POSTGRES_MEMORY="$postgres_memory"
@@ -906,6 +1035,9 @@ prepare_compose_environment() {
   export SCIFORGE_COLLAB_LOG_MAX_FILES="$log_max_files"
   COMPOSE=(docker compose --project-name sciforge-collaboration-private \
     --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+  if [[ "$RELEASE_MANIFEST_MODE" == a-https-oidc-test ]]; then
+    COMPOSE+=(-f "$A_CLOUD_PORTAL_COMPOSE_FILE")
+  fi
 }
 
 prepare_a_https_test_edge_environment() {
@@ -1716,6 +1848,8 @@ validate_a_https_oidc_test_app() {
   local key_count
   local key_value
   local postgres_endpoint
+  local portal_secret_count
+  local portal_secret_length
   local provider_env_count
   local provider_mount_count
   local published_endpoint
@@ -1746,6 +1880,9 @@ validate_a_https_oidc_test_app() {
     'tr -d "\r\n" < /app/CONTRACT_COMMIT')"
   [[ "$container_revision" == "$expected_commit" ]] \
     || die "The OIDC test app container commit proof is invalid."
+  docker exec "$app_container_id" node /app/verify-portal-assets.mjs \
+    /app/RELEASE_MANIFEST.json "$A_CLOUD_PORTAL_ASSET_DIR" >/dev/null \
+    || die "The OIDC test app does not retain the fixed Portal package and asset inventory."
   published_endpoint="$("${COMPOSE[@]}" port app 8787)"
   [[ "$published_endpoint" == 127.0.0.1:8787 ]] \
     || die "The OIDC test app must remain published only on 127.0.0.1:8787."
@@ -1768,7 +1905,25 @@ SCIFORGE_COLLABORATION_OIDC_ISSUER|$A_HTTPS_OIDC_TEST_ISSUER
 SCIFORGE_COLLABORATION_OIDC_AUDIENCE|$A_HTTPS_OIDC_TEST_AUDIENCE
 SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES|$A_HTTPS_OIDC_TEST_AUTHORIZED_PARTIES
 SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK|false
+SCIFORGE_COLLABORATION_PORTAL_ENABLED|true
+SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR|$A_CLOUD_PORTAL_ASSET_DIR
+SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN|$A_HTTPS_OIDC_TEST_ORIGIN
+SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID|$A_CLOUD_PORTAL_CLIENT_ID
+SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI|$A_CLOUD_PORTAL_REDIRECT_URI
+SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED|true
 EOF
+  portal_secret_count="$(printf '%s\n' "$app_environment" | awk -F= '
+    $1 == "SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET" { count += 1 }
+    END { print count + 0 }
+  ')"
+  portal_secret_length="$(printf '%s\n' "$app_environment" | awk -F= '
+    $1 == "SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET" {
+      print length(substr($0, index($0, "=") + 1))
+    }
+  ')"
+  [[ "$portal_secret_count" == 1 && "$portal_secret_length" =~ ^[0-9]+$ \
+      && "$portal_secret_length" -ge 32 && "$portal_secret_length" -le 512 ]] \
+    || die "The OIDC test app does not contain exactly one bounded Portal client secret."
   provider_env_count="$(printf '%s\n' "$app_environment" | awk -F= '
     $1 == "SCIFORGE_COLLABORATION_PROVIDER_CONFIG_FILE" ||
     $1 == "SCIFORGE_COLLABORATION_SECRET_DIRECTORY" { count += 1 }

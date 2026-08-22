@@ -1,0 +1,40 @@
+/*
+ * SciForge visual primitives shared by the Electron renderer and Cloud Portal.
+ * Product surfaces map these primitives to their own semantic component tokens.
+ */
+:root {
+  --sf-bg-app: #f5f7fa;
+  --sf-bg-sidebar: #f4f7fb;
+  --sf-bg-canvas: #fbfcfe;
+  --sf-surface-1: rgba(255, 255, 255, 0.9);
+  --sf-surface-2: rgba(255, 255, 255, 0.98);
+  --sf-surface-3: #ffffff;
+  --sf-border-soft: rgba(15, 23, 42, 0.12);
+  --sf-border-strong: rgba(15, 23, 42, 0.18);
+  --sf-text-primary: #222222;
+  --sf-text-secondary: #5f6878;
+  --sf-accent: #0088ff;
+  --sf-accent-soft: rgba(0, 136, 255, 0.14);
+  --sf-font-body: "SF Pro Text", "PingFang SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  --sf-font-display: "SF Pro Display", "PingFang SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  --sf-radius-sm: 8px;
+  --sf-radius-md: 10px;
+  --sf-radius-lg: 12px;
+  --sf-motion-fast: 140ms;
+  --sf-motion-medium: 180ms;
+}
+
+[data-theme='dark'] {
+  --sf-bg-app: #101010;
+  --sf-bg-sidebar: #141414;
+  --sf-bg-canvas: #181818;
+  --sf-surface-1: rgba(24, 24, 24, 0.92);
+  --sf-surface-2: #202020;
+  --sf-surface-3: #262626;
+  --sf-border-soft: rgba(255, 255, 255, 0.1);
+  --sf-border-strong: rgba(255, 255, 255, 0.16);
+  --sf-text-primary: #ffffff;
+  --sf-text-secondary: #c7c7c7;
+  --sf-accent: #339cff;
+  --sf-accent-soft: rgba(51, 156, 255, 0.18);
+}

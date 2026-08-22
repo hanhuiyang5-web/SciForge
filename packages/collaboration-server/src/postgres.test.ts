@@ -121,6 +121,229 @@ describe('PostgreSQL pool diagnostics', () => {
 })
 
 describe('PostgreSQL production transaction path', () => {
+  it('uses a repeatable-read read-only snapshot and persists membership through one canonical upsert', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('SELECT EXISTS')) return { rows: [{ present: true }], rowCount: 1 }
+        return { rows: [], rowCount: text.startsWith('INSERT INTO') ? 1 : 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await repository.readSnapshot(async (read) => {
+      await expect(read.hasActiveOidcIdentityForUser('usr_PortalUser001', 'https://issuer.example.invalid'))
+        .resolves.toBe(true)
+      await read.listAllAgents()
+      await read.listProjectsForUser('usr_PortalUser001')
+    })
+    expect(queries[0]?.text).toBe('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    expect(queries.at(-1)?.text).toBe('COMMIT')
+    expect(queries.filter(({ text }) => text.includes('FOR UPDATE'))).toHaveLength(0)
+    expect(queries.find(({ text }) => text.includes('INNER JOIN sciforge_collaboration.project_members'))?.text)
+      .toContain('member.active=true')
+
+    queries.length = 0
+    await repository.transaction((tx) => tx.upsertProjectMember({
+      projectId: 'prj_PortalProject01',
+      userId: 'usr_PortalUser001',
+      role: 'member',
+      active: true,
+      createdAt: '2026-08-15T02:00:00.000Z'
+    }))
+    const upsert = queries.find(({ text }) => text.includes('ON CONFLICT (project_id,user_id)'))
+    expect(upsert?.text).toContain('SET role=EXCLUDED.role,active=EXCLUDED.active')
+    expect(upsert?.values).toEqual([
+      'prj_PortalProject01', 'usr_PortalUser001', 'member', true, '2026-08-15T02:00:00.000Z'
+    ])
+  })
+
+  it('uses separate count-only and serialized-byte coordination preflights inside one read snapshot', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('WITH active_member_count AS')) {
+          return { rows: [{
+            active_member_rows: '2', task_rows: '3', record_rows: '4',
+            human_request_rows: '5', human_answer_rows: '6'
+          }], rowCount: 1 }
+        }
+        if (text.includes('WITH active_member_bytes AS')) {
+          return { rows: [{
+            active_member_bytes: '240', task_bytes: '900', record_bytes: '1600',
+            human_request_bytes: '2500', human_answer_bytes: '3600'
+          }], rowCount: 1 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await repository.readSnapshot(async (read) => {
+      await expect(read.getProjectCoordinationMaterializationCounts('prj_PortalProject01')).resolves.toEqual({
+        activeMembers: '2', tasks: '3', records: '4', humanRequests: '5', humanAnswers: '6'
+      })
+      await expect(read.getProjectCoordinationMaterializationBytes('prj_PortalProject01')).resolves.toEqual({
+        activeMembers: '240', tasks: '900', records: '1600', humanRequests: '2500', humanAnswers: '3600'
+      })
+    })
+
+    expect(queries.map(({ text }) => text)).toEqual([
+      'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
+      expect.stringContaining('WITH active_member_count AS'),
+      expect.stringContaining('WITH active_member_bytes AS'),
+      'COMMIT'
+    ])
+    const counts = queries[1]!
+    const bytes = queries[2]!
+    expect(counts.values).toEqual(['prj_PortalProject01'])
+    expect(counts.text).not.toContain('to_jsonb')
+    expect(counts.text).not.toContain('octet_length')
+    expect(bytes.values).toEqual(['prj_PortalProject01'])
+    expect(bytes.text.match(/octet_length\(to_jsonb\(/gu)).toHaveLength(5)
+    expect(bytes.text).not.toContain('jsonb_agg')
+    expect(bytes.text).not.toContain('array_agg')
+    for (const table of ['project_members', 'tasks', 'project_records', 'human_requests', 'human_answers']) {
+      expect(counts.text).toContain(`sciforge_collaboration.${table}`)
+      expect(bytes.text).toContain(`sciforge_collaboration.${table}`)
+    }
+  })
+
+  it('uses native keyset Portal pages, target-only watermarks, and the real agent_nodes table', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('AS human_request_revision_sum')) {
+          return { rows: [{ task_count: '2', task_revision_sum: '3', record_count: '1',
+            record_revision_sum: '4', human_request_count: '1', human_request_revision_sum: '2' }], rowCount: 1 }
+        }
+        if (text.includes('WITH eligible AS') && text.includes('count(*) AS total')) {
+          return { rows: [{ total: '3', online: '1', busy: '1', offline: '1', desktop: '2', server: '1' }], rowCount: 1 }
+        }
+        if (text.includes('count(*) AS count') && text.includes('sciforge_collaboration.project_members')) {
+          return { rows: [{ count: '2' }], rowCount: 1 }
+        }
+        if (text.includes('count(*) AS count') && text.includes('sciforge_collaboration.project_records')) {
+          return { rows: [{ count: '7' }], rowCount: 1 }
+        }
+        if (text.includes('count(*) AS count') && text.includes('sciforge_collaboration.human_requests')) {
+          return { rows: [{ count: '5' }], rowCount: 1 }
+        }
+        if (text.includes('WITH blockers AS')) {
+          return { rows: [
+            { blocker_kind: 'open_task', user_id: 'usr_PortalWorker001' },
+            { blocker_kind: 'pending_human', user_id: 'usr_PortalWorker002' }
+          ], rowCount: 2 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await repository.readSnapshot(async (read) => {
+      await read.listProjectSummaryPageForUser({
+        userId: 'usr_PortalUser001', statuses: ['active'],
+        after: { updatedAt: '2026-08-15T02:00:00.000Z', projectId: 'prj_PortalProject01' }, limit: 25
+      })
+      await read.getWorkerDirectoryPage({
+        issuer: 'https://issuer.example.invalid', readAt: '2026-08-15T02:00:00.000Z',
+        afterAgentId: 'agt_PortalWorker01', limit: 50
+      })
+      await read.listActiveProjectMemberViewsBounded('prj_PortalProject01', 101)
+      await read.listProjectMembersByUserIds('prj_PortalProject01', ['usr_PortalWorker001', 'usr_PortalWorker002'])
+      await read.listActiveProjectMembersBounded('prj_PortalProject01', 1_001)
+      await expect(read.countActiveProjectMembers('prj_PortalProject01')).resolves.toBe(2)
+      await expect(read.countProjectRecords('prj_PortalProject01')).resolves.toBe(7)
+      await expect(read.countProjectHumanRequests('prj_PortalProject01')).resolves.toBe(5)
+      await expect(read.getProjectMemberRemovalBlockers(
+        'prj_PortalProject01', ['usr_PortalWorker001', 'usr_PortalWorker002'], '2026-08-15T02:00:00.000Z'
+      )).resolves.toEqual({
+        openTaskUserIds: ['usr_PortalWorker001'],
+        pendingHumanRequestUserIds: ['usr_PortalWorker002']
+      })
+      await read.listUsableOwnedAgentsBounded('usr_PortalUser001', 101)
+      await read.listProjectTasksBounded('prj_PortalProject01', 'tsk_PortalTask0001', 51)
+      await read.listProjectRecordsBounded('prj_PortalProject01', 'rec_PortalRecord01', 51)
+      await read.listTargetHumanRequestsForProjectBounded(
+        'prj_PortalProject01', 'usr_PortalUser001', 'hrq_PortalRequest01', 26
+      )
+      await expect(read.getPortalProjectWakeWatermarks('prj_PortalProject01', 'usr_PortalUser001'))
+        .resolves.toEqual({ taskCount: '2', taskRevisionSum: '3', recordCount: '1', recordRevisionSum: '4',
+          humanRequestCount: '1', humanRequestRevisionSum: '2' })
+    })
+
+    const projectPage = queries.find(({ text }) => text.includes('WITH project_page AS'))
+    expect(projectPage?.text).toContain('LIMIT $5')
+    expect(projectPage?.text).toContain('CROSS JOIN LATERAL')
+    expect(projectPage?.text).toContain('FROM sciforge_collaboration.tasks AS task')
+    expect(projectPage?.values).toEqual(['usr_PortalUser001', ['active'], '2026-08-15T02:00:00.000Z',
+      'prj_PortalProject01', 26])
+    const workerQueries = queries.filter(({ text }) => text.includes('agent_capability_profiles AS profile'))
+    expect(workerQueries).toHaveLength(2)
+    expect(workerQueries.every(({ text }) => text.includes('sciforge_collaboration.agent_nodes AS agent'))).toBe(true)
+    expect(workerQueries.every(({ text }) => !text.includes('sciforge_collaboration.agents'))).toBe(true)
+    expect(workerQueries.some(({ text }) => text.includes('LIMIT $4'))).toBe(true)
+    expect(workerQueries.some(({ text }) => text.includes('count(*) AS total'))).toBe(true)
+    const taskPage = queries.find(({ text }) => text.includes('task_id > $2'))
+    expect(taskPage?.values).toEqual(['prj_PortalProject01', 'tsk_PortalTask0001', 51])
+    const humanPage = queries.find(({ text }) => text.includes('human_request_id > $3'))
+    expect(humanPage?.text).toContain('target_user_id=$2')
+    expect(humanPage?.values).toEqual(['prj_PortalProject01', 'usr_PortalUser001', 'hrq_PortalRequest01', 26])
+    const watermark = queries.find(({ text }) => text.includes('AS human_request_revision_sum'))
+    expect(watermark?.text).toContain('target_user_id=$2')
+    expect(watermark?.text.match(/FROM sciforge_collaboration\.tasks/gu)).toHaveLength(1)
+    expect(watermark?.text.match(/FROM sciforge_collaboration\.project_records/gu)).toHaveLength(1)
+    expect(watermark?.text.match(/FROM sciforge_collaboration\.human_requests/gu)).toHaveLength(1)
+    const memberPage = queries.find(({ text }) => text.includes('portal_display_name'))
+    expect(memberPage?.text).toContain('INNER JOIN sciforge_collaboration.user_principals')
+    expect(memberPage?.values).toEqual(['prj_PortalProject01', 101])
+    const targetMembers = queries.find(({ text }) => text.includes('user_id=ANY($2::text[])') &&
+      text.includes('FROM sciforge_collaboration.project_members'))
+    expect(targetMembers?.values).toEqual([
+      'prj_PortalProject01', ['usr_PortalWorker001', 'usr_PortalWorker002']
+    ])
+    const activeMembers = queries.find(({ text }) => text.includes('active=true') && text.includes('LIMIT $2') &&
+      text.includes('FROM sciforge_collaboration.project_members') && !text.includes('portal_display_name'))
+    expect(activeMembers?.values).toEqual(['prj_PortalProject01', 1_001])
+    const recordCount = queries.find(({ text }) => text.includes('count(*) AS count') &&
+      text.includes('FROM sciforge_collaboration.project_records'))
+    expect(recordCount?.values).toEqual(['prj_PortalProject01'])
+    const humanRequestCount = queries.find(({ text }) => text.includes('count(*) AS count') &&
+      text.includes('FROM sciforge_collaboration.human_requests'))
+    expect(humanRequestCount?.values).toEqual(['prj_PortalProject01'])
+    const blockers = queries.find(({ text }) => text.includes('WITH blockers AS'))
+    expect(blockers?.text).toContain("task.status IN ('offered','accepted','in_progress','needs_human')")
+    expect(blockers?.text).toContain("request.status='pending'")
+    expect(blockers?.text).not.toContain('SELECT *')
+    expect(blockers?.values).toEqual([
+      'prj_PortalProject01', ['usr_PortalWorker001', 'usr_PortalWorker002'], '2026-08-15T02:00:00.000Z'
+    ])
+    const ownedAgents = queries.find(({ text }) => text.includes('SELECT agent.*') && text.includes('agent.owner_user_id=$1'))
+    expect(ownedAgents?.text).toContain('INNER JOIN sciforge_collaboration.devices')
+    expect(ownedAgents?.text).toContain('ORDER BY agent.agent_id')
+    expect(ownedAgents?.values).toEqual(['usr_PortalUser001', 101])
+    expect(queries.every(({ text }) => !text.includes('human_answers'))).toBe(true)
+    expect(queries.filter(({ text }) => text.includes('FOR UPDATE'))).toHaveLength(0)
+  })
+
   it('transfers endpoint ownership through a CAS path that also accepts external-identity-backed rows', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = []
     const connection: SqlConnection = {
@@ -271,6 +494,113 @@ describe('PostgreSQL production transaction path', () => {
     expect(queries.at(-1)?.text).toBe('COMMIT')
   })
 
+  it('locks the recipient cursor before superseding only its active unacknowledged Inbox expiry', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const recipient = { kind: 'agent' as const, id: 'agt_ScopedExpiry01' }
+    const expiredAt = '2026-08-15T04:00:00.000Z'
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('FROM sciforge_collaboration.inbox_cursors') && text.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              recipient_kind: recipient.kind,
+              recipient_id: recipient.id,
+              next_sequence: '8',
+              acked_sequence: '3',
+              updated_at: new Date('2026-08-15T03:00:00.000Z')
+            }],
+            rowCount: 1
+          }
+        }
+        if (text.includes('UPDATE sciforge_collaboration.inbox_messages')) {
+          return { rows: [], rowCount: 2 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await expect(repository.transaction((tx) => tx.supersedeExpiredInboxMessages(recipient, expiredAt)))
+      .resolves.toEqual({
+        recipient,
+        nextSequence: 8,
+        ackedSequence: 3,
+        updatedAt: '2026-08-15T03:00:00.000Z'
+      })
+
+    expect(queries.map(({ text }) => text)).toEqual([
+      'BEGIN',
+      expect.stringContaining('FROM sciforge_collaboration.inbox_cursors'),
+      expect.stringContaining('UPDATE sciforge_collaboration.inbox_messages'),
+      'COMMIT'
+    ])
+    const cursorLock = queries[1]
+    expect(cursorLock?.text.replace(/\s+/gu, ' ')).toContain(
+      'WHERE recipient_kind=$1 AND recipient_id=$2 FOR UPDATE'
+    )
+    expect(cursorLock?.values).toEqual([recipient.kind, recipient.id])
+    const scopedUpdate = queries[2]
+    const normalized = scopedUpdate?.text.replace(/\s+/gu, ' ')
+    expect(normalized).toContain('WHERE recipient_kind=$1 AND recipient_id=$2 AND sequence>$3')
+    expect(normalized).toContain("AND disposition='active' AND expires_at<=$4")
+    expect(scopedUpdate?.values).toEqual([recipient.kind, recipient.id, 3, expiredAt])
+    expect(normalized).not.toContain('DELETE')
+  })
+
+  it('expires one HumanNeeded request only when id, target, revision, status, and expiry all match', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    let attempts = 0
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        if (text.includes('UPDATE sciforge_collaboration.human_requests')) {
+          attempts += 1
+          return { rows: [], rowCount: attempts === 1 ? 1 : 0 }
+        }
+        return { rows: [], rowCount: 0 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+    const humanRequestId = 'hrq_ScopedExpiry01'
+    const targetUserId = 'usr_ScopedExpiry01'
+    const expiredAt = '2026-08-15T04:00:00.000Z'
+
+    await expect(repository.transaction((tx) => tx.expireHumanRequestIfPending(
+      humanRequestId,
+      targetUserId,
+      7,
+      expiredAt
+    ))).resolves.toBe(true)
+    await expect(repository.transaction((tx) => tx.expireHumanRequestIfPending(
+      humanRequestId,
+      targetUserId,
+      7,
+      expiredAt
+    ))).resolves.toBe(false)
+
+    const updates = queries.filter(({ text }) => text.includes('UPDATE sciforge_collaboration.human_requests'))
+    expect(updates).toHaveLength(2)
+    for (const update of updates) {
+      const normalized = update.text.replace(/\s+/gu, ' ')
+      expect(normalized).toContain("SET status='expired',revision=revision+1,updated_at=$4")
+      expect(normalized).toContain(
+        "WHERE human_request_id=$1 AND target_user_id=$2 AND revision=$3 AND status='pending' AND expires_at<=$4"
+      )
+      expect(update.values).toEqual([humanRequestId, targetUserId, 7, expiredAt])
+    }
+  })
+
   it('revokes only the selected live credential and reports an already-revoked credential', async () => {
     const writes: Array<{ text: string; values: readonly unknown[] }> = []
     let revokeAttempt = 0
@@ -307,7 +637,7 @@ describe('PostgreSQL production transaction path', () => {
     }
   })
 
-  it('runs the ordered collaboration migrations through schema version 8', async () => {
+  it('runs the ordered collaboration migrations through schema version 9', async () => {
     const migrations: string[] = []
     const pool: SqlPool = {
       query: async (text) => { migrations.push(text); return { rows: [], rowCount: 0 } },
@@ -317,8 +647,8 @@ describe('PostgreSQL production transaction path', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(8)
-    expect(migrations).toHaveLength(8)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
+    expect(migrations).toHaveLength(9)
     expect(migrations[1]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.resource_refs')
     expect(migrations[1]).toContain('created_by_user_id text NOT NULL')
     expect(migrations[1]).toContain('CONSTRAINT resource_refs_open_url_safe')
@@ -418,6 +748,12 @@ describe('PostgreSQL production transaction path', () => {
     expect(migrations[7]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.managed_provider_container_jobs')
     expect(migrations[7]).toContain('managed_provider_container_jobs_claim_idx')
     expect(migrations[7]).toContain('VALUES (8)')
+    expect(migrations[8]).toContain('tasks_project_task_id_idx')
+    expect(migrations[8]).toContain('project_records_project_record_id_idx')
+    expect(migrations[8]).toContain('human_requests_project_target_request_id_idx')
+    expect(migrations[8]).toContain('tasks_active_assignee_idx')
+    expect(migrations[8]).toContain('oidc_identities_active_user_issuer_idx')
+    expect(migrations[8]).toContain('VALUES (9)')
   })
 
   it('reconciles representative legacy TaskResult fixtures deterministically', () => {
@@ -1036,7 +1372,8 @@ describe('PostgreSQL production transaction path', () => {
     const at = '2026-08-15T02:00:00.000Z'
     const record: StoredProjectRecord = {
       projectRecordId: 'rec_PostgresResult1', projectId: 'prj_PostgresResult1', kind: 'task_result',
-      status: 'candidate', summary: 'The bounded result summary.', authorAgentId: 'agt_PostgresWorker1',
+      status: 'candidate', summary: 'The bounded result summary.', authorUserId: 'usr_PostgresWorker1',
+      authorAgentId: 'agt_PostgresWorker1',
       sourceTaskId: 'tsk_PostgresResult1', sourceExecutionId: 'exe_PostgresResult1', sourceRevision: 3,
       criterionEvidence: [{ criterionId: 'cri_PostgresResult1', summary: 'Criterion satisfied.',
         resourceRefIds: ['rrf_PostgresResult1'] }], resourceRefIds: ['rrf_PostgresResult1'],
@@ -1044,7 +1381,7 @@ describe('PostgreSQL production transaction path', () => {
     }
     const row = {
       project_record_id: record.projectRecordId, project_id: record.projectId, kind: record.kind,
-      status: record.status, summary: record.summary, author_user_id: null,
+      status: record.status, summary: record.summary, author_user_id: record.authorUserId,
       author_agent_id: record.authorAgentId, source_task_id: record.sourceTaskId,
       source_execution_id: record.sourceExecutionId, source_revision: record.sourceRevision,
       criterion_evidence: record.criterionEvidence, resource_ref_ids: record.resourceRefIds,
@@ -1090,6 +1427,7 @@ describe('PostgreSQL production transaction path', () => {
     }
     expect(lock?.values).toEqual([record.sourceTaskId, record.sourceExecutionId])
     const insert = queries.find(({ text }) => text.includes('INSERT INTO sciforge_collaboration.project_records'))
+    expect(insert?.values.slice(5, 7)).toEqual([record.authorUserId, record.authorAgentId])
     expect(insert?.values.slice(8, 13)).toEqual([
       record.sourceExecutionId, record.sourceRevision, JSON.stringify(record.criterionEvidence),
       JSON.stringify(record.resourceRefIds), record.logSummary
@@ -1331,6 +1669,12 @@ describe('PostgreSQL production transaction path', () => {
           }
         }
         queries.push({ text, values })
+        if (text.includes('GROUP BY user_id')) {
+          return { rows: [
+            { user_id: 'usr_PostgresLockMemberA', count: '4' },
+            { user_id: 'usr_PostgresLockMemberB', count: '9' }
+          ], rowCount: 2 }
+        }
         return { rows: [], rowCount: text.startsWith('SELECT * FROM sciforge_collaboration.receipts') ? 0 : 1 }
       },
       release: () => undefined
@@ -1346,20 +1690,28 @@ describe('PostgreSQL production transaction path', () => {
     const userId = 'usr_PostgresLockUser01'
     const realmId = 'zulip-realm-sensitive'
     const zulipUserId = 'zulip-user-sensitive'
+    const membershipUserIds = ['usr_PostgresLockMemberB', 'usr_PostgresLockMemberA']
 
     await repository.transaction(async (tx) => {
       await tx.lockOidcIdentity(issuer, subject)
       await tx.lockZulipBindingIdentity(userId, realmId, zulipUserId)
+      await tx.lockProjectMembershipUsers(membershipUserIds)
+      await expect(tx.countActiveProjectMembershipsByUserIds(membershipUserIds)).resolves.toEqual([
+        { userId: 'usr_PostgresLockMemberA', count: 4 },
+        { userId: 'usr_PostgresLockMemberB', count: 9 }
+      ])
     })
 
     const advisory = queries.filter(({ text }) => text.includes('pg_advisory_xact_lock'))
-    expect(advisory).toHaveLength(3)
+    expect(advisory).toHaveLength(5)
     const keys = advisory.map(({ values }) => String(values[0]))
     expect(keys).toEqual(keys.map((key) => expect.stringMatching(/^-?[0-9]+$/u)))
-    expect(new Set(keys).size).toBe(3)
+    expect(new Set(keys).size).toBe(5)
     expect(BigInt(keys[1]!)).toBeLessThan(BigInt(keys[2]!))
+    const membershipCount = queries.find(({ text }) => text.includes('GROUP BY user_id'))
+    expect(membershipCount?.values).toEqual([['usr_PostgresLockMemberA', 'usr_PostgresLockMemberB']])
     const serialized = JSON.stringify(advisory)
-    for (const sensitive of [issuer, subject, userId, realmId, zulipUserId]) {
+    for (const sensitive of [issuer, subject, userId, realmId, zulipUserId, ...membershipUserIds]) {
       expect(serialized).not.toContain(sensitive)
     }
     expect(serialized).not.toContain('\u0000')

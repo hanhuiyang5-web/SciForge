@@ -696,6 +696,57 @@
                 "revision"
               ],
               "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "addedUserIds": {
+                  "items": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "const": "1.0",
+                  "type": "string"
+                },
+                "removedUserIds": {
+                  "items": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "reroutedFromMessageId": {
+                  "pattern": "^ibx_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "project.members.updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "protocolVersion",
+                "type",
+                "projectId",
+                "revision",
+                "addedUserIds",
+                "removedUserIds"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -1214,6 +1265,57 @@
                 "approvalId",
                 "requiresDesktop",
                 "safeSummary"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "addedUserIds": {
+                  "items": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "const": "1.0",
+                  "type": "string"
+                },
+                "removedUserIds": {
+                  "items": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "reroutedFromMessageId": {
+                  "pattern": "^ibx_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "project.members.updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "protocolVersion",
+                "type",
+                "projectId",
+                "revision",
+                "addedUserIds",
+                "removedUserIds"
               ],
               "type": "object"
             }

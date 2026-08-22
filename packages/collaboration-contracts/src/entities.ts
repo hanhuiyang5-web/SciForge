@@ -389,6 +389,112 @@ export const projectSchema = z.object({
 })
 export type Project = z.infer<typeof projectSchema>
 
+export const projectTaskStatusCountsSchema = z.object({
+  offered: z.number().int().min(0).max(10_000),
+  accepted: z.number().int().min(0).max(10_000),
+  rejected: z.number().int().min(0).max(10_000),
+  running: z.number().int().min(0).max(10_000),
+  needsHuman: z.number().int().min(0).max(10_000),
+  succeeded: z.number().int().min(0).max(10_000),
+  failed: z.number().int().min(0).max(10_000),
+  cancelled: z.number().int().min(0).max(10_000)
+}).strict()
+export type ProjectTaskStatusCounts = z.infer<typeof projectTaskStatusCountsSchema>
+
+export const projectListItemSchema = z.object({
+  projectId: projectIdSchema,
+  displayName: displayNameSchema,
+  goal: nonEmptyTextSchema,
+  status: projectStatusSchema,
+  role: z.enum(['owner', 'member', 'observer']),
+  memberCount: z.number().int().min(1).max(1_000),
+  taskCounts: projectTaskStatusCountsSchema,
+  pendingResultCount: z.number().int().min(0).max(50_000),
+  revision: revisionSchema,
+  updatedAt: timestampSchema
+}).strict()
+export type ProjectListItem = z.infer<typeof projectListItemSchema>
+
+export const projectListPageSchema = z.object({
+  schemaVersion: schemaVersionSchema,
+  type: z.literal('project_list_page'),
+  items: z.array(projectListItemSchema).max(50),
+  nextCursor: z.string().min(1).max(2_048).optional()
+}).strict()
+export type ProjectListPage = z.infer<typeof projectListPageSchema>
+
+export const workerPresenceStatusSchema = z.enum(['online', 'busy', 'offline'])
+export type WorkerPresenceStatus = z.infer<typeof workerPresenceStatusSchema>
+
+export const workerDirectoryGpuSchema = z.object({
+  vendor: z.string().trim().min(1).max(100).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+  memoryGB: z.number().finite().min(0).max(1_000_000).optional()
+}).strict()
+
+export const workerDirectoryEntrySchema = z.object({
+  ownerUserId: userIdSchema,
+  agentId: agentIdSchema,
+  displayName: displayNameSchema,
+  nodeType: agentNodeTypeSchema,
+  os: z.object({
+    family: z.enum(['windows', 'macos', 'linux']),
+    architecture: z.enum(['x64', 'arm64'])
+  }).strict(),
+  runtimeIds: z.array(capabilityRuntimeIdSchema).max(100).refine(uniqueStrings, 'Runtime IDs must be unique'),
+  capabilityIds: z.array(agentCapabilitySchema).max(256).refine(uniqueStrings, 'Capability IDs must be unique'),
+  gpu: z.array(workerDirectoryGpuSchema).max(32),
+  status: workerPresenceStatusSchema,
+  lastSeenAt: timestampSchema,
+  profileExpiresAt: timestampSchema,
+  revision: revisionSchema
+}).strict()
+export type WorkerDirectoryEntry = z.infer<typeof workerDirectoryEntrySchema>
+
+export const workerDirectoryStatsSchema = z.object({
+  total: z.number().int().min(0).max(100_000),
+  online: z.number().int().min(0).max(100_000),
+  busy: z.number().int().min(0).max(100_000),
+  offline: z.number().int().min(0).max(100_000),
+  desktop: z.number().int().min(0).max(100_000),
+  server: z.number().int().min(0).max(100_000)
+}).strict().superRefine((stats, context) => {
+  if (stats.total !== stats.online + stats.busy + stats.offline) {
+    context.addIssue({ code: 'custom', path: ['total'], message: 'Worker presence totals must agree' })
+  }
+  if (stats.total !== stats.desktop + stats.server) {
+    context.addIssue({ code: 'custom', path: ['total'], message: 'Worker node-type totals must agree' })
+  }
+})
+export type WorkerDirectoryStats = z.infer<typeof workerDirectoryStatsSchema>
+
+export const workerDirectoryPageSchema = z.object({
+  schemaVersion: schemaVersionSchema,
+  type: z.literal('worker_directory_page'),
+  stats: workerDirectoryStatsSchema,
+  items: z.array(workerDirectoryEntrySchema).max(50),
+  nextCursor: z.string().min(1).max(2_048).optional(),
+  readAt: timestampSchema
+}).strict()
+export type WorkerDirectoryPage = z.infer<typeof workerDirectoryPageSchema>
+
+export const ownedAgentListItemSchema = z.object({
+  agentId: agentIdSchema,
+  displayName: displayNameSchema,
+  nodeType: agentNodeTypeSchema,
+  connectionStatus: agentConnectionStatusSchema,
+  lastSeenAt: timestampSchema.optional(),
+  revision: revisionSchema
+}).strict()
+export type OwnedAgentListItem = z.infer<typeof ownedAgentListItemSchema>
+
+export const ownedAgentListSchema = z.object({
+  schemaVersion: schemaVersionSchema,
+  type: z.literal('owned_agent_list'),
+  items: z.array(ownedAgentListItemSchema).max(100)
+}).strict()
+export type OwnedAgentList = z.infer<typeof ownedAgentListSchema>
+
 export const projectEndpointBindingStatusSchema = z.enum(['active', 'error', 'closed'])
 export const projectEndpointBindingSchema = z.object({
   ...entityMetadataShape,

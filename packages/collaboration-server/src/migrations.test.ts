@@ -78,7 +78,7 @@ const REQUIRED_COLUMN_TYPES = {
     updated_at: 'timestamp with time zone', revoked_at: 'timestamp with time zone'
   },
   project_records: {
-    status: 'text', source_execution_id: 'text', criterion_evidence: 'jsonb',
+    author_user_id: 'text', status: 'text', source_execution_id: 'text', criterion_evidence: 'jsonb',
     resource_ref_ids: 'jsonb', log_summary: 'text'
   },
   resource_refs: {
@@ -103,6 +103,8 @@ const REQUIRED_COLUMN_TYPES = {
     created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone'
   }
 } as const
+
+const REQUIRED_NOT_NULL_COLUMNS = ['project_records.author_user_id'] as const
 
 const REQUIRED_CONSTRAINTS = {
   action_confirmations: [
@@ -242,19 +244,71 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
 } as const
 
 const REQUIRED_INDEXES = {
-  agent_nodes: ['agent_nodes_device_id'],
+  agent_nodes: ['agent_nodes_device_id', 'agent_nodes_active_owner_agent_idx'],
   device_enrollments: ['device_enrollments_owner_installation'],
   human_endpoint_bindings: ['human_endpoint_bindings_other_provider_identity_active_unique',
     'human_endpoint_bindings_zulip_provider_identity_active_unique',
     'human_endpoint_bindings_zulip_user_realm_active_unique'],
   managed_provider_container_jobs: ['managed_provider_container_jobs_claim_idx'],
-  project_records: ['project_records_task_result_execution_unique'],
-  tasks: ['tasks_execution_id_unique', 'tasks_result_record_unique'],
+  human_answers: ['human_answers_project_created_answer_idx'],
+  human_requests: ['human_requests_project_target_request_id_idx'],
+  oidc_identities: ['oidc_identities_active_user_issuer_idx'],
+  project_members: ['project_members_active_user_project_idx', 'project_members_active_project_user_idx'],
+  project_records: [
+    'project_records_task_result_execution_unique',
+    'project_records_project_record_id_idx',
+    'project_records_candidate_task_result_project_idx'
+  ],
+  tasks: ['tasks_execution_id_unique', 'tasks_result_record_unique', 'tasks_project_task_id_idx',
+    'tasks_active_assignee_idx'],
   zulip_binding_requests: ['zulip_binding_requests_pending_user_realm_unique']
 } as const
 
+const REQUIRED_PORTAL_INDEX_DEFINITIONS = {
+  'agent_nodes.agent_nodes_active_owner_agent_idx': {
+    key_expressions: ['owner_user_id', 'agent_id'],
+    predicate: "(status = 'active'::text)"
+  },
+  'tasks.tasks_project_task_id_idx': {
+    key_expressions: ['project_id', 'task_id'],
+    predicate: null
+  },
+  'human_answers.human_answers_project_created_answer_idx': {
+    key_expressions: ['project_id', 'created_at', 'human_answer_id'],
+    predicate: null
+  },
+  'project_records.project_records_project_record_id_idx': {
+    key_expressions: ['project_id', 'project_record_id'],
+    predicate: null
+  },
+  'human_requests.human_requests_project_target_request_id_idx': {
+    key_expressions: ['project_id', 'target_user_id', 'human_request_id'],
+    predicate: null
+  },
+  'tasks.tasks_active_assignee_idx': {
+    key_expressions: ['assignee_agent_id'],
+    predicate: "(status = ANY (ARRAY['accepted'::text, 'in_progress'::text, 'needs_human'::text]))"
+  },
+  'oidc_identities.oidc_identities_active_user_issuer_idx': {
+    key_expressions: ['user_id', 'issuer'],
+    predicate: "(status = 'active'::text)"
+  },
+  'project_members.project_members_active_user_project_idx': {
+    key_expressions: ['user_id', 'project_id'],
+    predicate: '(active = true)'
+  },
+  'project_members.project_members_active_project_user_idx': {
+    key_expressions: ['project_id', 'user_id'],
+    predicate: 'active'
+  },
+  'project_records.project_records_candidate_task_result_project_idx': {
+    key_expressions: ['project_id'],
+    predicate: "((kind = 'task_result'::text) AND (status = 'candidate'::text))"
+  }
+} as const
+
 type TableRow = { table_name: unknown }
-type ColumnRow = { table_name: unknown; column_name: unknown; data_type: unknown }
+type ColumnRow = { table_name: unknown; column_name: unknown; data_type: unknown; is_nullable?: unknown }
 type ConstraintRow = {
   table_name: unknown
   constraint_name: unknown
@@ -262,7 +316,18 @@ type ConstraintRow = {
   update_action?: unknown
   delete_action?: unknown
 }
-type IndexRow = { table_name: unknown; index_name: unknown }
+type IndexRow = {
+  table_name: unknown
+  index_name: unknown
+  access_method?: unknown
+  is_unique?: unknown
+  is_valid?: unknown
+  is_ready?: unknown
+  has_expressions?: unknown
+  has_included_columns?: unknown
+  key_expressions?: unknown
+  predicate?: unknown
+}
 
 type ReadyState = {
   versions?: unknown[]
@@ -279,10 +344,10 @@ describe('collaboration database readiness', () => {
   })
 
   it.each([
-    { label: 'a missing migration', versions: [1, 2, 3, 4, 5, 6, 7] },
-    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
-    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 7, 8] },
-    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 'not-a-version'] }
+    { label: 'a missing migration', versions: [1, 2, 3, 4, 5, 6, 7, 8] },
+    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 8, 9] },
+    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 'not-a-version'] }
   ])('rejects $label', async ({ versions }) => {
     await expect(isCollaborationDatabaseReady(poolFor({ versions }))).resolves.toBe(false)
   })
@@ -316,6 +381,15 @@ describe('collaboration database readiness', () => {
       await expect(isCollaborationDatabaseReady(poolFor({ columns }))).resolves.toBe(false)
     }
   )
+
+  it('rejects a nullable ProjectRecord author User column', async () => {
+    const columns = requiredColumnRows().map((row) => (
+      row.table_name === 'project_records' && row.column_name === 'author_user_id'
+        ? { ...row, is_nullable: 'YES' }
+        : row
+    ))
+    await expect(isCollaborationDatabaseReady(poolFor({ columns }))).resolves.toBe(false)
+  })
 
   it.each(requiredConstraintRows())(
     'rejects missing $table_name constraint $constraint_name',
@@ -358,6 +432,18 @@ describe('collaboration database readiness', () => {
     }
   )
 
+  it.each(Object.keys(REQUIRED_PORTAL_INDEX_DEFINITIONS))(
+    'rejects a same-name Portal index with the wrong definition: %s',
+    async (qualifiedName) => {
+      const indexes = requiredIndexRows().map((row) => (
+        `${String(row.table_name)}.${String(row.index_name)}` === qualifiedName
+          ? { ...row, key_expressions: ['wrong_column'] }
+          : row
+      ))
+      await expect(isCollaborationDatabaseReady(poolFor({ indexes }))).resolves.toBe(false)
+    }
+  )
+
   it.each(['versions', 'tables', 'columns', 'constraints', 'indexes'] as const)(
     'returns false without exposing a %s query or permission error',
     async (failQuery) => {
@@ -367,7 +453,7 @@ describe('collaboration database readiness', () => {
 })
 
 describe('collaboration migrations', () => {
-  it('preserves A migrations 1-6, installs portable ResourceRefs as version 7, and managed containers as version 8', async () => {
+  it('preserves migrations 1-8 and adds the author repair plus bounded Portal reads as version 9', async () => {
     const statements: string[] = []
     const pool: SqlPool = {
       query: async (text) => {
@@ -380,8 +466,8 @@ describe('collaboration migrations', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(8)
-    expect(statements).toHaveLength(8)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
+    expect(statements).toHaveLength(9)
     expect(statements[1]).toContain('resource_refs')
     expect(statements[1]).not.toContain("'provider_identity'")
     expect(statements[5]).toContain("'provider_identity'")
@@ -391,6 +477,42 @@ describe('collaboration migrations', () => {
     expect(statements[7]).toContain('managed_provider_containers')
     expect(statements[7]).toContain('managed_provider_container_jobs')
     expect(statements[7]).toContain('VALUES (8)')
+    expect(statements[8]).toContain('tasks_project_task_id_idx')
+    expect(statements[8]).toContain('IN SHARE ROW EXCLUSIVE MODE')
+    expect(statements[8]).toContain(`LOCK TABLE
+  sciforge_collaboration.user_principals,
+  sciforge_collaboration.agent_nodes,
+  sciforge_collaboration.projects,
+  sciforge_collaboration.tasks,
+  sciforge_collaboration.project_members,
+  sciforge_collaboration.project_records,
+  sciforge_collaboration.human_requests,
+  sciforge_collaboration.audit_events
+IN SHARE ROW EXCLUSIVE MODE`)
+    expect(statements[8]).toContain('migration_0009_active_project_membership_limit_exceeded')
+    expect(statements[8]).toContain('migration_0009_project_record_limit_exceeded')
+    expect(statements[8]).toContain('migration_0009_human_needed_limit_exceeded')
+    expect(statements[8]).toContain('migration_0009_project_record_author_source_invalid')
+    expect(statements[8]).toContain('migration_0009_project_record_author_transfer_invalid')
+    expect(statements[8]).toContain('migration_0009_project_record_author_transfer_ambiguous')
+    expect(statements[8]).toContain("transfer.action = 'agent.owner.transfer'")
+    expect(statements[8]).toContain('transfer.created_at > record.created_at')
+    expect(statements[8]).toContain('transfer_actor.created_at > transfer.created_at')
+    expect(statements[8]).toContain('COALESCE(first_transfer.actor_user_id, agent.owner_user_id)')
+    expect(statements[8]).toContain('WHERE record.author_user_id IS NULL')
+    expect(statements[8]).not.toContain('SET author_user_id = task.assignee_user_id')
+    expect(statements[8]).not.toContain('FOREIGN KEY (author_agent_id, author_user_id)')
+    expect(statements[8]).toContain('ALTER COLUMN author_user_id SET NOT NULL')
+    expect(statements[8]).toContain('project_records_project_record_id_idx')
+    expect(statements[8]).toContain('human_requests_project_target_request_id_idx')
+    expect(statements[8]).toContain('human_answers_project_created_answer_idx')
+    expect(statements[8]).toContain('tasks_active_assignee_idx')
+    expect(statements[8]).toContain('oidc_identities_active_user_issuer_idx')
+    expect(statements[8]).toContain('project_members_active_user_project_idx')
+    expect(statements[8]).toContain('project_members_active_project_user_idx')
+    expect(statements[8]).toContain('project_records_candidate_task_result_project_idx')
+    expect(statements[8]).toContain('agent_nodes_active_owner_agent_idx')
+    expect(statements[8]).toContain('VALUES (9)')
   })
 })
 
@@ -399,7 +521,7 @@ function poolFor(state: ReadyState = {}): SqlPool {
     query: async (text) => {
       if (text.includes('schema_migrations')) {
         if (state.failQuery === 'versions') throw new Error('private migration query detail')
-        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6, 7, 8]).map((version) => ({ version }))
+        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6, 7, 8, 9]).map((version) => ({ version }))
         return { rows, rowCount: rows.length }
       }
       if (text.includes('information_schema.tables')) {
@@ -417,7 +539,7 @@ function poolFor(state: ReadyState = {}): SqlPool {
         const rows = state.constraints ?? requiredConstraintRows()
         return { rows, rowCount: rows.length }
       }
-      if (text.includes('pg_catalog.pg_indexes')) {
+      if (text.includes('pg_catalog.pg_index')) {
         if (state.failQuery === 'indexes') throw new Error('private index permission detail')
         const rows = state.indexes ?? requiredIndexRows()
         return { rows, rowCount: rows.length }
@@ -438,7 +560,10 @@ function requiredColumnRows(): ColumnRow[] {
     Object.entries(columns).map(([columnName, dataType]) => ({
       table_name: tableName,
       column_name: columnName,
-      data_type: dataType
+      data_type: dataType,
+      is_nullable: REQUIRED_NOT_NULL_COLUMNS.includes(
+        `${tableName}.${columnName}` as (typeof REQUIRED_NOT_NULL_COLUMNS)[number]
+      ) ? 'NO' : 'YES'
     }))
   ))
 }
@@ -456,7 +581,12 @@ function requiredConstraintRows(): ConstraintRow[] {
           constraintName === 'inbox_messages_recipient_kind_check'
           ? "CHECK (recipient_kind IN ('user', 'human_endpoint', 'agent', 'provider_identity'))"
           : undefined
-        return { table_name: tableName, constraint_name: constraintName, definition, ...actions }
+        return {
+          table_name: tableName,
+          constraint_name: constraintName,
+          definition,
+          ...actions
+        }
       })
     ))
   ))
@@ -464,6 +594,25 @@ function requiredConstraintRows(): ConstraintRow[] {
 
 function requiredIndexRows(): IndexRow[] {
   return Object.entries(REQUIRED_INDEXES).flatMap(([tableName, indexNames]) => (
-    indexNames.map((indexName) => ({ table_name: tableName, index_name: indexName }))
+    indexNames.map((indexName) => {
+      const required = REQUIRED_PORTAL_INDEX_DEFINITIONS[
+        `${tableName}.${indexName}` as keyof typeof REQUIRED_PORTAL_INDEX_DEFINITIONS
+      ]
+      return {
+        table_name: tableName,
+        index_name: indexName,
+        ...(required
+          ? {
+              access_method: 'btree',
+              is_unique: false,
+              is_valid: true,
+              is_ready: true,
+              has_expressions: false,
+              has_included_columns: false,
+              ...required
+            }
+          : {})
+      }
+    })
   ))
 }

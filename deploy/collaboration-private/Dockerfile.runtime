@@ -22,7 +22,12 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
 COPY bundle/CONTRACT_COMMIT ./CONTRACT_COMMIT
-RUN test "$(tr -d '\r\n' < CONTRACT_COMMIT)" = "${CONTRACT_COMMIT}"
+COPY bundle/RELEASE_MANIFEST.json ./RELEASE_MANIFEST.json
+COPY scripts/verify-portal-assets.mjs ./verify-portal-assets.mjs
+RUN test "$(tr -d '\r\n' < CONTRACT_COMMIT)" = "${CONTRACT_COMMIT}" \
+    && node ./verify-portal-assets.mjs \
+      ./RELEASE_MANIFEST.json \
+      /app/node_modules/@sciforge/collaboration-portal/dist
 
 ENV NODE_ENV=production
 USER 10001:10001

@@ -8,11 +8,11 @@ _集成分支 `integration/desktop-cloud-multi-worker-e2e-20260822` · 审计快
 
 ### 事实（FACT）
 
-当前集成分支已经把官方 GUI、A 云端合同与服务、AC Desktop OIDC、R0.1 portable contract，以及 BC Desktop Cloud 执行链合并为同一条源码路径；实现合并提交为 `a1609969903c761830c7ab90258b9251ed26a65d`。本地类型检查、协作回归、A 门禁、bundle、domain composition、capability governance、根级 typecheck、Electron build 与 lint 均已通过。
+当前集成分支已经把官方 GUI、A 云端合同与服务、AC Desktop OIDC、R0.1 portable contract，以及 BC Desktop Cloud 执行链合并为同一条源码路径；实现合并提交为 `a1609969903c761830c7ab90258b9251ed26a65d`。历史集成检查点 `9b5c0d1b7ca501bab669d2c3c4023abce54bbc82` 固定的是 schema v8；它的本地类型检查、协作回归、A 门禁、bundle、domain composition、capability governance、根级 typecheck、Electron build 与 lint 回执不能自动继承给正在形成的 Portal `NEW_COMMIT`。
 
 这仍然不等于产品闭环已经完成。当前没有一份绑定该集成提交、两台真实 SciForge Desktop、两个不同 OIDC 主体、真实 AgentRuntime 执行和云端结果回显的 `PRODUCT E2E PASS` 回执。
 
-云服务器的已知运行基线仍是 A 提交 `7ad6d48c3bd4c6eba23c90dda370c912e6950f49` 和 PostgreSQL schema v5；本集成源码包含连续 migration `0001`—`0008`，尚未在该 ECS 上安装或迁移。不得把本地通过的 schema v8 代码、A API harness 或 Keycloak 就绪回执描述成“最新版 Desktop 已上线”。
+云服务器的已知运行基线仍是 A 提交 `7ad6d48c3bd4c6eba23c90dda370c912e6950f49` 和 PostgreSQL schema v5。历史 `9b5c0d1b…` 检查点只包含连续 migration `0001`—`0008`（schema v8）；当前 Portal 工作树新增 `0009_portal_bounded_reads.sql`，最终目标 `NEW_COMMIT` 为 schema v9，但尚未提交、构建、安装或迁移到该 ECS。不得把历史 schema8 回执、本地 schema9 代码、A API harness 或 Keycloak 就绪回执描述成“Portal/最新版 Desktop 已上线”。
 
 | 状态标签 | 含义 | 可否用于完成声明 |
 | --- | --- | --- |
@@ -105,6 +105,7 @@ BC 后续边界已收敛：Worker Runner 属于 B；C 不保留第二套 Task ad
 | AC identity | [`Nemophilist117/SciForge`](https://github.com/Nemophilist117/SciForge/commit/95c660dac565abe8f4e8e4a16f7f29d9a58e5d2f) | `95c660dac565abe8f4e8e4a16f7f29d9a58e5d2f` | Desktop OIDC/Device/Principal |
 | R0.1 contracts | [`feat/a-r0-1-cloud-contracts`](https://github.com/hanhuiyang5-web/SciForge/commit/8c88e811b9ab0757c75e2c0a52c7e93c065ce496) | `8c88e811b9ab0757c75e2c0a52c7e93c065ce496` | portable contract 与 schema v8 |
 | BC live integration | [`YOUessi/SciForge`](https://github.com/YOUessi/SciForge/commit/42d1d9ee016add5327103a715db8f100cc8a4593) | `42d1d9ee016add5327103a715db8f100cc8a4593` | Desktop transport、Worker 与结果链 |
+| 历史集成检查点 | `integration/desktop-cloud-multi-worker-e2e-20260822` | `9b5c0d1b7ca501bab669d2c3c4023abce54bbc82` | 已提交 schema v8 总账；不是 Portal/schema9 `NEW_COMMIT` |
 
 精确 merge parents 如下；该表而不是示意图是 Git 拓扑真值：
 
@@ -249,7 +250,7 @@ A 有两种不同的可视化界面，不能混为一谈：
 
 ### 计划（PLAN）
 
-下一次维护窗口把 A 从 `7ad/schema5` 原子升级到绑定最终 `NEW_COMMIT` 的 schema v8 fixed release。在这之前不修改 live ECS，不把 integration branch 直接覆盖现网，也不让旧 app 在未证明兼容时连接已迁移数据库。
+下一次维护窗口把 A 从 `7ad/schema5` 原子升级到绑定最终 Portal `NEW_COMMIT` 的 schema v9 fixed release。历史 `9b5c0d1b/schema8` 只作为来源检查点，不能作为本次发布物或数据库 attestation。在这之前不修改 live ECS，不把工作树直接覆盖现网，也不让旧 app 连接已迁移数据库。
 
 ## 🎯 阶段一双机闭环与阶段二多 Worker 目标
 
@@ -331,7 +332,7 @@ sequenceDiagram
 
 | 卡点 | 影响 | 解除条件 |
 | --- | --- | --- |
-| ECS 仍为 `7ad/schema5` | 新 Desktop 与 schema v8 合同不能作为同版验收 | fixed release 维护发布通过 |
+| ECS 仍为 `7ad/schema5` | Portal `NEW_COMMIT` 与 schema v9 合同不能作为同版验收 | fixed release 维护发布通过 |
 | 最终 `NEW_COMMIT`/bundle 尚未生成 | 无法冻结 Desktop 与 Cloud 同版 | 文档提交后 clean build |
 | 无真实双 Desktop receipt | 不可声明产品闭环 | 完成阶段一 10 步 |
 | Worker ID 依赖带外复制 | 可跑，但产品易用性有限 | 后续设计不可枚举 invitation |
@@ -343,7 +344,7 @@ sequenceDiagram
 
 ### 事实（FACT）
 
-以下协作、构建和生成物回执首先绑定实现合并 `a1609969903c761830c7ab90258b9251ed26a65d`；根级 Vitest 在测试组合修复 `7c33bb73f3a182672ed2f45e723d513ba13a7aeb` 上重新执行：
+以下协作、构建和生成物回执首先绑定实现合并 `a1609969903c761830c7ab90258b9251ed26a65d`；根级 Vitest 在测试组合修复 `7c33bb73f3a182672ed2f45e723d513ba13a7aeb` 上重新执行，并最终记录在历史 `9b5c0d1b/schema8` 总账。它们是 Portal `NEW_COMMIT/schema9` 的历史输入，不是当前发布通过回执：
 
 | 门禁 | 实证结果 | 状态 | 说明 |
 | --- | --- | --- | --- |
@@ -368,8 +369,8 @@ sequenceDiagram
 | 层级 | 必跑项 | 出口证据 | 完成状态 |
 | --- | --- | --- | --- |
 | Final source | collaboration、A、bundle、static、domain、capability、root typecheck/build/lint | 命令、exit code、commit | `PENDING BUILD` |
-| Fixed artifact | manifest schema 3、九文件 bundle、`SHA256SUMS`、archive sidecar | hash 清单 | `PENDING BUILD` |
-| PostgreSQL | backup/restore、隔离 v8、迁移、restart | attestation 与脱敏 receipt | `PENDING MAINTENANCE` |
+| Fixed artifact | Portal manifest schema 4、十文件 bundle（五个 tgz）、九项 `SHA256SUMS`、archive sidecar | hash 清单 | `PENDING BUILD` |
+| PostgreSQL | backup/restore、隔离 v9、十个 0009 index、三项 hard cap、迁移、restart | 兼容命名 attestation 与脱敏 receipt | `PENDING MAINTENANCE` |
 | Local edge | TLS/SNI、issuer/JWKS、health、WSS、网络/端口 | local verifier receipt | `PENDING MAINTENANCE` |
 | External edge | 独立公网 resolver/network 的 fixed verifier | external receipt | `PENDING MAINTENANCE` |
 | A real-token | 1 Orchestrator + 2 Worker API/WSS harness | A service receipt | `PENDING MAINTENANCE` |
@@ -380,9 +381,9 @@ sequenceDiagram
 
 ### 事实（FACT）
 
-`a-https-oidc-test` bundle 的 manifest schema 必须为 `3`，并固定 `releaseMode`、`deploymentBoundary`、双 hostname、issuer、audience、authorized parties、secure loopback、Provider/confirm disabled、identity-edge network、18 个 ECS 资产摘要，以及 identity/multi-worker harness 摘要。bundle 只有九个文件；所有输入由 `SHA256SUMS` 覆盖，archive 另有可信侧 SHA-256。
+历史 `9b5c0d1b/schema8` 的 `a-https-oidc-test` 合同是 manifest schema 3、四个 tgz、九文件 bundle；它不能作为 Portal 发布物。Portal `NEW_COMMIT` 的固定合同升级为 manifest schema 4、五个 tgz、十文件 bundle，`SHA256SUMS` 精确覆盖其余九个输入，并新增 Portal package/asset inventory、独立 `sciforge-cloud-console` party、redirect/CSP/feature flag 以及 20 个 ECS 资产摘要。archive 仍需另有可信侧 SHA-256；最终 hash 只能从 clean `NEW_COMMIT` 构建生成。
 
-当前 live A 是 schema v5；集成 release 从 server tarball 连续推导 `0001`—`0008`。文件名仍为 `verify-postgres-v5-integration.sh`，但当前门禁实际验证 schema v8，这个兼容名称不能被误解为只测 v5。
+当前 live A 是 `7ad/schema5`；历史 `9b5c0d1b` 从 server tarball 连续推导 `0001`—`0008`（schema v8）；Portal `NEW_COMMIT` 再加入 `0009_portal_bounded_reads.sql` 并要求 schema v9。文件名仍为 `verify-postgres-v5-integration.sh`，`/run/...postgres-v5.attestation` 及既有 handoff 的 `POSTGRES_V8_ATTESTATION` 字段也为兼容自动化保留，但当前门禁和字段值必须证明 schema v9；任何兼容名称都不能被解释成只测 v5/v8。
 
 ### 计划（PLAN）
 
@@ -406,7 +407,7 @@ npm run collaboration:bundle -- \
   --output "<trusted-artifact-directory>/release"
 ```
 
-随后按[部署手册](../../deploy/collaboration-private/README.md)从 exact commit `git archive` 部署树，把九个 bundle 文件装入 archive；记录：
+随后按[部署手册](../../deploy/collaboration-private/README.md)从 exact commit `git archive` 部署树，把十个 bundle 文件装入 archive；记录：
 
 - `NEW_COMMIT`
 - `RELEASE_MANIFEST.json` SHA-256
@@ -421,7 +422,7 @@ npm run collaboration:bundle -- \
 2. 从旧 `7ad` fixed release 运行 `disable-a-https-oidc-test.sh`，确认宿主和 Docker 无 443 listener
 3. 对 schema v5 生产库执行 `backup.sh`，立即运行 `verify-backup-restore.sh`，把 dump/sidecar 复制到加密异机存储
 4. 把新 archive 以 root-only 流程安装到 `/srv/sciforge-collaboration/releases/<NEW_COMMIT>/`
-5. 运行隔离 schema v8 门禁：
+5. 运行隔离 schema v9 门禁；除证明 0004 的 NULL ProjectRecord 作者可从记录之后第一条 accepted `agent.owner.transfer` 的旧 owner actor 安全回填（Task assignee User 即使被所有权转移级联改写也不能作为历史真值）、多次转移选择第一条、相同时间戳歧义 fail closed、转移前的非空历史作者不被改写、作者列最终为 `NOT NULL` 外，还要证明历史数据未超过“每 User 1000 个 active Project membership、每 Project 50000 条 record、每 Project 10000 条 HumanNeeded”的 fixed cap，并要求回执同时列出十个 `0009` bounded-read index：`agent_nodes_active_owner_agent_idx`、`human_answers_project_created_answer_idx`、`human_requests_project_target_request_id_idx`、`oidc_identities_active_user_issuer_idx`、`project_members_active_project_user_idx`、`project_members_active_user_project_idx`、`project_records_candidate_task_result_project_idx`、`project_records_project_record_id_idx`、`tasks_active_assignee_idx`、`tasks_project_task_id_idx`。
 
 ```bash
 sudo "/srv/sciforge-collaboration/releases/$NEW_COMMIT/deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh" \
@@ -430,7 +431,7 @@ sudo "/srv/sciforge-collaboration/releases/$NEW_COMMIT/deploy/collaboration-priv
   --confirm-isolated-database-test
 ```
 
-6. 只有 attestation 通过后才运行 app 部署；它会消费 attestation、备份、迁移 v5→v8、启动并验证：
+6. 只有 attestation 与 index receipt 通过后才运行 app 部署；它会消费兼容命名的 attestation、备份、迁移 v5→v9、启动并验证：
 
 ```bash
 sudo "/srv/sciforge-collaboration/releases/$NEW_COMMIT/deploy/collaboration-private/scripts/deploy.sh" \
@@ -469,12 +470,12 @@ sudo "/srv/sciforge-collaboration/releases/$NEW_COMMIT/deploy/collaboration-priv
 
 #### 回滚入口
 
-回滚不是“把旧容器再启动”。schema v8 没有 down migration，旧 `7ad/schema5` app 不得直接连接已迁移数据库。
+回滚不是“把旧容器再启动”。schema v9 没有 down migration，旧 `7ad/schema5` app 不得直接连接已迁移数据库。
 
 1. 立即关闭安全组公网 TCP 443
 2. 从当前候选 fixed release 运行零参数 `disable-a-https-oidc-test.sh`
 3. 停止候选 app，保留容器日志、release、image、backup 与数据库现场
-4. 若只需 edge 止血，保持 app loopback，排查后重新执行新 release 的完整 edge 门禁
+4. 若只需 edge/Portal 止血，保持 schema9-compatible app loopback、关闭 Portal/公网 edge，排查后重新执行新 release 的完整门禁
 5. 若需回退到 `7ad/schema5`，在新 volume/隔离数据库恢复维护前 v5 dump，验证 restore、表集与 row count 后，再部署旧 fixed release；不得覆盖唯一生产 volume
 6. 恢复 core-only 时必须使用空 issuer profile、重新部署 app 并跑旧 core-only 本地/外部门禁；不能只替换 Caddy
 7. Keycloak、realm、用户、client、mapper 与 Keycloak PostgreSQL 不由 A 回滚脚本修改
@@ -517,12 +518,19 @@ Caddy image 已在源码固定为 `caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d
 
 已完成 / 已冻结：
 - IMPLEMENTATION_MERGE=a1609969903c761830c7ab90258b9251ed26a65d
+- HISTORICAL_INTEGRATION_CHECKPOINT=9b5c0d1b7ca501bab669d2c3c4023abce54bbc82（schema8；不是 Portal 发布提交）
 - LIVE_A_BASELINE=7ad6d48c3bd4c6eba23c90dda370c912e6950f49
 - LIVE_DB_SCHEMA=5
-- CANDIDATE_DB_SCHEMA=8
+- CANDIDATE_DB_SCHEMA=9
+- CONTRACT_ARTIFACT_DATABASE_SCHEMA=9
+- CANDIDATE_DB_MIGRATION=0009_portal_bounded_reads.sql
+- CANDIDATE_DB_INDEX_SET=agent_nodes_active_owner_agent_idx,human_answers_project_created_answer_idx,human_requests_project_target_request_id_idx,oidc_identities_active_user_issuer_idx,project_members_active_project_user_idx,project_members_active_user_project_idx,project_records_candidate_task_result_project_idx,project_records_project_record_id_idx,tasks_active_assignee_idx,tasks_project_task_id_idx
+- CANDIDATE_DB_HARD_CAPS=active_project_memberships_per_user:1000,project_records_per_project:50000,human_needed_per_project:10000（create/add/reactivate 以稳定 User 顺序取得事务 advisory lock；record/HumanNeeded 在 Project row lock 内 count-and-insert）
 - OIDC_ISSUER=https://login-test.sciforge.cn/realms/SciForge
 - OIDC_AUDIENCE=sciforge-cloud-api
 - OIDC_DESKTOP_AZP=sciforge-desktop
+- PORTAL_OIDC_AZP=sciforge-cloud-console（独立 Portal verifier；不加入公共 /v1 allowlist）
+- PORTAL_REDIRECT_URI=https://cloud-test.sciforge.cn/portal/auth/callback
 - IDENTITY_EDGE_NETWORK=sciforge-keycloak_identity-edge
 - KEYCLOAK_UPSTREAM=keycloak:8080
 - KEYCLOAK_DB_ON_IDENTITY_EDGE=false
@@ -531,8 +539,8 @@ Caddy image 已在源码固定为 `caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d
 - PUBLIC_TCP_80=deny
 - KEYCLOAK_COMPOSE_SHA256=0dfdf4b4d89ac90d9b2a9d1dd089f637778590f9e90980d1b4f50a386ccea437
 - A_OIDC_EDGE_COMPOSE_SOURCE_SHA256=be1e93dc33a38566aedb1f28b81e416b3f549915f5915a7c5d70ea830499c713
-- A_CONTRACT_TGZ_SHA256=1400f659eb3ad88624b716ebe7f484619c06240133b065df079c68d7d06eb8f0
-- RELEASE_MANIFEST_SCHEMA=3
+- HISTORICAL_9B5_A_CONTRACT_TGZ_SHA256=1400f659eb3ad88624b716ebe7f484619c06240133b065df079c68d7d06eb8f0（不得用于 Portal NEW_COMMIT）
+- RELEASE_MANIFEST_SCHEMA=4
 - CADDY_IMAGE=caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a
 - SCRIPT_MODE=deploy/disable/verify/backup/restart/static/postgres-runner 0755；common.sh/Caddyfile/Compose/Dockerfile/.dockerignore 0644；collaboration.env 0600；archive/sidecar 0600；ECS 资产 root-owned 且 group/other 不可写
 
@@ -541,6 +549,8 @@ Caddy image 已在源码固定为 `caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d
 - RELEASE_MANIFEST_SHA256=PENDING_BUILD
 - SHA256SUMS_SHA256=PENDING_BUILD
 - TRUSTED_ARCHIVE_SHA256=PENDING_BUILD
+- PORTAL_TGZ_SHA256=PENDING_BUILD
+- PORTAL_ASSET_INTEGRITY_SHA256=PENDING_BUILD
 - IDENTITY_ACCEPTANCE_HARNESS_SHA256=PENDING_BUILD
 - MULTI_WORKER_ACCEPTANCE_HARNESS_SHA256=PENDING_BUILD
 
@@ -551,7 +561,8 @@ Caddy image 已在源码固定为 `caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d
 - EDGE_CONTAINER_ID=PENDING_MAINTENANCE
 - EDGE_IDENTITY_IPV4=PENDING_MAINTENANCE（必须精确为 172.24.0.3）
 - IMAGE_SEAL_RECEIPT=PENDING_MAINTENANCE（runtime/edge image ID、revision、container ID、approval marker 窄字段）
-- POSTGRES_V8_ATTESTATION=PENDING_MAINTENANCE
+- POSTGRES_V8_ATTESTATION=PENDING_MAINTENANCE（兼容字段名保留；值必须绑定 NEW_COMMIT/schema9）
+- POSTGRES_V9_INDEX_RECEIPT=PENDING_MAINTENANCE（必须含十个固定 index 及三项 hard cap）
 - BACKUP_RESTORE_RECEIPT=PENDING_MAINTENANCE
 - POSTGRES_RESTART_RECEIPT=PENDING_MAINTENANCE
 - LOCAL_EDGE_VERIFY_RECEIPT=PENDING_MAINTENANCE
@@ -569,7 +580,7 @@ Caddy image 已在源码固定为 `caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d
 1. 先关闭安全组公网 TCP 443。
 2. 从当前 fixed release 运行 disable-a-https-oidc-test.sh。
 3. 保留候选容器、日志、image、release、backup 与数据库现场。
-4. edge 止血可保持新 app loopback；回退 7ad/schema5 必须把维护前 v5 dump 恢复到新 volume/隔离数据库并验证，禁止旧 app 直连 schema8。
+4. edge/Portal 止血可保持 schema9-compatible 新 app loopback并关闭 Portal；回退 7ad/schema5 必须把维护前 v5 dump 恢复到新 volume/隔离数据库并验证，禁止旧 app 直连 schema9。
 5. A 回滚不修改 Keycloak、realm、client、用户、mapper 或 Keycloak PostgreSQL。
 ```
 

@@ -51,6 +51,7 @@ import {
   projectInputSchema,
   projectCapabilityDirectorySchema,
   projectCoordinationViewSchema,
+  projectListPageSchema,
   projectEndpointBindingSchema,
   projectRecordSchema,
   resourceRefCreateMetadataSchema,
@@ -62,7 +63,9 @@ import {
   structuredTaskResultSchema,
   taskSafeFailureCodeSchema,
   taskStatusSchema,
-  userPrincipalSchema
+  userPrincipalSchema,
+  workerDirectoryPageSchema,
+  ownedAgentListSchema
 } from './entities.js'
 import { collaborationErrorSchema } from './errors.js'
 import {
@@ -244,6 +247,14 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
     previousCoordinatorAgentId: agentIdSchema,
     coordinatorAgentId: agentIdSchema,
     revision: revisionSchema
+  }).strict(),
+  z.object({
+    ...agentInboxEnvelopeShape,
+    type: z.literal('project.members.updated'),
+    projectId: projectIdSchema,
+    revision: revisionSchema,
+    addedUserIds: z.array(userIdSchema).max(1_000),
+    removedUserIds: z.array(userIdSchema).max(1_000)
   }).strict()
 ])
 export type AgentInboxPayload = z.infer<typeof agentInboxPayloadSchema>
@@ -284,6 +295,14 @@ export const userInboxPayloadSchema = z.discriminatedUnion('type', [
     approvalId: providerOpaqueIdSchema,
     requiresDesktop: z.literal(true),
     safeSummary: z.string().trim().min(1).max(500)
+  }).strict(),
+  z.object({
+    ...agentInboxEnvelopeShape,
+    type: z.literal('project.members.updated'),
+    projectId: projectIdSchema,
+    revision: revisionSchema,
+    addedUserIds: z.array(userIdSchema).max(1_000),
+    removedUserIds: z.array(userIdSchema).max(1_000)
   }).strict()
 ])
 export type UserInboxPayload = z.infer<typeof userInboxPayloadSchema>
@@ -459,6 +478,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('agent.rotate_credential'), agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.owner.transfer'), agentId: agentIdSchema, targetUserId: userIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('agent.revoke'), agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('agent.owned.list') }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('credential.revoke_current') }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('participant.get'), userId: userIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.catalog.get'), provider: providerIdSchema.optional() }).strict(),
@@ -477,8 +497,35 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('projection.message.publish'), projectionId: projectionIdSchema, projectionRevision: revisionSchema, localItemId: localItemIdSchema, localTurnId: runtimeTurnIdSchema.optional(), kind: z.enum(['user_message', 'assistant_final', 'system_status']), text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.create'), ownerUserId: userIdSchema, displayName: z.string().trim().min(1).max(200), goal: nonEmptyTextSchema, memberUserIds: z.array(userIdSchema).min(1).max(1_000), coordinatorAgentId: agentIdSchema, budget: z.object({ maxTasks: z.number().int().min(1).max(10_000), maxTasksPerRound: z.number().int().min(1).max(1_000), maxCoordinationRounds: z.number().int().min(1).max(10_000), maxTaskRetries: z.number().int().min(0).max(100) }).strict() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.get'), projectId: projectIdSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('project.list'),
+    statuses: z.array(z.enum(['draft', 'active', 'paused', 'completed', 'cancelled'])).max(5)
+      .refine((statuses) => new Set(statuses).size === statuses.length, 'Project statuses must be unique').optional(),
+    cursor: z.string().min(1).max(2_048).optional(),
+    limit: z.number().int().min(1).max(50) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.coordination_view.get'), projectId: projectIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.capability_directory.get'), projectId: projectIdSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('worker.directory.page'),
+    cursor: z.string().min(1).max(2_048).optional(),
+    limit: z.number().int().min(1).max(50) }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('project.members.update'), projectId: projectIdSchema,
+    expectedRevision: revisionSchema,
+    addMemberUserIds: z.array(userIdSchema).max(1_000).default([]),
+    removeMemberUserIds: z.array(userIdSchema).max(1_000).default([]) }).strict().superRefine((command, context) => {
+      const additions = new Set(command.addMemberUserIds)
+      const removals = new Set(command.removeMemberUserIds)
+      if (additions.size !== command.addMemberUserIds.length) {
+        context.addIssue({ code: 'custom', path: ['addMemberUserIds'], message: 'Member additions must be unique' })
+      }
+      if (removals.size !== command.removeMemberUserIds.length) {
+        context.addIssue({ code: 'custom', path: ['removeMemberUserIds'], message: 'Member removals must be unique' })
+      }
+      if (additions.size + removals.size === 0) {
+        context.addIssue({ code: 'custom', path: ['addMemberUserIds'], message: 'At least one membership change is required' })
+      }
+      if ([...additions].some((userId) => removals.has(userId))) {
+        context.addIssue({ code: 'custom', path: ['removeMemberUserIds'], message: 'A member cannot be added and removed together' })
+      }
+    }),
   z.object({ ...writeCommandShape, type: z.literal('project.transition'), projectId: projectIdSchema, expectedRevision: revisionSchema,
     status: z.enum(['active', 'paused', 'completed', 'cancelled']), finalRecordDigest: sha256Schema.optional(),
     confirmationId: confirmationIdSchema.optional() }).strict().superRefine((command, context) => {
@@ -624,6 +671,9 @@ export const restEntitySchema = z.union([
   projectSchema,
   projectCoordinationViewSchema,
   projectCapabilityDirectorySchema,
+  projectListPageSchema,
+  workerDirectoryPageSchema,
+  ownedAgentListSchema,
   projectEndpointBindingSchema,
   taskSchema,
   projectRecordSchema,

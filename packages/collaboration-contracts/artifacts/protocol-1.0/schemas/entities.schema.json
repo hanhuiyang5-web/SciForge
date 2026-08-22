@@ -3368,6 +3368,437 @@
     {
       "additionalProperties": false,
       "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "goal": {
+                "maxLength": 32000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "memberCount": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "pendingResultCount": {
+                "maximum": 50000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "member",
+                  "observer"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "active",
+                  "paused",
+                  "completed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "taskCounts": {
+                "additionalProperties": false,
+                "properties": {
+                  "accepted": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "cancelled": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "needsHuman": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "offered": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rejected": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "running": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "succeeded": {
+                    "maximum": 10000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "offered",
+                  "accepted",
+                  "rejected",
+                  "running",
+                  "needsHuman",
+                  "succeeded",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "object"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "projectId",
+              "displayName",
+              "goal",
+              "status",
+              "role",
+              "memberCount",
+              "taskCounts",
+              "pendingResultCount",
+              "revision",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "nextCursor": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "type": {
+          "const": "project_list_page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "type",
+        "items"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "capabilityIds": {
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_.-]{0,127}$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "gpu": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "memoryGB": {
+                      "maximum": 1000000,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "model": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "lastSeenAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "nodeType": {
+                "enum": [
+                  "desktop",
+                  "server"
+                ],
+                "type": "string"
+              },
+              "os": {
+                "additionalProperties": false,
+                "properties": {
+                  "architecture": {
+                    "enum": [
+                      "x64",
+                      "arm64"
+                    ],
+                    "type": "string"
+                  },
+                  "family": {
+                    "enum": [
+                      "windows",
+                      "macos",
+                      "linux"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "family",
+                  "architecture"
+                ],
+                "type": "object"
+              },
+              "ownerUserId": {
+                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "profileExpiresAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "runtimeIds": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "online",
+                  "busy",
+                  "offline"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "ownerUserId",
+              "agentId",
+              "displayName",
+              "nodeType",
+              "os",
+              "runtimeIds",
+              "capabilityIds",
+              "gpu",
+              "status",
+              "lastSeenAt",
+              "profileExpiresAt",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "nextCursor": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "readAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "stats": {
+          "additionalProperties": false,
+          "properties": {
+            "busy": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "desktop": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offline": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "online": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "server": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "online",
+            "busy",
+            "offline",
+            "desktop",
+            "server"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "worker_directory_page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "type",
+        "stats",
+        "items",
+        "readAt"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "connectionStatus": {
+                "enum": [
+                  "online",
+                  "offline"
+                ],
+                "type": "string"
+              },
+              "displayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "lastSeenAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "nodeType": {
+                "enum": [
+                  "desktop",
+                  "server"
+                ],
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "agentId",
+              "displayName",
+              "nodeType",
+              "connectionStatus",
+              "revision"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "type": {
+          "const": "owned_agent_list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "type",
+        "items"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "createdAt": {
           "format": "date-time",
           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",

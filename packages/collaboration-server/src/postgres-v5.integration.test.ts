@@ -32,6 +32,9 @@ import { CollaborationService } from './service.js'
 const INTEGRATION_ENABLED = process.env.SCIFORGE_POSTGRES_V5_INTEGRATION === '1'
 const describePostgresV5 = INTEGRATION_ENABLED ? describe : describe.skip
 const NOW = new Date('2026-08-18T12:00:00.000Z')
+const LEGACY_RECORD_AT = new Date(NOW.getTime() - 3_000)
+const FIRST_LEGACY_TRANSFER_AT = new Date(NOW.getTime() - 2_000)
+const SECOND_LEGACY_TRANSFER_AT = new Date(NOW.getTime() - 1_000)
 const now = () => new Date(NOW)
 const nowEpochSeconds = Math.floor(NOW.getTime() / 1_000)
 const V5_BASELINE_MIGRATIONS = [
@@ -50,6 +53,19 @@ type MigrationEvidence = Readonly<{
   readyAtV1: boolean
   readyAtV5: boolean
   readyAtCurrent: boolean
+  unsafeProjectRecordAuthorSourceRejected: boolean
+  ambiguousProjectRecordAuthorTransferRejected: boolean
+  equalTimestampProjectRecordAuthorTransferRejected: boolean
+  activeProjectMembershipLimitRejected: boolean
+  projectRecordLimitRejected: boolean
+  humanNeededLimitRejected: boolean
+  legacyProjectRecordAuthorUserAtV5: unknown
+  legacyProjectRecordAuthorUserAtCurrent: unknown
+  legacyProjectRecordAuthorAgentAtCurrent: unknown
+  legacyTaskAssigneeUserAtCurrent: unknown
+  transferredProjectRecordAuthorUserAtCurrent: unknown
+  transferredProjectRecordAgentOwnerAtCurrent: unknown
+  legacyProjectRecordAuthorUserNullableAtCurrent: unknown
   legacyAgentStatus: string
   legacyAgentDeviceId: unknown
   legacyCredentialRevoked: boolean
@@ -101,6 +117,172 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     const versionsAtV5 = await migrationVersions(databasePool)
     const readyAtV5 = await isCollaborationDatabaseReady(databasePool)
 
+    const legacyRecordAtV5 = await databasePool.query<{
+      author_user_id: unknown
+      author_agent_id: unknown
+    }>(
+      `SELECT author_user_id,author_agent_id
+       FROM sciforge_collaboration.project_records
+       WHERE source_task_id=$1`,
+      ['tsk_pg_legacy_completed_0001']
+    )
+    const legacyRecordV5 = legacyRecordAtV5.rows[0]
+    if (!legacyRecordV5 || legacyRecordV5.author_user_id !== null ||
+        legacyRecordV5.author_agent_id !== 'agt_pg_legacy_agent_0001') {
+      throw new Error('Schema v4 did not materialize the expected legacy Agent-only ProjectRecord fixture.')
+    }
+
+    await databasePool.query(
+      `INSERT INTO sciforge_collaboration.project_records
+         (project_record_id,project_id,kind,status,summary,author_user_id,author_agent_id,
+          revision,created_at,updated_at)
+       VALUES ($1,$2,'observation','candidate',$3,$4,$5,1,$6,$6)`,
+      [
+        'rec_pg_pretransfer_author_0001',
+        'prj_pg_legacy_project_0001',
+        'This immutable author predates an Agent ownership transfer.',
+        'usr_pg_legacy_user_0001',
+        'agt_pg_legacy_agent_0001',
+        LEGACY_RECORD_AT.toISOString()
+      ]
+    )
+    await databasePool.query(
+      `WITH transferred AS (
+         UPDATE sciforge_collaboration.agent_nodes
+         SET owner_user_id=$2,revision=revision+1,updated_at=$3
+         WHERE agent_id=$1
+         RETURNING agent_id
+       )
+       INSERT INTO sciforge_collaboration.audit_events
+         (audit_event_id,actor_kind,actor_user_id,action,resource_kind,resource_id,outcome,created_at)
+       SELECT $4,'user',$5,'agent.owner.transfer','agent',agent_id,'accepted',$3
+       FROM transferred`,
+      [
+        'agt_pg_legacy_agent_0001',
+        'usr_pg_legacy_other_0001',
+        FIRST_LEGACY_TRANSFER_AT.toISOString(),
+        'audit_pg_legacy_transfer_0001',
+        'usr_pg_legacy_user_0001'
+      ]
+    )
+    await databasePool.query(
+      `WITH transferred AS (
+         UPDATE sciforge_collaboration.agent_nodes
+         SET owner_user_id=$2,revision=revision+1,updated_at=$3
+         WHERE agent_id=$1
+         RETURNING agent_id
+       )
+       INSERT INTO sciforge_collaboration.audit_events
+         (audit_event_id,actor_kind,actor_user_id,action,resource_kind,resource_id,outcome,created_at)
+       SELECT $4,'user',$5,'agent.owner.transfer','agent',agent_id,'accepted',$3
+       FROM transferred`,
+      [
+        'agt_pg_legacy_agent_0001',
+        'usr_pg_legacy_final_0001',
+        SECOND_LEGACY_TRANSFER_AT.toISOString(),
+        'audit_pg_legacy_transfer_0002',
+        'usr_pg_legacy_other_0001'
+      ]
+    )
+
+    const cascadedTaskAssignee = await databasePool.query<{ assignee_user_id: unknown }>(
+      `SELECT assignee_user_id
+       FROM sciforge_collaboration.tasks
+       WHERE task_id=$1`,
+      ['tsk_pg_legacy_completed_0001']
+    )
+    if (cascadedTaskAssignee.rows[0]?.assignee_user_id !== 'usr_pg_legacy_final_0001') {
+      throw new Error('The legacy Task owner did not cascade through both Agent ownership transfers.')
+    }
+
+    const migrationV9 = await readFile(
+      new URL('../migrations/0009_portal_bounded_reads.sql', import.meta.url),
+      'utf8'
+    )
+    await databasePool.query(
+      `INSERT INTO sciforge_collaboration.audit_events
+         (audit_event_id,actor_kind,actor_user_id,action,resource_kind,resource_id,outcome,created_at)
+       VALUES ($1,'user',$2,'agent.owner.transfer','agent',$3,'accepted',$4)`,
+      [
+        'audit_pg_legacy_transfer_ambiguous_0001',
+        'usr_pg_legacy_user_0001',
+        'agt_pg_legacy_agent_0001',
+        FIRST_LEGACY_TRANSFER_AT.toISOString()
+      ]
+    )
+    const ambiguousProjectRecordAuthorTransferRejected = await migrationFailureMatches(
+      databasePool,
+      migrationV9,
+      'migration_0009_project_record_author_transfer_ambiguous'
+    )
+    if (!ambiguousProjectRecordAuthorTransferRejected) {
+      throw new Error('Schema v9 did not reject same-timestamp ProjectRecord author transfer evidence.')
+    }
+    await databasePool.query(
+      'DELETE FROM sciforge_collaboration.audit_events WHERE audit_event_id=$1',
+      ['audit_pg_legacy_transfer_ambiguous_0001']
+    )
+
+    await databasePool.query(
+      `INSERT INTO sciforge_collaboration.audit_events
+         (audit_event_id,actor_kind,actor_user_id,action,resource_kind,resource_id,outcome,created_at)
+       VALUES ($1,'user',$2,'agent.owner.transfer','agent',$3,'accepted',$4)`,
+      [
+        'audit_pg_legacy_transfer_equal_0001',
+        'usr_pg_legacy_user_0001',
+        'agt_pg_legacy_agent_0001',
+        LEGACY_RECORD_AT.toISOString()
+      ]
+    )
+    const equalTimestampProjectRecordAuthorTransferRejected = await migrationFailureMatches(
+      databasePool,
+      migrationV9,
+      'migration_0009_project_record_author_transfer_invalid'
+    )
+    if (!equalTimestampProjectRecordAuthorTransferRejected) {
+      throw new Error('Schema v9 did not reject equal-time ProjectRecord author transfer evidence.')
+    }
+    await databasePool.query(
+      'DELETE FROM sciforge_collaboration.audit_events WHERE audit_event_id=$1',
+      ['audit_pg_legacy_transfer_equal_0001']
+    )
+
+    await databasePool.query(
+      `INSERT INTO sciforge_collaboration.agent_nodes
+         (agent_id,installation_id,owner_user_id,display_name,node_type,capabilities,status,
+          connection_status,credential_generation,revision,updated_at,revoked_at)
+       VALUES ($1,$2,$3,$4,'desktop','[]'::jsonb,'revoked','offline',1,1,$5,$5)`,
+      [
+        'agt_pg_legacy_other_0001',
+        'ins_pg_legacy_other_0001',
+        'usr_pg_legacy_other_0001',
+        'Other Legacy PostgreSQL Agent',
+        NOW.toISOString()
+      ]
+    )
+    await databasePool.query(
+      `UPDATE sciforge_collaboration.project_records
+       SET author_agent_id=$2
+       WHERE source_task_id=$1`,
+      ['tsk_pg_legacy_completed_0001', 'agt_pg_legacy_other_0001']
+    )
+    const unsafeProjectRecordAuthorSourceRejected = await migrationFailureMatches(
+      databasePool,
+      migrationV9,
+      'migration_0009_project_record_author_source_invalid'
+    )
+    if (!unsafeProjectRecordAuthorSourceRejected) {
+      throw new Error('Schema v9 did not reject an unsafe ProjectRecord source/author Agent mismatch.')
+    }
+    await databasePool.query(
+      `UPDATE sciforge_collaboration.project_records
+       SET author_agent_id=$2
+       WHERE source_task_id=$1`,
+      ['tsk_pg_legacy_completed_0001', 'agt_pg_legacy_agent_0001']
+    )
+
+    const historicalCapEvidence = await verifyMigrationHardCaps(databasePool, migrationV9)
+
     await runCollaborationMigrations(databasePool)
     const versionsAtCurrent = await migrationVersions(databasePool)
     const readyAtCurrent = await isCollaborationDatabaseReady(databasePool)
@@ -119,6 +301,40 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     )
     const legacy = legacyAgent.rows[0]
     if (!legacy) throw new Error('Migration did not preserve the legacy Agent fixture.')
+    const legacyRecordAtCurrent = await databasePool.query<{
+      author_user_id: unknown
+      author_agent_id: unknown
+      assignee_user_id: unknown
+    }>(
+      `SELECT record.author_user_id,record.author_agent_id,task.assignee_user_id
+       FROM sciforge_collaboration.project_records AS record
+       JOIN sciforge_collaboration.tasks AS task
+         ON task.task_id=record.source_task_id
+       WHERE record.source_task_id=$1`,
+      ['tsk_pg_legacy_completed_0001']
+    )
+    const legacyRecordCurrent = legacyRecordAtCurrent.rows[0]
+    if (!legacyRecordCurrent) throw new Error('Migration did not preserve the legacy ProjectRecord fixture.')
+    const transferredRecordAtCurrent = await databasePool.query<{
+      author_user_id: unknown
+      owner_user_id: unknown
+    }>(
+      `SELECT record.author_user_id,agent.owner_user_id
+       FROM sciforge_collaboration.project_records AS record
+       JOIN sciforge_collaboration.agent_nodes AS agent
+         ON agent.agent_id=record.author_agent_id
+       WHERE record.project_record_id=$1`,
+      ['rec_pg_pretransfer_author_0001']
+    )
+    const transferredRecordCurrent = transferredRecordAtCurrent.rows[0]
+    if (!transferredRecordCurrent) throw new Error('Migration did not preserve the transferred author fixture.')
+    const authorColumn = await databasePool.query<{ is_nullable: unknown }>(
+      `SELECT is_nullable
+       FROM information_schema.columns
+       WHERE table_schema='sciforge_collaboration'
+         AND table_name='project_records'
+         AND column_name='author_user_id'`
+    )
     migrationEvidence = {
       postgresVersion: String(version.rows[0]?.server_version),
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
@@ -128,6 +344,17 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
       readyAtV1,
       readyAtV5,
       readyAtCurrent,
+      unsafeProjectRecordAuthorSourceRejected,
+      ambiguousProjectRecordAuthorTransferRejected,
+      equalTimestampProjectRecordAuthorTransferRejected,
+      ...historicalCapEvidence,
+      legacyProjectRecordAuthorUserAtV5: legacyRecordV5.author_user_id,
+      legacyProjectRecordAuthorUserAtCurrent: legacyRecordCurrent.author_user_id,
+      legacyProjectRecordAuthorAgentAtCurrent: legacyRecordCurrent.author_agent_id,
+      legacyTaskAssigneeUserAtCurrent: legacyRecordCurrent.assignee_user_id,
+      transferredProjectRecordAuthorUserAtCurrent: transferredRecordCurrent.author_user_id,
+      transferredProjectRecordAgentOwnerAtCurrent: transferredRecordCurrent.owner_user_id,
+      legacyProjectRecordAuthorUserNullableAtCurrent: authorColumn.rows[0]?.is_nullable,
       legacyAgentStatus: String(legacy.status),
       legacyAgentDeviceId: legacy.device_id,
       legacyCredentialRevoked: legacy.credential_revoked === true
@@ -137,7 +364,7 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     collaboration = new CollaborationService({ repository, now })
     authentication = new AuthenticationService(repository, now)
     process.stdout.write(
-      `[postgres-v8-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
+      `[postgres-v9-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
       `postgresVersionNumber=${migrationEvidence.postgresVersionNumber} ` +
       `v5Baseline=${versionsAtV5.join(',')} migrations=${versionsAtCurrent.join(',')} ready=${String(readyAtCurrent)}\n`
     )
@@ -165,21 +392,313 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     }
   }, 120_000)
 
-  it('migrates an isolated v1 database through the v5 baseline to exact schema v8 readiness', async () => {
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(8)
+  it('migrates an isolated v1 database through the v5 baseline to exact schema v9 readiness', async () => {
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
     expect(migrationEvidence).toMatchObject({
       versionsAtV1: [1],
       versionsAtV5: [1, 2, 3, 4, 5],
-      versionsAtCurrent: [1, 2, 3, 4, 5, 6, 7, 8],
+      versionsAtCurrent: [1, 2, 3, 4, 5, 6, 7, 8, 9],
       readyAtV1: false,
       readyAtV5: false,
       readyAtCurrent: true,
+      unsafeProjectRecordAuthorSourceRejected: true,
+      ambiguousProjectRecordAuthorTransferRejected: true,
+      equalTimestampProjectRecordAuthorTransferRejected: true,
+      activeProjectMembershipLimitRejected: true,
+      projectRecordLimitRejected: true,
+      humanNeededLimitRejected: true,
+      legacyProjectRecordAuthorUserAtV5: null,
+      legacyProjectRecordAuthorUserAtCurrent: 'usr_pg_legacy_user_0001',
+      legacyProjectRecordAuthorAgentAtCurrent: 'agt_pg_legacy_agent_0001',
+      legacyTaskAssigneeUserAtCurrent: 'usr_pg_legacy_final_0001',
+      transferredProjectRecordAuthorUserAtCurrent: 'usr_pg_legacy_user_0001',
+      transferredProjectRecordAgentOwnerAtCurrent: 'usr_pg_legacy_final_0001',
+      legacyProjectRecordAuthorUserNullableAtCurrent: 'NO',
       legacyAgentStatus: 'revoked',
       legacyAgentDeviceId: null,
       legacyCredentialRevoked: true
     })
     expect(await isCollaborationDatabaseReady(required(databasePool, 'database pool'))).toBe(true)
   })
+
+  it('preserves User and transferred-Agent historical authors while rejecting a missing User author', async () => {
+    const connection = await required(databasePool, 'database pool').connect()
+    await connection.query('BEGIN')
+    try {
+      await expect(connection.query(
+        `INSERT INTO sciforge_collaboration.project_records
+           (project_record_id,project_id,kind,status,summary,author_user_id,author_agent_id,
+            revision,created_at,updated_at)
+         VALUES ($1,$2,'observation','candidate',$3,$4,NULL,1,$5,$5)`,
+        [
+          'rec_pg_user_authored_0001',
+          'prj_pg_legacy_project_0001',
+          'A valid User-authored record remains Agent-independent.',
+          'usr_pg_legacy_user_0001',
+          NOW.toISOString()
+        ]
+      )).resolves.toMatchObject({ rowCount: 1 })
+
+      await connection.query('SAVEPOINT missing_author')
+      let missingAuthorError: unknown
+      try {
+        await connection.query(
+          `INSERT INTO sciforge_collaboration.project_records
+             (project_record_id,project_id,kind,status,summary,author_user_id,author_agent_id,
+              revision,created_at,updated_at)
+           VALUES ($1,$2,'observation','candidate',$3,NULL,$4,1,$5,$5)`,
+          [
+            'rec_pg_missing_author_0001',
+            'prj_pg_legacy_project_0001',
+            'This missing User author must fail.',
+            'agt_pg_legacy_agent_0001',
+            NOW.toISOString()
+          ]
+        )
+      } catch (error) {
+        missingAuthorError = error
+      }
+      await connection.query('ROLLBACK TO SAVEPOINT missing_author')
+      expect(postgresErrorCode(missingAuthorError)).toBe('23502')
+
+      const historicalAuthor = await connection.query<{
+        author_user_id: unknown
+        owner_user_id: unknown
+      }>(
+        `SELECT record.author_user_id,agent.owner_user_id
+         FROM sciforge_collaboration.project_records AS record
+         JOIN sciforge_collaboration.agent_nodes AS agent
+           ON agent.agent_id=record.author_agent_id
+         WHERE record.project_record_id=$1`,
+        ['rec_pg_pretransfer_author_0001']
+      )
+      expect(historicalAuthor.rows).toEqual([{
+        author_user_id: 'usr_pg_legacy_user_0001',
+        owner_user_id: 'usr_pg_legacy_final_0001'
+      }])
+    } finally {
+      await connection.query('ROLLBACK').catch(() => undefined)
+      connection.release()
+    }
+  }, 120_000)
+
+  it('rejects same-name Portal indexes whose PostgreSQL definitions are wrong', async () => {
+    const pool = required(databasePool, 'database pool')
+    const connection = await pool.connect()
+    const transactionPool: SqlPool = {
+      query: (text, values) => connection.query(text, values),
+      connect: async () => { throw new Error('Readiness must stay on the definition-test transaction.') },
+      end: async () => undefined
+    }
+    const wrongDefinitions = [
+      {
+        name: 'agent_nodes_active_owner_agent_idx',
+        create: `CREATE INDEX agent_nodes_active_owner_agent_idx
+                 ON sciforge_collaboration.agent_nodes(agent_id, owner_user_id)
+                 WHERE status = 'active'`
+      },
+      {
+        name: 'tasks_project_task_id_idx',
+        create: `CREATE INDEX tasks_project_task_id_idx
+                 ON sciforge_collaboration.tasks(task_id, project_id)`
+      },
+      {
+        name: 'project_records_project_record_id_idx',
+        create: `CREATE INDEX project_records_project_record_id_idx
+                 ON sciforge_collaboration.project_records(project_record_id, project_id)`
+      },
+      {
+        name: 'human_requests_project_target_request_id_idx',
+        create: `CREATE INDEX human_requests_project_target_request_id_idx
+                 ON sciforge_collaboration.human_requests(project_id, human_request_id, target_user_id)`
+      },
+      {
+        name: 'human_answers_project_created_answer_idx',
+        create: `CREATE INDEX human_answers_project_created_answer_idx
+                 ON sciforge_collaboration.human_answers(project_id, human_answer_id, created_at)`
+      },
+      {
+        name: 'tasks_active_assignee_idx',
+        create: `CREATE INDEX tasks_active_assignee_idx
+                 ON sciforge_collaboration.tasks(assignee_agent_id)
+                 WHERE status IN ('accepted')`
+      },
+      {
+        name: 'oidc_identities_active_user_issuer_idx',
+        create: `CREATE INDEX oidc_identities_active_user_issuer_idx
+                 ON sciforge_collaboration.oidc_identities(user_id, issuer)
+                 WHERE status = 'revoked'`
+      },
+      {
+        name: 'project_members_active_user_project_idx',
+        create: `CREATE INDEX project_members_active_user_project_idx
+                 ON sciforge_collaboration.project_members(project_id, user_id)
+                 WHERE active = true`
+      },
+      {
+        name: 'project_members_active_project_user_idx',
+        create: `CREATE INDEX project_members_active_project_user_idx
+                 ON sciforge_collaboration.project_members(user_id, project_id)
+                 WHERE active = true`
+      },
+      {
+        name: 'project_records_candidate_task_result_project_idx',
+        create: `CREATE INDEX project_records_candidate_task_result_project_idx
+                 ON sciforge_collaboration.project_records(project_id)
+                 WHERE kind = 'task_result' AND status = 'accepted'`
+      }
+    ] as const
+
+    await connection.query('BEGIN')
+    try {
+      for (const definition of wrongDefinitions) {
+        await connection.query('SAVEPOINT wrong_portal_index')
+        await connection.query(`DROP INDEX sciforge_collaboration.${definition.name}`)
+        await connection.query(definition.create)
+        await expect(isCollaborationDatabaseReady(transactionPool)).resolves.toBe(false)
+        await connection.query('ROLLBACK TO SAVEPOINT wrong_portal_index')
+      }
+      await expect(isCollaborationDatabaseReady(transactionPool)).resolves.toBe(true)
+
+      await connection.query('SAVEPOINT inactive_membership_churn')
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.user_principals
+           (user_id,display_name,status,revision,created_at,updated_at)
+         SELECT 'usr_pg_inactive_churn_' || lpad(series::text, 5, '0'),
+                'Inactive churn fixture','active',1,$1,$1
+         FROM generate_series(1,500) AS series`,
+        [NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.project_members(project_id,user_id,role,active,created_at)
+         SELECT $1,'usr_pg_inactive_churn_' || lpad(series::text, 5, '0'),'member',false,$2
+         FROM generate_series(1,500) AS series`,
+        ['prj_pg_legacy_project_0001', NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.projects
+           (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,
+            max_tasks,max_tasks_per_round,max_task_retries,max_coordination_rounds,
+            coordination_round,revision,created_at,updated_at)
+         SELECT 'prj_pg_inactive_churn_' || lpad(series::text, 5, '0'),$1,
+                'Inactive churn fixture','Prove the user-first partial index shape.',
+                'active',$2,1,1,0,1,1,1,$3,$3
+         FROM generate_series(1,500) AS series`,
+        ['usr_pg_legacy_user_0001', 'agt_pg_legacy_agent_0001', NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.project_members(project_id,user_id,role,active,created_at)
+         SELECT 'prj_pg_inactive_churn_' || lpad(series::text, 5, '0'),$1,'member',false,$2
+         FROM generate_series(1,500) AS series`,
+        ['usr_pg_legacy_user_0001', NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.devices
+           (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+            capability_summary,status,revision,created_at,updated_at,revoked_at)
+         SELECT 'dev_pg_agent_churn_' || lpad(series::text, 5, '0'),
+                'usr_pg_inactive_churn_' || lpad(series::text, 5, '0'),
+                'ins_pg_device_churn_' || lpad(series::text, 5, '0'),
+                'Other-owner Device fixture',
+                '{"os":"linux","arch":"x64","appVersion":"test"}'::jsonb,
+                '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"churn","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'::jsonb,
+                '[]'::jsonb,'active',1,$1,$1,NULL
+         FROM generate_series(1,500) AS series`,
+        [NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.agent_nodes
+           (agent_id,installation_id,owner_user_id,display_name,node_type,capabilities,status,
+            connection_status,credential_generation,revision,last_seen_at,updated_at,revoked_at,device_id)
+         SELECT 'agt_pg_agent_churn_' || lpad(series::text, 5, '0'),
+                'ins_pg_agent_churn_' || lpad(series::text, 5, '0'),
+                'usr_pg_inactive_churn_' || lpad(series::text, 5, '0'),
+                'Other-owner Agent fixture','desktop','[]'::jsonb,'active',
+                'offline',1,1,NULL,$1,NULL,
+                'dev_pg_agent_churn_' || lpad(series::text, 5, '0')
+         FROM generate_series(1,500) AS series`,
+        [NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.human_endpoint_bindings
+           (human_endpoint_id,user_id,provider,realm_id,provider_user_id,display_name,assurance,
+            status,revision,verified_at,updated_at,revoked_at,external_identity_id,realm_url,created_at)
+         VALUES ('hep_pg_answer_churn_0001',$1,'fake-im','answer-churn-realm',
+                 'answer-churn-user','Answer churn endpoint','verified','active',1,$2,$2,NULL,NULL,NULL,$2)`,
+        ['usr_pg_legacy_user_0001', NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.human_requests
+           (human_request_id,project_id,task_id,target_user_id,requested_by_agent_id,
+            required_assurance,prompt,status,revision,expires_at,created_at,updated_at,
+            source_kind,execution_id,source_inbox_message_id,confirmable_action)
+         SELECT 'hrq_pg_answer_churn_' || lpad(series::text, 5, '0'),
+                'prj_pg_inactive_churn_' || lpad(series::text, 5, '0'),NULL,$1,$2,
+                'verified','Answer-index churn fixture','answered',1,
+                $3::timestamptz + interval '1 hour',$3,$3,'coordinator',NULL,
+                'ibx_pg_answer_churn_' || lpad(series::text, 5, '0'),NULL
+         FROM generate_series(1,500) AS series`,
+        ['usr_pg_legacy_user_0001', 'agt_pg_legacy_agent_0001', NOW.toISOString()]
+      )
+      await connection.query(
+        `INSERT INTO sciforge_collaboration.human_answers
+           (human_answer_id,human_request_id,project_id,task_id,request_revision,
+            answered_by_user_id,answered_from_human_endpoint_id,assurance,answer,revision,
+            answered_at,created_at,updated_at,execution_id,decision,confirmation_id)
+         SELECT 'han_pg_answer_churn_' || lpad(series::text, 5, '0'),
+                'hrq_pg_answer_churn_' || lpad(series::text, 5, '0'),
+                'prj_pg_inactive_churn_' || lpad(series::text, 5, '0'),NULL,1,$1,
+                'hep_pg_answer_churn_0001','verified','Bounded answer fixture',1,$2,$2,$2,
+                NULL,NULL,NULL
+         FROM generate_series(1,500) AS series`,
+        ['usr_pg_legacy_user_0001', NOW.toISOString()]
+      )
+      await connection.query('SET LOCAL enable_seqscan=off')
+      const byProjectPlan = await connection.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON,COSTS OFF)
+         SELECT user_id FROM sciforge_collaboration.project_members
+         WHERE project_id=$1 AND active=true ORDER BY user_id LIMIT 1001`,
+        ['prj_pg_legacy_project_0001']
+      )
+      const byUserPlan = await connection.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON,COSTS OFF)
+         SELECT project_id FROM sciforge_collaboration.project_members
+         WHERE user_id=$1 AND active=true ORDER BY project_id LIMIT 1001`,
+        ['usr_pg_legacy_user_0001']
+      )
+      const ownedAgentPlan = await connection.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON,COSTS OFF)
+         SELECT agent.*
+         FROM sciforge_collaboration.agent_nodes AS agent
+         INNER JOIN sciforge_collaboration.user_principals AS owner
+           ON owner.user_id=agent.owner_user_id AND owner.status='active'
+         INNER JOIN sciforge_collaboration.devices AS device
+           ON device.device_id=agent.device_id
+          AND device.user_id=agent.owner_user_id
+          AND device.status='active'
+         WHERE agent.owner_user_id=$1 AND agent.status='active'
+           AND agent.node_type IN ('desktop','server')
+         ORDER BY agent.agent_id
+         LIMIT 101`,
+        ['usr_pg_inactive_churn_00001']
+      )
+      const humanAnswerPlan = await connection.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON,COSTS OFF)
+         SELECT * FROM sciforge_collaboration.human_answers
+         WHERE project_id=$1
+         ORDER BY created_at,human_answer_id`,
+        ['prj_pg_inactive_churn_00001']
+      )
+      expect(JSON.stringify(byProjectPlan.rows)).toContain('project_members_active_project_user_idx')
+      expect(JSON.stringify(byUserPlan.rows)).toContain('project_members_active_user_project_idx')
+      expect(JSON.stringify(ownedAgentPlan.rows)).toContain('agent_nodes_active_owner_agent_idx')
+      expect(JSON.stringify(humanAnswerPlan.rows)).toContain('human_answers_project_created_answer_idx')
+      await connection.query('ROLLBACK TO SAVEPOINT inactive_membership_churn')
+    } finally {
+      await connection.query('ROLLBACK').catch(() => undefined)
+      connection.release()
+    }
+  }, 120_000)
 
   it('serializes concurrent first use of one issuer/subject into one User and one audit fact', async () => {
     const service = required(identities, 'Identity Service')
@@ -664,12 +1183,135 @@ async function applyMigrationFiles(pool: SqlPool, filenames: readonly string[]):
   }
 }
 
+async function migrationFailureMatches(
+  pool: SqlPool,
+  migrationSql: string,
+  expectedMessage: string
+): Promise<boolean> {
+  const connection = await pool.connect()
+  try {
+    try {
+      await connection.query(migrationSql)
+      return false
+    } catch (error) {
+      const matches = error instanceof Error && error.message.includes(expectedMessage)
+      await connection.query('ROLLBACK')
+      return matches
+    }
+  } finally {
+    connection.release()
+  }
+}
+
+async function verifyMigrationHardCaps(
+  pool: SqlPool,
+  migrationSql: string
+): Promise<{
+  activeProjectMembershipLimitRejected: boolean
+  projectRecordLimitRejected: boolean
+  humanNeededLimitRejected: boolean
+}> {
+  const at = NOW.toISOString()
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,
+        max_tasks,max_tasks_per_round,max_task_retries,max_coordination_rounds,
+        coordination_round,revision,created_at,updated_at)
+     SELECT 'prj_pg_membership_cap_' || lpad(series::text, 6, '0'),
+            $1,'Membership cap fixture','Prove schema v9 refuses an over-limit User.',
+            'active',$2,1,1,0,1,1,1,$3,$3
+     FROM generate_series(1,1001) AS series`,
+    ['usr_pg_legacy_user_0001', 'agt_pg_legacy_agent_0001', at]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.project_members(project_id,user_id,role,active,created_at)
+     SELECT 'prj_pg_membership_cap_' || lpad(series::text, 6, '0'),$1,'member',true,$2
+     FROM generate_series(1,1001) AS series`,
+    ['usr_pg_legacy_user_0001', at]
+  )
+  const activeProjectMembershipLimitRejected = await migrationFailureMatches(
+    pool,
+    migrationSql,
+    'migration_0009_active_project_membership_limit_exceeded'
+  )
+  await pool.query(
+    `DELETE FROM sciforge_collaboration.projects
+     WHERE project_id LIKE 'prj_pg_membership_cap_%'`
+  )
+
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.project_records
+       (project_record_id,project_id,kind,status,summary,author_user_id,
+        criterion_evidence,resource_ref_ids,revision,created_at,updated_at)
+     SELECT 'rec_pg_record_cap_' || lpad(series::text, 6, '0'),$1,
+            'observation','candidate','Record cap fixture',$2,'[]'::jsonb,'[]'::jsonb,1,$3,$3
+     FROM generate_series(1,50000) AS series`,
+    ['prj_pg_legacy_project_0001', 'usr_pg_legacy_user_0001', at]
+  )
+  const projectRecordLimitRejected = await migrationFailureMatches(
+    pool,
+    migrationSql,
+    'migration_0009_project_record_limit_exceeded'
+  )
+  await pool.query(
+    `DELETE FROM sciforge_collaboration.project_records
+     WHERE project_record_id LIKE 'rec_pg_record_cap_%'`
+  )
+
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.human_requests
+       (human_request_id,project_id,task_id,target_user_id,requested_by_agent_id,
+        required_assurance,prompt,status,revision,expires_at,created_at,updated_at,
+        source_kind,execution_id,source_inbox_message_id,confirmable_action)
+     SELECT 'hrq_pg_human_cap_' || lpad(series::text, 6, '0'),$1,NULL,$2,$3,
+            'verified','HumanNeeded cap fixture','pending',1,$4::timestamptz + interval '1 hour',
+            $4,$4,'coordinator',NULL,'ibx_pg_human_cap_' || lpad(series::text, 6, '0'),NULL
+     FROM generate_series(1,10001) AS series`,
+    [
+      'prj_pg_legacy_project_0001',
+      'usr_pg_legacy_user_0001',
+      'agt_pg_legacy_agent_0001',
+      at
+    ]
+  )
+  const humanNeededLimitRejected = await migrationFailureMatches(
+    pool,
+    migrationSql,
+    'migration_0009_human_needed_limit_exceeded'
+  )
+  await pool.query(
+    `DELETE FROM sciforge_collaboration.human_requests
+     WHERE human_request_id LIKE 'hrq_pg_human_cap_%'`
+  )
+
+  if (!activeProjectMembershipLimitRejected || !projectRecordLimitRejected || !humanNeededLimitRejected) {
+    throw new Error('Schema v9 did not reject every historical Portal hard-cap violation.')
+  }
+  return {
+    activeProjectMembershipLimitRejected,
+    projectRecordLimitRejected,
+    humanNeededLimitRejected
+  }
+}
+
 async function seedLegacyV1Agent(pool: SqlPool): Promise<void> {
   await pool.query(
     `INSERT INTO sciforge_collaboration.user_principals
        (user_id,display_name,status,revision,created_at,updated_at)
      VALUES ($1,$2,'active',1,$3,$3)`,
-    ['usr_pg_legacy_user_0001', 'Legacy PostgreSQL User', NOW.toISOString()]
+    ['usr_pg_legacy_user_0001', 'Legacy PostgreSQL User', LEGACY_RECORD_AT.toISOString()]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ($1,$2,'active',1,$3,$3)`,
+    ['usr_pg_legacy_other_0001', 'Other Legacy PostgreSQL User', LEGACY_RECORD_AT.toISOString()]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ($1,$2,'active',1,$3,$3)`,
+    ['usr_pg_legacy_final_0001', 'Final Legacy PostgreSQL User', LEGACY_RECORD_AT.toISOString()]
   )
   await pool.query(
     `INSERT INTO sciforge_collaboration.agent_nodes
@@ -681,7 +1323,7 @@ async function seedLegacyV1Agent(pool: SqlPool): Promise<void> {
       'ins_pg_legacy_install_0001',
       'usr_pg_legacy_user_0001',
       'Legacy PostgreSQL Agent',
-      NOW.toISOString()
+      LEGACY_RECORD_AT.toISOString()
     ]
   )
   await pool.query(
@@ -693,7 +1335,58 @@ async function seedLegacyV1Agent(pool: SqlPool): Promise<void> {
       'usr_pg_legacy_user_0001',
       'agt_pg_legacy_agent_0001',
       randomBytes(32),
-      NOW.toISOString()
+      LEGACY_RECORD_AT.toISOString()
+    ]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,max_tasks,
+        max_tasks_per_round,max_task_retries,max_coordination_rounds,coordination_round,revision,
+        created_at,updated_at)
+     VALUES ($1,$2,$3,$4,'active',$5,10,5,2,4,1,1,$6,$6)`,
+    [
+      'prj_pg_legacy_project_0001',
+      'usr_pg_legacy_user_0001',
+      'Legacy completed Task project',
+      'Exercise the schema v4 Agent-only result materialization path.',
+      'agt_pg_legacy_agent_0001',
+      LEGACY_RECORD_AT.toISOString()
+    ]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.project_members
+       (project_id,user_id,role,active,created_at)
+     VALUES ($1,$2,'owner',true,$3)`,
+    ['prj_pg_legacy_project_0001', 'usr_pg_legacy_user_0001', LEGACY_RECORD_AT.toISOString()]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.project_members
+       (project_id,user_id,role,active,created_at)
+     VALUES
+       ($1,$2,'member',true,$4),
+       ($1,$3,'member',true,$4)`,
+    [
+      'prj_pg_legacy_project_0001',
+      'usr_pg_legacy_other_0001',
+      'usr_pg_legacy_final_0001',
+      LEGACY_RECORD_AT.toISOString()
+    ]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.tasks
+       (task_id,project_id,assignee_agent_id,created_by_agent_id,title,objective,completion_criteria,
+        dependency_task_ids,status,retry_count,max_retries,coordination_round,result_summary,revision,
+        created_at,updated_at,completed_at)
+     VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,'[]'::jsonb,'completed',0,2,1,$7,1,$8,$8,$8)`,
+    [
+      'tsk_pg_legacy_completed_0001',
+      'prj_pg_legacy_project_0001',
+      'agt_pg_legacy_agent_0001',
+      'Legacy completed Task',
+      'Produce one legacy inline result for schema v4 to materialize.',
+      JSON.stringify(['The legacy result remains attributable after migration.']),
+      'Legacy completed Task result.',
+      LEGACY_RECORD_AT.toISOString()
     ]
   )
 }
@@ -860,6 +1553,12 @@ async function expectServiceCode(work: () => Promise<unknown>, code: string): Pr
 
 function serviceErrorCode(error: unknown): string | undefined {
   return error instanceof CollaborationServiceError ? error.code : undefined
+}
+
+function postgresErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
 }
 
 function required<T>(value: T | undefined, label: string): T {

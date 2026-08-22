@@ -50,6 +50,8 @@ describe('collaboration console assets', () => {
     expect(script).toContain("type: 'rest.error'")
     expect(script).toContain('error.currentRevision')
     for (const command of expectedCommands) expect(script).toContain(command)
+    expect(script.match(/executionId: value\(form, 'executionId'\)/gu)).toHaveLength(2)
+    expect(script).toContain("state.actorKind !== 'agent'")
     expect(script).not.toContain('task.list')
     expect(script).not.toContain('project.list')
     expect(script).not.toContain('human.answer')

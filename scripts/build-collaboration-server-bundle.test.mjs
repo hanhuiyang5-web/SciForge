@@ -10,6 +10,7 @@ import { gzipSync } from 'node:zlib'
 import {
   buildCollaborationServerBundleFromImmutableSnapshot,
   buildCollaborationServerBundle,
+  COLLABORATION_PORTAL_CSP,
   COLLABORATION_RELEASE_PACKAGES,
   IMMUTABLE_SNAPSHOT_GUARD_ENVIRONMENT,
   assertFullCommit,
@@ -20,7 +21,8 @@ import {
   runCollaborationServerBundleCli,
   validateImmutableSnapshotGuard,
   validateContractArtifactFiles,
-  validatePackManifest
+  validatePackManifest,
+  validatePortalAssetFiles
 } from './build-collaboration-server-bundle.mjs'
 
 const approvedCommit = '063155e8d378693bfeba5a926e12b74eeafb3cf8'
@@ -109,6 +111,13 @@ const identityEdgeAssetFixtures = Object.freeze({
     'edgeExternalVerifyScriptSha256',
     'edgeVerifyScriptSha256'
   ].includes(field))),
+  portalComposeSha256: Object.freeze({
+    relativePath: 'deploy/collaboration-private/compose.a-cloud-portal.yml'
+  }),
+  portalAssetVerifyScriptSha256: Object.freeze({
+    expectedMode: 0o755,
+    relativePath: 'deploy/collaboration-private/scripts/verify-portal-assets.mjs'
+  }),
   identityEdgeCaddyfileSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/Caddyfile.a-https-oidc-test'
   }),
@@ -135,6 +144,34 @@ const identityEdgeAssetFixtures = Object.freeze({
 
 function fixturePackageVersion(packageName) {
   return packageName === '@sciforge/collaboration-contracts' ? '0.2.0' : '0.1.0'
+}
+
+function createPortalFixtureFiles() {
+  const runtimeFiles = new Map([
+    ['assets/portal-a1b2c3.css', Buffer.from('body{color:#123}\n')],
+    ['assets/portal-a1b2c3.js', Buffer.from('document.body.dataset.portal="ready"\n')],
+    ['index.html', Buffer.from('<!doctype html><script type="module" src="/portal/assets/portal-a1b2c3.js"></script>\n')]
+  ])
+  const integrity = {
+    schemaVersion: 1,
+    basePath: '/portal/',
+    files: [...runtimeFiles].map(([path, content]) => ({
+      path,
+      bytes: content.byteLength,
+      sha256: createHash('sha256').update(content).digest('hex')
+    }))
+  }
+  return new Map([
+    ['dist/.vite/manifest.json', Buffer.from(`${JSON.stringify({
+      'index.html': {
+        file: 'assets/portal-a1b2c3.js',
+        css: ['assets/portal-a1b2c3.css'],
+        isEntry: true
+      }
+    }, null, 2)}\n`)],
+    ['dist/ASSET_INTEGRITY.json', Buffer.from(`${JSON.stringify(integrity, null, 2)}\n`)],
+    ...[...runtimeFiles].map(([path, content]) => [`dist/${path}`, content])
+  ])
 }
 
 function validFilesFor(packageName) {
@@ -167,6 +204,9 @@ function validFilesFor(packageName) {
       'dist/server.js',
       'dist/server.d.ts'
     ]
+  }
+  if (packageName === '@sciforge/collaboration-portal') {
+    return ['package.json', ...createPortalFixtureFiles().keys()]
   }
   return [
     'package.json',
@@ -205,6 +245,7 @@ function createContractArtifactFiles(commit) {
       artifactVersion: 1,
       contractVersion: '1.0',
       protocolVersion: '1.0',
+      databaseSchemaVersion: 9,
       contractCommit: commit,
       commitInjectionPlaceholder: '__SCIFORGE_COLLABORATION_COMMIT__',
       files
@@ -351,7 +392,12 @@ function createCommandHarness({
     }
 
     if (basename(command).startsWith('npm') && args.includes('run')) {
-      const packageName = args[args.indexOf('--workspace') + 1]
+      const workspaceIndex = args.indexOf('--workspace')
+      const prefixIndex = args.indexOf('--prefix')
+      const packageDirectory = prefixIndex === -1 ? undefined : join(cwd, args[prefixIndex + 1])
+      const packageName = workspaceIndex === -1
+        ? JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8')).name
+        : args[workspaceIndex + 1]
       if (
         packageName === '@sciforge/collaboration-contracts' ||
         packageName === '@sciforge/domain-sdk'
@@ -368,6 +414,12 @@ function createCommandHarness({
           const destination = join(directory, relativePath.slice('dist/'.length))
           await mkdir(dirname(destination), { recursive: true })
           await writeFile(destination, 'export {}\n')
+        }
+      } else if (packageName === '@sciforge/collaboration-portal') {
+        for (const [relativePath, content] of createPortalFixtureFiles()) {
+          const destination = join(packageDirectory, relativePath)
+          await mkdir(dirname(destination), { recursive: true })
+          await writeFile(destination, content)
         }
       }
       return { stdout: '', stderr: '' }
@@ -402,6 +454,11 @@ function createCommandHarness({
           const manifestPath = 'artifacts/protocol-1.0/ARTIFACT_MANIFEST.json'
           const manifest = JSON.parse(archiveEntries.get(manifestPath).toString('utf8'))
           manifest.contractCommit = privateTestCommit
+          archiveEntries.set(manifestPath, Buffer.from(stringifyJson(manifest)))
+        } else if (tamperContractArchive === 'database-schema') {
+          const manifestPath = 'artifacts/protocol-1.0/ARTIFACT_MANIFEST.json'
+          const manifest = JSON.parse(archiveEntries.get(manifestPath).toString('utf8'))
+          manifest.databaseSchemaVersion = 8
           archiveEntries.set(manifestPath, Buffer.from(stringifyJson(manifest)))
         } else if (tamperContractArchive === 'hash') {
           const statePath = 'artifacts/protocol-1.0/state-and-actors.json'
@@ -876,6 +933,7 @@ test('builder emits only immutable release files and pins all official packages'
       'package-lock.json',
       'package.json',
       'sciforge-collaboration-contracts-0.2.0.tgz',
+      'sciforge-collaboration-portal-0.1.0.tgz',
       'sciforge-collaboration-provider-zulip-0.1.0.tgz',
       'sciforge-collaboration-server-0.1.0.tgz',
       'sciforge-domain-sdk-0.1.0.tgz'
@@ -895,7 +953,7 @@ test('builder emits only immutable release files and pins all official packages'
     for (const field of ['edgeCaddyImage', ...Object.keys(edgeAssetFixtures)]) {
       assert.equal(Object.hasOwn(manifest, field), false)
     }
-    assert.equal(manifest.packages.length, 4)
+    assert.equal(manifest.packages.length, 5)
     for (const packageEntry of manifest.packages) {
       assert.equal(packageEntry.version, fixturePackageVersion(packageEntry.name))
       const archive = await readFile(join(outputDirectory, packageEntry.filename))
@@ -909,6 +967,7 @@ test('builder emits only immutable release files and pins all official packages'
       .map(([path, content]) => [path.slice('artifacts/protocol-1.0/'.length), content]))
     const packedArtifacts = validateContractArtifactFiles(packedArtifactFiles, approvedCommit)
     assert.equal(packedArtifacts.manifest.contractCommit, manifest.contractCommit)
+    assert.equal(packedArtifacts.manifest.databaseSchemaVersion, 9)
     assert.equal(
       JSON.parse(packedArtifactFiles.get('state-and-actors.json')).contractCommit,
       approvedCommit
@@ -922,12 +981,12 @@ test('builder emits only immutable release files and pins all official packages'
     )
 
     const checksumLines = (await readFile(join(outputDirectory, 'SHA256SUMS'), 'utf8')).trim().split('\n')
-    assert.equal(checksumLines.length, 8)
+    assert.equal(checksumLines.length, 9)
     assert.equal(harness.calls.filter(({ args }) => (
       args[0] === 'scripts/collaboration-providers.mjs' && args[1] === '--check'
     )).length, 1)
-    assert.equal(harness.calls.filter(({ args }) => args.includes('run') && args.includes('build')).length, 4)
-    assert.equal(harness.calls.filter(({ args }) => args[0] === 'pack').length, 4)
+    assert.equal(harness.calls.filter(({ args }) => args.includes('run') && args.includes('build')).length, 5)
+    assert.equal(harness.calls.filter(({ args }) => args[0] === 'pack').length, 5)
     const contractsPackCall = harness.calls.find(({ args }) => (
       args[0] === 'pack' && args[1]?.endsWith('.collaboration-contracts-package')
     ))
@@ -955,6 +1014,7 @@ test('builder emits only immutable release files and pins all official packages'
 test('builder fails closed when the packed contract provenance or artifact hash is changed', async () => {
   for (const [tamperContractArchive, expectedError] of [
     ['commit', /manifest commit does not match the release commit/u],
+    ['database-schema', /database schema version must be 9/u],
     ['hash', /SHA-256 mismatch/u]
   ]) {
     const repositoryRoot = await createRepository()
@@ -976,6 +1036,40 @@ test('builder fails closed when the packed contract provenance or artifact hash 
       await rm(repositoryRoot, { recursive: true, force: true })
     }
   }
+})
+
+test('Portal archive validation binds both manifests and every sorted runtime asset', () => {
+  const files = new Map([
+    ['package.json', Buffer.from(stringifyJson({
+      name: '@sciforge/collaboration-portal',
+      version: '0.1.0'
+    }))],
+    ...createPortalFixtureFiles()
+  ])
+  const validated = validatePortalAssetFiles(files)
+  assert.equal(validated.basePath, '/portal/')
+  assert.equal(validated.viteManifestPath, 'dist/.vite/manifest.json')
+  assert.equal(validated.integrityManifestPath, 'dist/ASSET_INTEGRITY.json')
+  assert.equal(validated.assets.length, 3)
+  assert.deepEqual(validated.assets.map(({ path }) => path), [
+    'assets/portal-a1b2c3.css',
+    'assets/portal-a1b2c3.js',
+    'index.html'
+  ])
+
+  const changedAsset = new Map(files)
+  changedAsset.set('dist/assets/portal-a1b2c3.js', Buffer.from('tampered'))
+  assert.throws(() => validatePortalAssetFiles(changedAsset), /byte count mismatch|SHA-256 mismatch/u)
+
+  const unlistedAsset = new Map(files)
+  unlistedAsset.set('dist/assets/unlisted.js', Buffer.from('unlisted'))
+  assert.throws(() => validatePortalAssetFiles(unlistedAsset), /unlisted or unexpected file/u)
+
+  const unsafeIntegrity = JSON.parse(files.get('dist/ASSET_INTEGRITY.json').toString('utf8'))
+  unsafeIntegrity.files[0].path = '../secret.js'
+  const unsafePath = new Map(files)
+  unsafePath.set('dist/ASSET_INTEGRITY.json', Buffer.from(stringifyJson(unsafeIntegrity)))
+  assert.throws(() => validatePortalAssetFiles(unsafePath), /unsafe file path|invalid asset path/u)
 })
 
 test('private test release is explicit, records its base, and checks ancestry in the safe direction', async () => {
@@ -1165,7 +1259,7 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
     })
     assert.equal(result.commit, privateTestCommit)
     const manifest = JSON.parse(await readFile(join(outputDirectory, 'RELEASE_MANIFEST.json'), 'utf8'))
-    assert.equal(manifest.schemaVersion, 3)
+    assert.equal(manifest.schemaVersion, 4)
     assert.equal(manifest.contractCommit, privateTestCommit)
     assert.equal(manifest.baseCommit, approvedCommit)
     assert.equal(manifest.releaseMode, 'a-https-oidc-test')
@@ -1174,11 +1268,39 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
     assert.equal(manifest.identityHostname, 'login-test.sciforge.cn')
     assert.equal(manifest.oidcIssuer, 'https://login-test.sciforge.cn/realms/SciForge')
     assert.equal(manifest.oidcAudience, 'sciforge-cloud-api')
-    assert.equal(manifest.oidcAuthorizedParties, 'sciforge-desktop,sciforge-web-mobile')
+    assert.equal(manifest.oidcAuthorizedParties,
+      'sciforge-desktop,sciforge-web-mobile')
     assert.equal(manifest.oidcAllowInsecureLoopback, false)
     assert.equal(manifest.bindingConfirmMode, 'disabled')
     assert.equal(manifest.providerMode, 'disabled')
     assert.equal(manifest.identityEdgeNetwork, 'sciforge-keycloak_identity-edge')
+    assert.equal(manifest.portalEnabled, true)
+    assert.equal(manifest.portalMode, 'confidential-bff')
+    assert.equal(manifest.portalPackageArchive, 'sciforge-collaboration-portal-0.1.0.tgz')
+    assert.match(manifest.portalPackageSha256, /^[0-9a-f]{64}$/u)
+    assert.equal(manifest.portalBasePath, '/portal/')
+    assert.equal(manifest.portalAuthPathPrefix, '/portal/auth/')
+    assert.equal(manifest.portalApiPathPrefix, '/portal/api/')
+    assert.equal(manifest.portalEventsPath, '/portal/events')
+    assert.equal(manifest.portalAssetDirectory,
+      '/app/node_modules/@sciforge/collaboration-portal/dist')
+    assert.equal(manifest.portalViteManifestPath, 'dist/.vite/manifest.json')
+    assert.match(manifest.portalViteManifestSha256, /^[0-9a-f]{64}$/u)
+    assert.equal(manifest.portalIntegrityManifestPath, 'dist/ASSET_INTEGRITY.json')
+    assert.match(manifest.portalIntegrityManifestSha256, /^[0-9a-f]{64}$/u)
+    assert.deepEqual(manifest.portalAssets,
+      JSON.parse(createPortalFixtureFiles().get('dist/ASSET_INTEGRITY.json')).files)
+    assert.equal(manifest.portalPublicOrigin, 'https://cloud-test.sciforge.cn')
+    assert.equal(manifest.portalAuthorizedParty, 'sciforge-cloud-console')
+    assert.equal(manifest.portalOidcClientId, 'sciforge-cloud-console')
+    assert.equal(manifest.portalOidcRedirectUri,
+      'https://cloud-test.sciforge.cn/portal/auth/callback')
+    assert.equal(manifest.portalHumanNeededMode, 'display-only')
+    assert.equal(manifest.portalTestWorkerDirectoryEnabled, true)
+    assert.equal(manifest.portalSessionIdleSeconds, 1800)
+    assert.equal(manifest.portalSessionAbsoluteSeconds, 28800)
+    assert.equal(manifest.portalContentSecurityPolicy, COLLABORATION_PORTAL_CSP)
+    assert.doesNotMatch(JSON.stringify(manifest), /clientSecret|client_secret|OIDC_CLIENT_SECRET/iu)
     assert.equal(manifest.identityAcceptanceHarnessSha256, createHash('sha256')
       .update(await readFile(join(repositoryRoot, identityAcceptanceHarnessFixture.relativePath)))
       .digest('hex'))
@@ -1187,7 +1309,7 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
       .digest('hex'))
     assert.equal(manifest.edgeCaddyImage,
       'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a')
-    assert.equal(Object.keys(identityEdgeAssetFixtures).length, 18)
+    assert.equal(Object.keys(identityEdgeAssetFixtures).length, 20)
     assert.deepEqual(Object.keys(manifest).sort(), [
       'artifact',
       'baseCommit',
@@ -1204,13 +1326,36 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
       'oidcAudience',
       'oidcAuthorizedParties',
       'oidcIssuer',
+      'portalApiPathPrefix',
+      'portalAssetDirectory',
+      'portalAssets',
+      'portalAuthPathPrefix',
+      'portalBasePath',
+      'portalContentSecurityPolicy',
+      'portalEnabled',
+      'portalEventsPath',
+      'portalHumanNeededMode',
+      'portalIntegrityManifestPath',
+      'portalIntegrityManifestSha256',
+      'portalMode',
+      'portalOidcClientId',
+      'portalOidcRedirectUri',
+      'portalPackageArchive',
+      'portalPackageSha256',
+      'portalPublicOrigin',
+      'portalAuthorizedParty',
+      'portalSessionAbsoluteSeconds',
+      'portalSessionIdleSeconds',
+      'portalTestWorkerDirectoryEnabled',
+      'portalViteManifestPath',
+      'portalViteManifestSha256',
       'packageManager',
       'packages',
       'providerMode',
       'releaseMode',
       'schemaVersion',
       ...Object.keys(identityEdgeAssetFixtures)
-    ].sort(), 'schema v3 must contain only the frozen OIDC release fields and asset digests')
+    ].sort(), 'schema v4 must contain only the frozen OIDC/Portal release fields and asset digests')
     for (const [field, { relativePath }] of Object.entries(identityEdgeAssetFixtures)) {
       const expectedDigest = createHash('sha256')
         .update(await readFile(join(repositoryRoot, relativePath)))

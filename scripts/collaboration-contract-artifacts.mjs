@@ -59,7 +59,7 @@ const JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema'
 const COLLABORATION_CONTRACTS_PACKAGE_VERSION = '0.2.0'
 const DOMAIN_SDK_PACKAGE_VERSION = '0.2.2'
 const CONTENT_SPACE_PACKAGE_VERSION = '1.0.0'
-const DATABASE_SCHEMA_VERSION = 8
+const DATABASE_SCHEMA_VERSION = 9
 const PORTABLE_REFERENCE_UPSTREAM_COMMIT = 'e58ed48e94812d0c56da48ab7387f53135439cc5'
 const PORTABLE_REFERENCE_PARSER_SHA256 = 'af402fbb108a02588c9af7a684146ff12fe0bf48f35b534c4b5f3f233e5d650d'
 const CONTENT_SPACE_CONTRACT_SHA256 = '27a21e4f515f3c9eacc8fae81fc7b065aa602e5decf3c713d20b9670caa3eb67'
@@ -208,7 +208,15 @@ const permissionGroups = [
   permission(['projection.create', 'projection.get', 'projection.list', 'projection.update'], ['user'],
     'The user must own the projection and all referenced endpoints/agents.'),
   permission(['projection.message.publish'], ['agent'], 'The Agent must own the active projection.'),
+  permission(['agent.owned.list'], ['user'],
+    'The authenticated OIDC User may list only their own usable Coordinator/Worker Agents.'),
   permission(['project.create'], ['user'], 'The authenticated user becomes Project owner.'),
+  permission(['project.list'], ['user'],
+    'The authenticated OIDC User may list only Projects where they are a current active member.'),
+  permission(['worker.directory.page'], ['user'],
+    'The authenticated OIDC User must share the configured issuer and the exact test-only global directory feature flag must be enabled.', 'test-only'),
+  permission(['project.members.update'], ['user'],
+    'Only the Project owner may update members with an exact expectedRevision; protected owners and members with active work or HumanNeeded cannot be removed.'),
   permission(['project.get', 'project.capability_directory.get', 'project.endpoint.get'], ['user', 'agent'],
     'The actor must belong to an active Project member.'),
   permission(['project.coordination_view.get'], ['user', 'agent'],

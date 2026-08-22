@@ -2,20 +2,20 @@
 
 本目录为 SciForge Cloud ECS 上 `@sciforge/collaboration-server` 的最小 Docker Compose 预发布层。默认仍是 core-only loopback；只有显式叠加 `compose.provider-zulip.yml` 时才启用私有 Zulip Provider。另有两个互斥、显式的公网模式：`a-https-test-edge` 只发布 core-only `cloud-test`，`a-https-oidc-test` 则由 A 的同一固定 Caddy 同时终止 `cloud-test` 与 `login-test` TLS，并把后者仅转发到 Keycloak 同学提供的专用 identity-edge endpoint。
 
-core-only `cloud-test` 不是登录入口；OIDC 测试模式也只证明 A 已配置固定 issuer、双 SNI ingress、Discovery/JWKS 和 fail-closed confirm。只有独立公网探针再加真实 Token 的 A acceptance harness 通过后，才能宣告 A 自己的身份/业务闭环；仍不能宣告 Keycloak 管理、Desktop、Zulip `/bind` 或全产品 E2E 已完成。
+core-only `cloud-test` 不是登录入口。OIDC 测试模式额外提供固定 `/portal/` confidential-BFF 入口，但静态发布物、本地/外部匿名探针和真实浏览器登录是三层不同证据：只有维护窗口内的真实 Portal 登录/登出验收以及真实 Token 的 A acceptance harness 都通过后，才能宣告 A 自己对应的浏览器与多 Worker 闭环；仍不能宣告 Keycloak 管理、Desktop、Zulip `/bind` 或全产品 E2E 已完成。
 
 | 层面 | 本目录能证明 | 本目录不能单独证明 |
 | --- | --- | --- |
-| SciForge Cloud | 固定发布物、数据库、loopback API/WSS、显式 core-only 或 OIDC 双 SNI edge 和重启恢复行为 | Keycloak 管理、Provider 或正式产品入口已完成 |
-| 自动化验收 | HTTP/WSS 公共边界；显式启用时可验证候选 Provider adapter | 真实最新版 SciForge/AgentRuntime 已完成端到端闭环 |
-| 产品开放 | loopback 控制台、API 与预发布门禁已经具备 | 正式链路已经选定，或成员业务验收已经完成 |
+| SciForge Cloud | 固定发布物、数据库、loopback API/WSS、显式 core-only 或 OIDC 双 SNI edge、固定 Portal 资产和重启恢复行为 | Keycloak 管理或 Provider 已完成 |
+| 自动化验收 | HTTP/WSS/Portal 匿名公共边界；显式启用时可验证候选 Provider adapter | 真实浏览器登录或最新版 SciForge/AgentRuntime 已完成端到端闭环 |
+| 产品开放 | loopback 控制台、API 与预发布门禁已经具备；OIDC release 可候选开放固定 Portal | 未经维护窗口真实登录的 Portal 已验收，或所有成员产品业务验收已完成 |
 
 ## 重要边界
 
-- 运行镜像只安装固定 commit 生成的四个 npm tarball：domain SDK、contracts、Zulip provider 和 server。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述互斥、显式的 `private-test`、`team-private-acceptance`、`a-https-test-edge`、`a-https-oidc-test` 或只供机器合同消费的 `cross-team-r0-contract` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
+- 运行镜像只安装固定 commit 生成的五个 npm tarball：domain SDK、contracts、Zulip provider、collaboration portal 和 server。Portal 包在所有 release 中都被固定封存，但只有 `a-https-oidc-test` 的 schema-v4 manifest 与 app-only overlay 会启用它。默认发布仍只接受已进入 `origin/gui` 历史的获批 commit；未合并 feature commit 只能使用下述互斥、显式的 `private-test`、`team-private-acceptance`、`a-https-test-edge`、`a-https-oidc-test` 或只供机器合同消费的 `cross-team-r0-contract` 模式。Docker build context 受 `.dockerignore` 限制，不复制或编译 SciForge 源码。
 - 默认是 **core-only**：`compose.yml` 不注入 Provider 配置或 secret。`deploy-provider-zulip.sh` 才会显式加载只作用于 app 的 overlay；migrate 始终看不到 Provider 配置和 secret。
-- `compose.yml` 只透传严格 OIDC 的非秘密配置。普通私有/core-only 模式的 issuer 为空，所有 User、Device 与 binding 入口 fail closed；`a-https-oidc-test` 唯一允许 `https://login-test.sciforge.cn/realms/SciForge`。Audience 固定为 `sciforge-cloud-api`，授权方固定为 `sciforge-desktop,sciforge-web-mobile`，insecure loopback 永远为 `false`。这不是匿名身份模式，也不恢复 opaque User bearer。
-- 原生入口是 `POST /v1/commands`、WebSocket `/v1/events` 和 A-only 网页控制台 `/console/`；没有 `/v1/meta`，也没有旧实验服务的 `/v1/ws`。
+- `compose.yml` 只透传严格 OIDC 的非秘密配置。普通私有/core-only 模式的 issuer 为空，所有 User、Device 与 binding 入口 fail closed；`a-https-oidc-test` 唯一允许 `https://login-test.sciforge.cn/realms/SciForge`。公网 `/v1` User bearer 的 Audience 固定为 `sciforge-cloud-api`，授权方在所有模式都只允许 `sciforge-desktop,sciforge-web-mobile`，insecure loopback 永远为 `false`。Portal 内部使用独立 verifier，只接受服务端 confidential BFF 换得的 `azp=sciforge-cloud-console` token；它不授权 Desktop/Agent 或浏览器直接携带 bearer，也不恢复 opaque User bearer。
+- 原生机器入口是 `POST /v1/commands`、WebSocket `/v1/events` 和 A-only 网页控制台 `/console/`。OIDC edge 保持公网 `/console*` 为 404，只新增 `/portal/`、`/portal/auth/*`、`/portal/api/*` 与 `/portal/events`；没有 `/v1/meta`，也没有旧实验服务的 `/v1/ws`。
 - 应用在容器内监听 `0.0.0.0:8787`，但 Docker 只向 ECS `127.0.0.1:${SCIFORGE_COLLAB_HOST_PORT}` 发布。PostgreSQL 不发布宿主机端口。
 - 默认与 Provider 私有模式不开放 80/443。两个显式 HTTPS 模式都只用固定 digest 的独立 Caddy Compose 项目发布 TCP 443→容器 8443；不公开 80、UDP 443、8080、8787 或 PostgreSQL，也不加入任一数据库网络。OIDC 模式额外只加入 `sciforge-keycloak_identity-edge`，该网络只能有 A edge 和别名为 `keycloak` 的 Keycloak app；Keycloak 数据库不得加入。
 - 本目录只定义 A 的 HTTP/WSS 公共协作边界，不决定最新版 SciForge 最终从何处接入，也不决定 Zulip 是否成为正式 Human Provider。可选 Zulip adapter 只代表一个显式启用的服务器验收候选，不得外推为产品唯一链路。
@@ -89,7 +89,7 @@ manifest 会记录 `releaseMode: "team-private-acceptance"`、完整 `baseCommit
 
 ### 跨团队 R0 机器合同 bundle
 
-`--cross-team-r0-contract` 只用于向固定机器消费者发布同一 commit 的 domain SDK、contracts、Provider adapter 与 server 包。它与其他 feature release 模式互斥，manifest 固定为 `releaseMode: "cross-team-r0-contract"` 和 `deploymentBoundary: "contract-consumption-only"`。该 bundle 不是 ECS 部署批准，也不能替代 A HTTPS/OIDC、数据库或 Desktop 产品验收。
+`--cross-team-r0-contract` 只用于向固定机器消费者发布同一 commit 的 domain SDK、contracts、Provider adapter、Portal 与 server 包。它与其他 feature release 模式互斥，manifest 固定为 `releaseMode: "cross-team-r0-contract"` 和 `deploymentBoundary: "contract-consumption-only"`；虽然 tarball cohort 包含 Portal，非 OIDC manifest 不携带 Portal enablement metadata。该 bundle 不是 ECS 部署批准，也不能替代 A HTTPS/OIDC、数据库或 Desktop 产品验收。
 
 ### A 的 HTTPS core-only 测试边缘 bundle
 
@@ -139,11 +139,13 @@ npm run collaboration:bundle -- \
   --output "$artifact_dir/release"
 ```
 
-manifest schema 为 `3`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience/authorized parties、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"`，以及 64 位 `identityAcceptanceHarnessSha256` 和 `multiWorkerAcceptanceHarnessSha256`。前者绑定 multi-worker harness 导入的安全/协议原语，后者绑定正式的 1 个 Orchestrator → 2–8 个独立 Worker 验收入口。发布脚本逐项校验这些值以及 shared 12 + OIDC 6 个 ECS 运行资产摘要；两个 harness 摘要都是独立的本地验收证明，不计入这 18 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
+manifest schema 为 `4`，并固定 `releaseMode: "a-https-oidc-test"`、`deploymentBoundary: "public-https-oidc-test"`、两个 hostname、exact issuer/audience、仅 `sciforge-desktop,sciforge-web-mobile` 的公共 `oidcAuthorizedParties`、独立 `portalAuthorizedParty: "sciforge-cloud-console"`、Portal client/redirect/routes/CSP/session/feature flags、`oidcAllowInsecureLoopback: false`、`bindingConfirmMode: "disabled"`、`providerMode: "disabled"`、`identityEdgeNetwork: "sciforge-keycloak_identity-edge"`，以及 64 位 `identityAcceptanceHarnessSha256` 和 `multiWorkerAcceptanceHarnessSha256`。前者绑定 multi-worker harness 导入的安全/协议原语，后者绑定正式的 1 个 Orchestrator → 2–8 个独立 Worker 验收入口。发布脚本逐项校验这些值以及 shared 12 + OIDC/Portal 8 个 ECS 运行资产摘要；两个 harness 摘要都是独立的本地验收证明，不计入这 20 项，也不会让 ECS 部署脚本读取仓库 harness。不能把 core-only bundle 改名使用。
 
-将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：四个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共九个文件。除 `SHA256SUMS` 自身外的八项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和四个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
+Portal tarball 还必须包含 `dist/.vite/manifest.json` 和规范化 `dist/ASSET_INTEGRITY.json`。后者 schema 精确为 `{schemaVersion:1,basePath:"/portal/",files:[{path,bytes,sha256}]}`，`files` 按 path 严格排序，并排除自身与 Vite manifest。builder 将两个 manifest 分别做 SHA-256 绑定，把每个公开文件的 path/bytes/SHA-256 写入 release manifest，并拒绝任何未列出的 `dist` 文件、symlink、source map、路径穿越或摘要不匹配；镜像构建与运行门禁会再次对已安装包执行同一清单核验。
 
-在可信构建机上从 exact commit 归档部署树，并把刚生成、已验证的九个 bundle 文件装入归档；不要从随后可能变化的工作树直接打包：
+将 `artifact_dir/release/` 的完整 bundle 复制到本目录的 `bundle/`：五个 `.tgz`、`package.json`、`package-lock.json`、`CONTRACT_COMMIT`、`RELEASE_MANIFEST.json` 和 `SHA256SUMS`，共十个文件。除 `SHA256SUMS` 自身外的九项发布输入都必须由它覆盖；部署还会检查 manifest 的 commit、artifact 类型和五个包文件名。bundle 只能包含这些文件以及部署目录自带的 `.gitignore`，任何额外文件、目录或 symlink 都会被拒绝。`bundle/.gitignore` 会阻止发布产物被提交到 Git。
+
+在可信构建机上从 exact commit 归档部署树，并把刚生成、已验证的十个 bundle 文件装入归档；不要从随后可能变化的工作树直接打包：
 
 ```bash
 set -euo pipefail
@@ -158,7 +160,7 @@ git archive --format=tar "$release_commit" deploy/collaboration-private \
   | tar -xf - -C "$package_root"
 bundle_source="$artifact_dir/release"
 bundle_target="$package_root/deploy/collaboration-private/bundle"
-test "$(find "$bundle_source" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 9
+test "$(find "$bundle_source" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 10
 test -z "$(find "$bundle_source" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
 cp -- "$bundle_source"/* "$bundle_target/"
 (cd "$bundle_target" && shasum -a 256 -c SHA256SUMS)
@@ -270,7 +272,7 @@ SCIFORGE_COLLABORATION_OIDC_ISSUER=
 SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK=false
 ```
 
-使用 `a-https-oidc-test` 时改为以下 exact profile；这是非秘密配置，Keycloak 管理员密码、测试用户密码、client secret 和 Access Token 均不得写入本文件、聊天或截图：
+使用 `a-https-oidc-test` 时改为以下 exact profile。除 `SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET` 外均为固定非秘密值；client secret 是本文件中唯一的 Portal secret，只能在维护窗口通过批准的私密渠道写入该 root-only `0600` 文件。Keycloak 管理员密码、测试用户密码、Access/Refresh/ID Token 不得写入本文件、聊天或截图，Portal secret 也不得进入 release、manifest、命令行、ticket 或截图：
 
 ```dotenv
 SCIFORGE_COLLABORATION_ALLOWED_ORIGINS=https://cloud-test.sciforge.cn
@@ -280,7 +282,16 @@ SCIFORGE_COLLABORATION_OIDC_ISSUER=https://login-test.sciforge.cn/realms/SciForg
 SCIFORGE_COLLABORATION_OIDC_AUDIENCE=sciforge-cloud-api
 SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES=sciforge-desktop,sciforge-web-mobile
 SCIFORGE_COLLABORATION_OIDC_ALLOW_INSECURE_LOOPBACK=false
+SCIFORGE_COLLABORATION_PORTAL_ENABLED=true
+SCIFORGE_COLLABORATION_PORTAL_ASSET_DIR=/app/node_modules/@sciforge/collaboration-portal/dist
+SCIFORGE_COLLABORATION_PORTAL_PUBLIC_ORIGIN=https://cloud-test.sciforge.cn
+SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_ID=sciforge-cloud-console
+SCIFORGE_COLLABORATION_PORTAL_OIDC_CLIENT_SECRET=<维护窗口通过私密渠道取得的32至512字符Keycloak secret>
+SCIFORGE_COLLABORATION_PORTAL_OIDC_REDIRECT_URI=https://cloud-test.sciforge.cn/portal/auth/callback
+SCIFORGE_COLLABORATION_PORTAL_TEST_WORKER_DIRECTORY_ENABLED=true
 ```
+
+Portal overlay 只把上述 Portal 值注入 `app`；`postgres`、一次性 `migrate` 和 Caddy edge 都不得得到 client secret。公共 `SCIFORGE_COLLABORATION_OIDC_AUTHORIZED_PARTIES` 保持两项，不能为了 Portal 加入 `sciforge-cloud-console`；后者由 Portal 内部独立 verifier 和 schema-v4 的 `portalAuthorizedParty` 单独绑定。
 
 OIDC edge 的 ACME state 与 core-only edge 分目录保存；任何 disable/回滚都只停止并移除对应 edge container，不删除 state。
 
@@ -353,7 +364,7 @@ sudo "$current_edge_release/deploy/collaboration-private/scripts/disable-a-https
 
 `deploy.sh` 和 `deploy-provider-zulip.sh` 都会在任何 app/数据库变更前拒绝仍存在的 edge、任何宿主或 Docker 443 暴露，以及被其他容器污染的 `private-edge` 网络。不得绕过这一步让动态 `app` DNS 提前指向未验证的新候选。
 
-随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v8 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
+随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v9 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -398,7 +409,7 @@ external_sha="$(node -e '
 
 该探针通过公共 DNS 精确校验 A/AAAA，直连 `47.76.230.118:443` 验证受信任 TLS、不可缓存的 exact commit 响应头、HTTP 与 WSS 拒绝边界，并从该独立观察点补充验证 80、8080、8787、5432 不可达；ECS 本地门禁同时以宿主 listener 和 Docker PortBindings 证明这些后端端口没有公网绑定，因此不会只依赖外部网络自身的出口策略。它不会声称 OIDC、Provider、成功认证 WSS 或业务 E2E 已完成。首次启动失败后，从该候选所属的 fixed release 运行零参数 `disable-a-https-test-edge.sh` 删除停止的精确候选，再重试。
 
-回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state；若还需回退 app，仅在 schema 兼容已确认后，从目标旧 fixed release 重新运行它自己的 release-derived PostgreSQL attestation 与 `deploy.sh`。只有当目标旧 release 本身也是 `a-https-test-edge` 且重新通过本地和外部门禁时才可重开 443；旧的 loopback-only release 只能保持 443 关闭。绝不删除 collaboration volume、database network 或固定 ACME state。
+回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state。若数据库已经迁移到 schema v9，旧 app 不得连接该数据库；尤其 live 基线 `7ad/schema5` 不能作为“直接上一 release”重新启动。此时只有两个安全入口：（a）继续运行同一 schema9-compatible app，但关闭 Portal/公网 edge，在 loopback 下排查；或（b）把维护前的兼容备份恢复到新的 volume/隔离数据库，完成 restore/schema/row-count 验证后，再让目标旧 fixed release 连接该兼容数据库。只有目标 release、数据库 schema 和 edge profile 全部兼容且重新通过对应本地/外部门禁时才可重开 443。绝不让旧 app 直连 schema9，也绝不覆盖唯一生产 volume、删除 collaboration volume、database network 或固定 ACME state。
 
 ### 显式启用 `cloud-test` + `login-test` OIDC 测试 edge
 
@@ -407,10 +418,14 @@ external_sha="$(node -e '
 - `sciforge-keycloak_identity-edge` 是 local bridge，只有 Keycloak app endpoint；该 endpoint 在网络内的唯一上游别名为 `keycloak`、端口为 `8080`，Keycloak 数据库不加入该网络；
 - Keycloak 使用 production start、exact hostname `https://login-test.sciforge.cn`、`xforwarded` proxy headers 和只信任 A edge 的代理范围；
 - Discovery 的 `issuer` 精确为 `https://login-test.sciforge.cn/realms/SciForge`，JWKS 有 RSA/RS256 signing key；真实 Access Token 已确认 header 为 `alg=RS256` 且有 `kid`，claims 必须含有效的 `iss/sub/aud/azp/exp/iat/auth_time`，其中 `aud` 包含 `sciforge-cloud-api`、`azp=sciforge-desktop`。标准可选的 `nbf` 若存在必须是合法 NumericDate；缺失时 A 使用 `iat` 作为有效生效时间。这里只确认 claim 名称与形状，不向 A 或聊天提供 Token 内容。
+- 新 client ID 精确为 `sciforge-cloud-console`，enabled、Client authentication **On**（confidential）、Standard flow **On**，Implicit flow、Direct access grants、Service accounts 和 Authorization Services 全部 **Off**；PKCE method 固定 `S256`，不得允许 plain；
+- Valid redirect URIs 只能有 `https://cloud-test.sciforge.cn/portal/auth/callback` 这一项且无 wildcard。BFF 不使用浏览器 CORS token exchange，因此 Web Origins 留空且不得设 `*`；若 realm policy 强制非空，只能使用 exact `https://cloud-test.sciforge.cn`，并把这一例外写入维护回执；
+- client 的 `openid profile` flow 必须发行 ID Token、Access Token 与可刷新 Refresh Token；ID Token 的 `aud/azp` 与 nonce 必须可由 `sciforge-cloud-console` 验证，Access Token 的 `aud` 必须包含 `sciforge-cloud-api` 且 `azp=sciforge-cloud-console`。Discovery 必须发布同 issuer 的 token 与 revocation endpoint及 `S256` 支持；Portal logout 只清理 A 的 session并尝试撤销 Refresh Token，不要求或宣称 Keycloak end-session redirect；
+- Keycloak owner 在维护窗口新生成/轮换 client secret，以批准的私密渠道交付给 A；非秘密 readiness 回执不得包含 secret、secret hash、Token、authorization code、cookie 或用户凭据。A 只把实际 secret 写入 root-only `collaboration.env`，长度必须为 32–512 个非空白字符。
 
-A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。它只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络。local verifier 要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
+A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。`cloud-test` 继续让 `/console*` 返回 404，只把 `/portal`、`/portal/*` 交给 app；固定入口为 `/portal/`，登录/回调/登出在 `/portal/auth/*`，同源 BFF 只开放 resource-shaped typed routes（Project/Worker/owned-Agent/coordination 读取，以及 Project/member/Task/cancel/retry/record-review 写入），`/portal/api/commands` 固定为 404 tombstone，Portal WebSocket 精确为 `/portal/events`。Portal reverse proxy 会把任意来访 `X-Forwarded-For` 覆盖为单个 `{remote_host}`，不会追加客户端链；app 也只在 socket peer 属于 private/loopback 时接受一个 canonical IP。local verifier 用恶意多值 header 证明该覆盖仍能得到正确登录跳转。edge 只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络；local verifier 还要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
 
-切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v8 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
+切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v9 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -419,7 +434,7 @@ sudo "$release_dir/deploy/collaboration-private/scripts/deploy-a-https-oidc-test
   /srv/sciforge-collaboration/secrets/collaboration.env
 ```
 
-候选 edge 初始 `restart: no` 且最多等待五分钟。只有本地门禁同时通过双 SAN TLS、strict SNI、exact Discovery/JWKS、两个 SNI 的 exact revision header、Cloud health、空 Provider catalog、confirm 精确 401、Keycloak 管理/健康/其他 realm 404、WSS/Origin 拒绝和端口/网络边界后，脚本才写入 root-owned approval marker 并切换为 `unless-stopped`。失败 trap 只按本次候选 ID 停止它，保留 Cloud、Keycloak、双方数据库、Docker networks 和 ACME state。
+候选 edge 初始 `restart: no` 且最多等待五分钟。只有本地门禁同时通过双 SAN TLS、strict SNI、exact Discovery/JWKS、两个 SNI 的 exact revision header、Cloud health、空 Provider catalog、confirm 精确 401、Keycloak 管理/健康/其他 realm 404、机器 WSS/Origin 拒绝、Portal 的 308/HTML/CSP、manifest-bound asset bytes/SHA/immutable cache/ETag、内部 manifest 404、session/CSRF/logout/PKCE pre-auth 边界和端口/网络边界后，脚本才写入 root-owned approval marker 并切换为 `unless-stopped`。匿名 verifier 捕获一次 pre-login cookie并以错误 state 消费对应 transaction，只证明 fail-closed，不执行真实登录。失败 trap 只按本次候选 ID 停止它，保留 Cloud、Keycloak、双方数据库、Docker networks 和 ACME state。
 
 在 ECS 外的独立公网网络继续运行固定摘要的探针：
 
@@ -446,10 +461,14 @@ worker_descriptor_file_2=/absolute/path/worker-2-descriptor-0600.json
   IFS=$'\t' read -r external_sha identity_harness_sha multi_worker_harness_sha < <(node -e '
     const m = require(process.argv[1])
     const commit = process.argv[2]
-    if (m.schemaVersion !== 3 || m.contractCommit !== commit
+    if (m.schemaVersion !== 4 || m.contractCommit !== commit
         || m.releaseMode !== "a-https-oidc-test"
         || m.deploymentBoundary !== "public-https-oidc-test"
         || m.oidcIssuer !== "https://login-test.sciforge.cn/realms/SciForge"
+        || m.oidcAuthorizedParties !== "sciforge-desktop,sciforge-web-mobile"
+        || m.portalAuthorizedParty !== "sciforge-cloud-console"
+        || m.portalOidcClientId !== "sciforge-cloud-console"
+        || m.portalOidcRedirectUri !== "https://cloud-test.sciforge.cn/portal/auth/callback"
         || !/^[0-9a-f]{64}$/.test(m.identityEdgeExternalVerifyScriptSha256 ?? "")
         || !/^[0-9a-f]{64}$/.test(m.identityAcceptanceHarnessSha256 ?? "")
         || !/^[0-9a-f]{64}$/.test(m.multiWorkerAcceptanceHarnessSha256 ?? "")) process.exit(1)
@@ -473,6 +492,17 @@ worker_descriptor_file_2=/absolute/path/worker-2-descriptor-0600.json
 )
 ```
 
+上述固定本地/外部 verifier 只完成 Portal shell、资产完整性与 BFF pre-auth 盖章，不会使用用户密码，也不能代替真实浏览器登录。维护窗口必须另存一份不含 cookie/Token/secret 的 Portal runtime 回执，至少记录：
+
+1. 新的无痕浏览器访问 `https://cloud-test.sciforge.cn/portal/`，经 `sciforge-cloud-console` 的 Authorization Code + state + nonce + PKCE S256 返回 exact callback；成功响应只留下 `__Host-sciforge-portal` 的 `Secure/HttpOnly/SameSite=Strict/Path=/` cookie，浏览器 localStorage、sessionStorage、URL、HTML 与 console 均无 Access/Refresh/ID Token 或 client secret；
+2. `/portal/api/session` 返回当前 OIDC User 的安全快照；30 分钟 idle、8 小时 absolute 是固定代码门禁，测试不得靠修改 production env 放宽。错误 state 与同一 transaction replay 已由两个固定 verifier 以 401 验证；
+3. 通过 typed BFF 完成该 User 可见的 Project 列表/详情、创建 Project、成员更新、Task 创建与允许的取消/重试/结果验收流程，并验证 expected revision、idempotency、Project role 与跨 User 读取仍失败关闭；不得用任意 raw command relay 代替；
+4. `/portal/events` 只以 `sciforge.portal.v1`、exact Origin 和 session cookie 建立 101，能收到用户有权读取的 Project wake-up；错误 Origin/protocol/query、匿名连接和登出后的旧 session 均失败关闭；
+5. test-only worker directory 明确显示测试标签，只返回受限的全局 Worker 运行字段且不赋予跨 owner 指挥权限；HumanNeeded 只能显示安全状态/context，没有 answer/approve/reject 控件或隐藏 mutation；
+6. POST `/portal/auth/logout` 清除 session、尝试撤销 Refresh Token，随后 session API 为 401、旧 cookie/WS 不再可用。该回执不得把本地 logout 描述为 Keycloak end-session redirect；如轮换 client secret，必须重启/重新验证 app，并确认旧 secret 的 code/refresh exchange 失效。
+
+只有这六项真实浏览器证据完成后，Portal 才能从“固定发布与 pre-auth 已完成”升级为“测试环境登录闭环已完成”。任一项尚未运行时必须在交付块中标为“需维护窗口生成”，不能用 fixture、匿名 302 或构建测试冒充。
+
 整个 manifest 提取、外部探针、两个 harness 摘要比对和 multi-worker harness 进程都处于同一个启动前已清除 Node preload、代理与自定义 CA 变量的 subshell；不能把 hash 提取单独移到外面。multi-worker harness 启动后还会再次检查自身及其导入的 identity harness 都是安全 regular file 且摘要匹配。外部门禁通过后，它验证 1 个 Orchestrator 和 2–8 个独立 Worker 分别完成 Device → Agent；Orchestrator 在同一 Project 中向每个 Worker 派发独立 Task，每个 Worker 都必须经过自己的真实 WSS 唤醒、断线重连、持久 Inbox replay/连续 ACK、执行进度和结构化结果，Orchestrator 再逐项验收并完成 Project。最后 harness 撤销所有参与 Device，并确认每个旧 Agent credential 与 WSS 都失效；任何 Worker 缺少任务、通知、回放、结果或撤销证据都会使整次验收失败。
 
 owner 的初始 Token 与 fresh revoke Token，以及每个 Worker descriptor 引用的两个 Token，必须在启动命令前准备好。owner 的两个 Token 参数必须是 absolute path；每个重复的 `--worker-descriptor-file` 也必须是 absolute、regular、非 symlink、当前用户拥有且精确 `0600`，其 JSON 只能包含 absolute `accessTokenFile` 与 `revokeTokenFile` 两个字段，例如 `{"accessTokenFile":"/absolute/path/worker-1-access-token-0600","revokeTokenFile":"/absolute/path/worker-1-fresh-token-0600"}`。owner Token 文件与 descriptor 引用的所有 Token 文件同样必须是 regular、非 symlink、当前用户拥有且精确 `0600`。命令必须重复提供 2–8 个 descriptor；owner 与所有 Worker 的 `issuer + sub` 必须两两不同。
@@ -481,13 +511,13 @@ owner 的初始 Token 与 fresh revoke Token，以及每个 Worker descriptor �
 
 该 multi-worker harness 不接受 Zulip 参数，也不会执行或冒充 D 的 `/bind`；A 的部署门禁已单独证明 binding confirm 保持 401/fail-closed。任何 receipt 也不得包含 Token、claims、设备私钥、Agent credential 或 binding code。
 
-回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。如需恢复 core-only edge，必须重新配置空 issuer profile、重新部署 app 并通过旧 core-only 的本地/外部门禁，不能只换 Caddy。
+回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。若数据库已经迁移到 schema v9，不能直接重启 `7ad/schema5` 或其他只支持旧 schema 的 app：可保持当前 schema9-compatible app 仅在 loopback 运行并关闭 Portal/edge，或先将维护前备份恢复到新的兼容数据库并验明 schema/表集/row count 后再部署旧 app。如需恢复 core-only edge，还必须使用与该数据库兼容的 app、重新配置空 issuer profile并通过对应 core-only 本地/外部门禁，不能只换 Caddy。
 
 ### 旧两用户 Zulip harness 的状态
 
 仓库仍保留历史 `scripts/collaboration-a-two-user-e2e.test.mjs`，但它建立在旧匿名 pairing、opaque User credential 与固定 Zulip 流拓扑上，不属于统一 OIDC User → Device → Agent 合同的 A 发布门禁，本轮不得运行或据此宣告业务 E2E。A 不会为了兼容该 harness 恢复匿名入口，也不会要求普通成员提交个人 Zulip API key。
 
-当 `a-https-oidc-test` 的 fixed release、本地/独立公网 edge 门禁和上述 1 个 Orchestrator → 2–8 个 Worker 的 real-token harness 全部通过时，A 可声明“云端 OIDC User → Device → Agent → 多 Worker 跨 User Task/Inbox/ACK/Result 合同闭环”。该声明只证明 A 的服务端 API、WSS、持久 Inbox 和鉴权/撤销合同；它不等于任意一台最新版 SciForge Desktop 已接入，不证明浏览器 OIDC Authorization Code + PKCE 登录，也不证明 D→A trusted binding confirm、Human Provider 或 Zulip 往返。这些产品端与跨团队环节应由对应成员基于公开机器合同另行验收，不得用 A 的服务端回执冒充产品 E2E。
+当 `a-https-oidc-test` 的 fixed release、本地/独立公网 edge 门禁和上述 1 个 Orchestrator → 2–8 个 Worker 的 real-token harness 全部通过时，A 可声明“云端 OIDC User → Device → Agent → 多 Worker 跨 User Task/Inbox/ACK/Result 合同闭环”。该声明只证明 A 的服务端 API、WSS、持久 Inbox 和鉴权/撤销合同；它不等于任意一台最新版 SciForge Desktop 已接入，也不自动证明 Portal 浏览器登录。只有前述六项维护窗口 Portal runtime 回执同时完成，才可另行声明“测试环境 Portal Authorization Code + PKCE/BFF 登录闭环”。两种声明都不证明 D→A trusted binding confirm、Human Provider 或 Zulip 往返；这些产品端与跨团队环节应由对应成员基于公开机器合同另行验收，不得用 A 的服务端回执冒充产品 E2E。
 
 ## 4. 通过 SSH Tunnel 使用
 
@@ -562,9 +592,9 @@ sudo deploy/collaboration-private/scripts/verify-backup-restore.sh \
 
 本地备份只是第一层。每份 dump 和 sidecar 还应复制到加密的异机存储。灾难恢复仍应使用新的 volume；不得直接覆盖唯一生产 volume。
 
-### PostgreSQL 当前 schema v8 隔离业务语义验收
+### PostgreSQL 当前 schema v9 隔离业务语义验收
 
-固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。脚本文件名及 attestation/manifest 的 `V5` 标识为兼容既有固定发布接口而保留；门禁实际从 release migration 清单推导当前版本，并在本 release 要求 schema v8：
+固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。生成并封装进 contracts tarball 的 `ARTIFACT_MANIFEST.json` 必须先通过 `databaseSchemaVersion: 9` 门禁；bundle builder 会拒绝旧值 8。脚本文件名、`/run/sciforge-collaboration-private-postgres-v5.attestation` 路径及 manifest 的 `edgePostgresV5*`/attestation 既有字段名为兼容固定发布接口而保留，不能重命名；实际数据库真值仍从 release server tarball 的 migration 清单推导，并在本 release 要求 schema v9：
 
 ```bash
 sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
@@ -575,7 +605,7 @@ sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
 
 脚本与 core/provider 部署共享同一个非阻塞 deploy lock，并在锁内先执行候选 release 的 `docker compose build app`；这一步只构建带固定 revision 的候选 image，不停止或替换当前 app、不启动或重启 PostgreSQL，也不迁移生产库。当前 live app 可以仍是上一固定 commit，脚本会记录它的 container ID、host PID、RestartCount、image 和 revision，并要求前后完全不变。它还要求 PostgreSQL 只连接 `internal=true` 的专用 Compose network 且没有宿主机端口，然后用候选 runtime image 中已经安装的生产 `dist`、migration 和依赖启动一次性非 root runner；不会向 ECS 复制源码、test fixture、Vitest、tsx 或开发依赖。隔离验收通过后再运行 `deploy.sh`；后者会复用候选 image build cache、备份并迁移生产库。
 
-管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v8_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 `0006` provider identity Inbox、`0007` portable ResourceRef 与 `0008` managed provider container 迁移，验证 `[1,2,3,4,5,6,7,8]` 的完整表、列、索引与约束后进入 ready；随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
+管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v9_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 `0006` provider identity Inbox、`0007` portable ResourceRef、`0008` managed provider container 与 `0009` Portal bounded reads 迁移，验证 `[1,2,3,4,5,6,7,8,9]` 的完整表、列、索引与约束后进入 ready。该基线还会建立 0004 生成的 NULL ProjectRecord 作者、两次会级联改写 Task assignee User 的 Agent 所有权转移审计，以及转移前已有的非空历史作者，证明 0009 使用记录之后第一条 accepted transfer 的旧 owner actor 回填前者、保持后者不变，并把 `author_user_id` 固化为 `NOT NULL`；相同时间戳导致的转移顺序歧义必须 fail closed。迁移还会先冻结涉及的写关系并拒绝任何已超过“每 User 1000 个 active Project memberships、每 Project 50000 条 records、每 Project 10000 条 HumanNeeded”的历史库；运行时 Project create/add/reactivate 按稳定 User 顺序取得事务 advisory lock，record/HumanNeeded 则在 Project row lock 内完成 count-and-insert，确保并发不能越界。v9 回执必须逐项列出并核验 `agent_nodes_active_owner_agent_idx`、`human_answers_project_created_answer_idx`、`human_requests_project_target_request_id_idx`、`oidc_identities_active_user_issuer_idx`、`project_members_active_project_user_idx`、`project_members_active_user_project_idx`、`project_records_candidate_task_result_project_idx`、`project_records_project_record_id_idx`、`tasks_active_assignee_idx` 和 `tasks_project_task_id_idx` 十个 bounded-read index；只有名称、目标表、B-tree/非 unique 属性、键列及 partial predicate 均匹配才通过。随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。生产迁移后，`verify.sh` 会对 live schema9 重做三项 hard cap 与同一十项 catalog 语义核验，并在最终 pass receipt 中明确记录；不能只凭 migration version 或同名错误 index 通过。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
 
 验收会以生产库当时的实际 migration versions 和实际表集为准（允许它仍是 v3/v4/v5）。前后快照各自在独立的、受限的候选镜像容器内运行，不向 live app 容器注入代码或占用其 cgroup；容器只读挂载单值 `sciforge_collab` 密码文件，不把数据库 URL 或密码放进 Docker env/argv。每次快照使用单个 `REPEATABLE READ READ ONLY` 事务，对每张实际表声明 server-side cursor，并以 `FETCH FORWARD 512` 有界流式计算 row count 和稳定内容 SHA-256；只保留表名、计数及摘要，不输出行内容，并要求运行前后整个快照完全相同。为避免并发业务写入造成误报或掩盖边界，本步骤必须处于无业务写入的维护窗口。live app 的 container ID、host PID、RestartCount、image 和 revision 也必须完全相同。runner 原始日志先保存在 root-only tmpfs 文件中，并同时扫描实际管理员密码、应用数据库密码、认证 URL、连接参数、stack 和 `secretKey`；只有通过扫描后才输出脱敏 pass receipt。注意：`CREATE/DROP DATABASE` 必然写 PostgreSQL 集群 catalog/WAL，但所有业务 fixture 只写随机临时数据库，不写生产 `sciforge_collaboration`。
 
@@ -629,4 +659,4 @@ deploy/collaboration-private/scripts/static-policy-test.sh
 
 默认运行上限：PostgreSQL 1.5 CPU/2 GiB/256 PID，app 1 CPU/768 MiB/256 PID；所有容器使用有界 `json-file` 日志。app 为只读 root filesystem、空 capability set、`no-new-privileges`，并以 Node 镜像的非 root 用户运行。
 
-A 的简易网页控制台已经由同一 server bundle 在 `/console/` 提供，并与 API 共用同源安全边界；它在 loopback 可做 A 内部验收，但在正式入口与链路完成评审和真实端到端验证前不向成员宣称正式可用。B–E 私有模块仍不属于 A。若显式选择 Zulip 做候选 conformance，它也只属于该次验收；不得通过放开 8787、5432、让最新版 SciForge 使用临时 HTTP tunnel 或复制旧实验部署代码来抢先冻结产品链路。
+A 的旧简易工程控制台仍由 server bundle 在 loopback `/console/` 提供，但公网 `/console*` 永远 404，不能把它当 Portal。正式候选 Portal 只存在于 schema-v4 `a-https-oidc-test` 的 `/portal/` confidential-BFF 边界；未取得维护窗口真实登录回执前只能声明固定资产/pre-auth 已就绪。B–E 私有模块仍不属于 A。若显式选择 Zulip 做候选 conformance，它也只属于该次验收；不得通过放开 8787、5432、让最新版 SciForge 使用临时 HTTP tunnel 或复制旧实验部署代码来抢先冻结产品链路。
