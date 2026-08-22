@@ -1,6 +1,8 @@
 # SciForge BC 最终设计、实现基线与交付状态
 
-> 文档状态：当前统一版
+> **历史基线提示（2026-08-22）**：本文冻结 BC 原始设计与交付状态，不再代表当前集成分支的运行真值。官方 GUI、A、AC、R0.1 与 BC 的统一实现、live 边界、双机闭环步骤和后续计划，以 [SciForge Desktop—Cloud 多 Worker 端到端集成总账与验收计划](integration/desktop-cloud-multi-worker-e2e-plan.zh-CN.md) 为准。
+>
+> 文档状态：历史设计基线
 >
 > 更新日期：2026-08-21
 >
