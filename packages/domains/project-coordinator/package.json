@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Owner-direct coordination and a fenced A/C Worker Runner for metadata-only Desktop Cloud tasks.",
+  "description": "Owner-direct coordination and a fenced A/C Worker Runner for metadata and explicit Content Space file tasks.",
   "exports": {
     "./a-contract": "./src/a-contract.ts",
     "./contract": "./src/contract.ts",

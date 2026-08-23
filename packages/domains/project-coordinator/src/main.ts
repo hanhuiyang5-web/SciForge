@@ -192,11 +192,13 @@ function hostAgentRuntime(agentExecution: DomainMainAgentExecutionHost): AgentRu
           'Schema: {"summary":string,"criterionEvidence":[{"criterionId":string,"summary":string,"resourceRefIds":string[],"outputNames":string[]}],"outputs":[{"name":string,"workspaceRelativePath":string}],"logSummary"?:string}.',
           'Provide evidence for every completion criterion exactly once.',
           'resourceRefIds may contain only input A ResourceRef IDs listed on the Task.',
-          'This phase accepts metadata-only Tasks: resourceRefIds, outputNames, and outputs must all be empty.',
+          task.fileIntent
+            ? 'This file Task must read only the materialized inputs, write at least one new Workspace-relative output, and cite outputs by outputNames.'
+            : 'This metadata-only Task requires resourceRefIds, outputNames, and outputs to remain empty.',
           `Task: ${task.title}`,
           `Objective: ${task.objective}`,
           `Completion criteria: ${JSON.stringify(task.completionCriteria)}`,
-          `Available input ResourceRef IDs: ${JSON.stringify(task.resourceRefIds)}`,
+          `Available input ResourceRef IDs: ${JSON.stringify(task.fileIntent?.inputs.map((input) => input.resourceRefId) ?? [])}`,
           `Materialized input paths: ${JSON.stringify(inputs.map((input) => input.workspaceRelativePath))}`
         ].join('\n'),
         metadata: {

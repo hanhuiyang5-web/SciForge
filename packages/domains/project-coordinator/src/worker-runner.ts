@@ -148,7 +148,7 @@ export class WorkerRunner {
     throwIfAborted(signal)
     let task = await this.loadTask(taskId)
     assertExecutionFence(task, { taskId, executionId, agentId: principal.agentId })
-    const unsupportedReason = phaseOneUnsupportedReason(task)
+    const unsupportedReason = unsupportedTaskReason(task)
     if (unsupportedReason) {
       await this.rejectUnsupportedTask(
         entry ?? { taskId, executionId, phase: 'queued', updatedAt: this.timestamp() },
@@ -163,15 +163,14 @@ export class WorkerRunner {
     let outputContainer: MaterializedInput | undefined
     if (!entry || entry.phase === 'queued') {
       const inputs = []
-      const resources = await Promise.all(task.resourceRefIds.map((resourceRefId) => this.loadResource(resourceRefId)))
-      for (const resource of resources) {
-        if (!resource.portableReference) continue
-        const materialized = await this.options.contentSpace.materialize(resource.portableReference)
-        if (resource.kind === 'content-space.container-reference') {
-          outputContainer ??= materialized
-        } else {
-          inputs.push(await this.options.contentSpace.agentDownload(materialized, safeName(resource.name)))
+      if (task.fileIntent) {
+        for (const input of task.fileIntent.inputs) {
+          const resource = await this.loadFileInput(task, input.resourceRefId)
+          const materialized = await this.options.contentSpace.materialize(resource.portableReference!)
+          inputs.push(await this.options.contentSpace.agentDownload(materialized, input.destinationName))
         }
+        const output = await this.loadOutputContainer(task)
+        outputContainer = await this.options.contentSpace.materialize(output.portableReference!)
       }
       entry = {
         taskId, executionId, phase: 'inputs_ready', updatedAt: this.timestamp(), downloadedInputs: inputs
@@ -189,7 +188,7 @@ export class WorkerRunner {
           inputs: entry.downloadedInputs ?? [],
           ...(signal ? { signal } : {})
         })
-        assertPhaseOneAgentResult(result)
+        assertAgentResult(task, result)
       } catch (error) {
         throwIfAborted(signal)
         if (
@@ -223,10 +222,8 @@ export class WorkerRunner {
       const nextOutputIndex = entry.nextOutputIndex ?? 0
       if (agentResult.outputs.length > nextOutputIndex && !outputContainer) {
         task = await this.loadTask(taskId)
-        const resources = await Promise.all(task.resourceRefIds.map((id) => this.loadResource(id)))
-        const container = resources.find((resource) => resource.kind === 'content-space.container-reference')
-        if (!container?.portableReference) throw new Error('Task output requires an E Content Space container ResourceRef.')
-        outputContainer = await this.options.contentSpace.materialize(container.portableReference)
+        const container = await this.loadOutputContainer(task)
+        outputContainer = await this.options.contentSpace.materialize(container.portableReference!)
       }
       const outputResourceIds = [...(entry.resourceRefIds ?? [])]
       for (let index = nextOutputIndex; index < agentResult.outputs.length; index += 1) {
@@ -285,7 +282,7 @@ export class WorkerRunner {
         output.name,
         outputResourceRefIds[index]!
       ]))
-      const availableInputRefs = new Set(task.resourceRefIds)
+      const availableInputRefs = new Set(task.fileIntent?.inputs.map((input) => input.resourceRefId) ?? [])
       const criterionEvidence = entry.agentResult.criterionEvidence.map((evidence) => {
         evidence.resourceRefIds.forEach((id) => {
           assertAResourceRefId(id)
@@ -340,6 +337,36 @@ export class WorkerRunner {
       throw new Error('A returned an unexpected resource.get response.')
     }
     return response.entity
+  }
+
+  private async loadFileInput(task: Task, resourceRefId: string): Promise<ResourceRef> {
+    const resource = await this.loadResource(resourceRefId)
+    if (
+      resource.resourceRefId !== resourceRefId ||
+      resource.projectId !== task.projectId ||
+      resource.kind !== 'content-space.file-reference' ||
+      resource.status !== 'available' ||
+      !resource.portableReference
+    ) {
+      throw new Error('Task file input is not an available portable Project Content Space file.')
+    }
+    return resource
+  }
+
+  private async loadOutputContainer(task: Task): Promise<ResourceRef> {
+    const resourceRefId = task.fileIntent?.output.containerResourceRefId
+    if (!resourceRefId) throw new Error('Task output requires an explicit Content Space file intent.')
+    const resource = await this.loadResource(resourceRefId)
+    if (
+      resource.resourceRefId !== resourceRefId ||
+      resource.projectId !== task.projectId ||
+      resource.kind !== 'content-space.container-reference' ||
+      resource.status !== 'available' ||
+      !resource.portableReference
+    ) {
+      throw new Error('Task output is not an available portable Project Content Space container.')
+    }
+    return resource
   }
 
   private async reportAgentFailure(
@@ -484,29 +511,34 @@ function safeName(value: string): string {
   return name.slice(0, 128)
 }
 
-function phaseOneUnsupportedReason(task: Task): string | undefined {
-  if (
-    task.resourceRefIds.length > 0 ||
-    task.requiredCapabilities.requiredResourceRefIds.length > 0 ||
-    task.authorizationRequirements.length > 0
-  ) {
-    return 'Phase-one Desktop Cloud Tasks must not require resources or external authorization.'
+function unsupportedTaskReason(task: Task): string | undefined {
+  if (task.authorizationRequirements.length > 0) {
+    return 'Run-0 Desktop Cloud Tasks cannot carry external authorization requirements.'
+  }
+  if (!task.fileIntent && (
+    task.resourceRefIds.length > 0 || task.requiredCapabilities.requiredResourceRefIds.length > 0
+  )) {
+    return 'Resource-bearing Desktop Cloud Tasks require an explicit Task file intent.'
   }
   return undefined
 }
 
-function assertPhaseOneAgentResult(result: Awaited<ReturnType<AgentRuntimePort['run']>>): void {
+function assertAgentResult(task: Task, result: Awaited<ReturnType<AgentRuntimePort['run']>>): void {
   try {
     assertCloudSafeText(result.summary)
     if (result.logSummary) assertCloudSafeText(result.logSummary)
     for (const evidence of result.criterionEvidence) assertCloudSafeText(evidence.summary)
-    if (
-      result.outputs.length > 0 ||
-      result.criterionEvidence.some((evidence) => (
-        evidence.resourceRefIds.length > 0 || evidence.outputNames.length > 0
-      ))
-    ) {
-      throw new Error('Phase-one Desktop Cloud Tasks cannot return files or ResourceRef evidence.')
+    if (!task.fileIntent) {
+      if (
+        result.outputs.length > 0 ||
+        result.criterionEvidence.some((evidence) => (
+          evidence.resourceRefIds.length > 0 || evidence.outputNames.length > 0
+        ))
+      ) {
+        throw new Error('Metadata-only Desktop Cloud Tasks cannot return files or ResourceRef evidence.')
+      }
+    } else if (result.outputs.length === 0) {
+      throw new Error('A file Task must declare at least one new output file.')
     }
   } catch {
     throw new AgentRuntimeInvalidResultError()

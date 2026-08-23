@@ -125,7 +125,7 @@ test('phase-one Worker skips E and submits a metadata-only StructuredTaskResult'
   assert.equal((await journal.get(task.taskId, task.executionId))?.phase, 'succeeded')
 })
 
-test('phase-one Worker durably rejects resource-bearing Tasks before E or AgentRuntime side effects', async () => {
+test('Worker durably rejects resource-bearing Tasks without file intent before E or AgentRuntime side effects', async () => {
   const journal = new FileWorkerJournal(join(await mkdtemp(join(tmpdir(), 'b-runner-')), 'state.json'))
   const task = taskFixture({ resourceRefIds: ['rrf_Input00000001'] })
   const cloudCalls: BCloudRequest[] = []
@@ -158,7 +158,122 @@ test('phase-one Worker durably rejects resource-bearing Tasks before E or AgentR
   assert.equal(agentRuns, 0)
   const entry = await journal.get(task.taskId, task.executionId)
   assert.equal(entry?.phase, 'rejected')
-  assert.match(entry?.recoveryReason ?? '', /must not require resources or external authorization/u)
+  assert.match(entry?.recoveryReason ?? '', /require an explicit Task file intent/u)
+})
+
+test('Worker follows Task file intent for deterministic download, Agent execution, upload-new, and A result', async () => {
+  const journal = new FileWorkerJournal(join(await mkdtemp(join(tmpdir(), 'b-runner-')), 'state.json'))
+  const inputResourceRefId = 'rrf_InputFile00001'
+  const outputContainerResourceRefId = 'rrf_OutputRoot0001'
+  const uploadedResourceRefId = 'rrf_UploadedFile01'
+  const task = taskFixture({
+    resourceRefIds: [inputResourceRefId, outputContainerResourceRefId],
+    fileIntent: {
+      schemaVersion: 1,
+      bindingRevision: 4,
+      inputs: [{ resourceRefId: inputResourceRefId, destinationName: 'source-data.csv' }],
+      output: { containerResourceRefId: outputContainerResourceRefId, mode: 'upload-new' }
+    }
+  })
+  const calls: BCloudRequest[] = []
+  const effects: string[] = []
+  const runner = new WorkerRunner({
+    journal,
+    cloud: {
+      execute: async (request) => {
+        calls.push(structuredClone(request))
+        if (request.type === 'resource.get') {
+          const kind = request.resourceRefId === outputContainerResourceRefId
+            ? 'content-space.container-reference'
+            : 'content-space.file-reference'
+          return entityResponse(request.requestId, resourceFixture(request.resourceRefId, kind))
+        }
+        if (request.type === 'resource.create') {
+          return entityResponse(
+            request.requestId,
+            resourceFixture(uploadedResourceRefId, 'content-space.file-reference')
+          )
+        }
+        return receiptResponse(request)
+      }
+    },
+    principal: { current: async () => ({ userId: task.assigneeUserId, agentId: task.assigneeAgentId }) },
+    contentSpace: {
+      materialize: async (reference) => {
+        const kind = reference.kind.includes('container') ? 'container' : 'file'
+        effects.push(`E:materialize:${kind}`)
+        return { resourceHandle: `${kind}-handle`, resourceKind: `content-space.${kind}` }
+      },
+      agentDownload: async (input, destinationName) => {
+        effects.push(`E:download:${input.resourceHandle}:${destinationName}`)
+        return { workspaceRelativePath: `inputs/${destinationName}` }
+      },
+      agentUploadNew: async (input) => {
+        effects.push(`E:upload:${input.outputContainer.resourceHandle}:${input.name}:${input.workspaceRelativePath}`)
+        return {
+          provider: 'opencontent',
+          externalId: 'uploaded-output-file',
+          kind: 'content-space.file-reference',
+          name: input.name,
+          portableReference: portable('content-space.file-reference'),
+          version: 'version-1'
+        }
+      }
+    },
+    agentRuntime: {
+      run: async ({ inputs }) => {
+        effects.push('AgentRuntime:run')
+        assert.deepEqual(inputs, [{ workspaceRelativePath: 'inputs/source-data.csv' }])
+        return {
+          summary: 'Processed the real input file.',
+          criterionEvidence: [{
+            criterionId: task.completionCriteria[0]!.criterionId,
+            summary: 'The output was generated from the supplied input.',
+            resourceRefIds: [inputResourceRefId],
+            outputNames: ['result.csv']
+          }],
+          outputs: [{ name: 'result.csv', workspaceRelativePath: 'outputs/result.csv' }],
+          logSummary: 'One input and one output processed.'
+        }
+      }
+    },
+    loadTask: async () => task
+  })
+
+  await runner.run(task.taskId, task.executionId)
+
+  assert.deepEqual(effects, [
+    'E:materialize:file',
+    'E:download:file-handle:source-data.csv',
+    'E:materialize:container',
+    'AgentRuntime:run',
+    'E:upload:container-handle:result.csv:outputs/result.csv'
+  ])
+  const resourceReads = calls.filter((request) => request.type === 'resource.get')
+  assert.deepEqual(resourceReads.map((request) => (
+    request.type === 'resource.get' ? request.resourceRefId : undefined
+  )), [inputResourceRefId, outputContainerResourceRefId])
+  const create = calls.find((request) => request.type === 'resource.create')
+  assert.equal(create?.type, 'resource.create')
+  if (create?.type !== 'resource.create') throw new Error('Missing uploaded ResourceRef creation.')
+  assert.equal(create.executionId, task.executionId)
+  assert.equal(create.portableReference?.kind, 'content-space.file-reference')
+  const terminal = calls.find((request) => request.type === 'task.transition' && request.status === 'succeeded')
+  assert.equal(terminal?.type, 'task.transition')
+  if (terminal?.type !== 'task.transition' || terminal.status !== 'succeeded') {
+    throw new Error('Missing succeeded Task transition.')
+  }
+  assert.deepEqual(terminal.result, {
+    summary: 'Processed the real input file.',
+    criterionEvidence: [{
+      criterionId: task.completionCriteria[0]!.criterionId,
+      summary: 'The output was generated from the supplied input.',
+      resourceRefIds: [inputResourceRefId, uploadedResourceRefId]
+    }],
+    resourceRefIds: [uploadedResourceRefId, inputResourceRefId],
+    logSummary: 'One input and one output processed.'
+  })
+  assert.equal((await journal.get(task.taskId, task.executionId))?.phase, 'succeeded')
 })
 
 test('recovery after E upload replays only the exact pending A ResourceRef write', async () => {
