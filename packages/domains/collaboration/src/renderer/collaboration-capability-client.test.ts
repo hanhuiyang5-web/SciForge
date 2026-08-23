@@ -11,6 +11,8 @@ import {
   collaborationEndpointChallengePollResultSchema,
   collaborationProjectionShareInputSchema,
   collaborationProjectionShareResultSchema,
+  collaborationProjectContentSpaceBindInputSchema,
+  collaborationProjectContentSpaceBindResultSchema,
   collaborationStatusReadInputSchema,
   collaborationStatusReadResultSchema
 } from '../contract.js'
@@ -54,6 +56,9 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       if (contract.actionId === COLLABORATION_CAPABILITY_IDS.projectionShare) {
         return { projection: projection() } as TOutput
       }
+      if (contract.actionId === COLLABORATION_CAPABILITY_IDS.projectContentSpaceBind) {
+        return { binding: contentSpaceBinding() } as TOutput
+      }
       throw new Error(`Unexpected capability ${contract.actionId}`)
     }
   }
@@ -66,6 +71,10 @@ test('renderer client invokes only typed public collaboration capabilities', asy
     projectionId: 'projection-1',
     allowUserIds: ['user-2'],
     expectedRevision: 2
+  })
+  await client.bindProjectContentSpace({
+    projectId: 'prj_Project000001',
+    rootResourceRefId: 'rrf_Root000000001'
   })
 
   assert.deepEqual(calls.map((call) => call.actionId === COLLABORATION_CAPABILITY_IDS.endpointChallengePoll
@@ -92,6 +101,15 @@ test('renderer client invokes only typed public collaboration capabilities', asy
         expectedRevision: 2
       },
       options: { approval: { mode: 'confirmation' } }
+    },
+    {
+      actionId: COLLABORATION_CAPABILITY_IDS.projectContentSpaceBind,
+      effect: 'external-write',
+      input: {
+        projectId: 'prj_Project000001',
+        rootResourceRefId: 'rrf_Root000000001'
+      },
+      options: { approval: { mode: 'confirmation' } }
     }
   ])
 })
@@ -114,6 +132,14 @@ test('client contracts reuse the domain strict schemas without a renderer transp
   assert.equal(
     collaborationRendererContracts.projectionShare.outputSchema,
     collaborationProjectionShareResultSchema
+  )
+  assert.equal(
+    collaborationRendererContracts.projectContentSpaceBind.inputSchema,
+    collaborationProjectContentSpaceBindInputSchema
+  )
+  assert.equal(
+    collaborationRendererContracts.projectContentSpaceBind.outputSchema,
+    collaborationProjectContentSpaceBindResultSchema
   )
 })
 
@@ -148,5 +174,18 @@ function projection() {
     allowUserIds: ['user-2'],
     revision: 2,
     queueDepth: 0
+  }
+}
+
+function contentSpaceBinding() {
+  return {
+    type: 'project_content_space_binding' as const,
+    schemaVersion: 1 as const,
+    projectId: 'prj_Project000001',
+    rootResourceRefId: 'rrf_Root000000001',
+    status: 'active' as const,
+    revision: 1,
+    createdAt: '2026-08-23T00:00:00.000Z',
+    updatedAt: '2026-08-23T00:00:00.000Z'
   }
 }

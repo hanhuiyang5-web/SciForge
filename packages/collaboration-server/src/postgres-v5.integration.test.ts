@@ -364,7 +364,7 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     collaboration = new CollaborationService({ repository, now })
     authentication = new AuthenticationService(repository, now)
     process.stdout.write(
-      `[postgres-v9-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
+      `[postgres-v10-integration] node=${process.version} postgres=${migrationEvidence.postgresVersion} ` +
       `postgresVersionNumber=${migrationEvidence.postgresVersionNumber} ` +
       `v5Baseline=${versionsAtV5.join(',')} migrations=${versionsAtCurrent.join(',')} ready=${String(readyAtCurrent)}\n`
     )
@@ -392,12 +392,12 @@ describePostgresV5('real PostgreSQL v1 -> v5 -> current-schema collaboration int
     }
   }, 120_000)
 
-  it('migrates an isolated v1 database through the v5 baseline to exact schema v9 readiness', async () => {
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
+  it('migrates an isolated v1 database through the v5 baseline to exact schema v10 readiness', async () => {
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(10)
     expect(migrationEvidence).toMatchObject({
       versionsAtV1: [1],
       versionsAtV5: [1, 2, 3, 4, 5],
-      versionsAtCurrent: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      versionsAtCurrent: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
       readyAtV1: false,
       readyAtV5: false,
       readyAtCurrent: true,
@@ -1161,7 +1161,7 @@ function integrationAdminConnectionString(): string {
 }
 
 function temporaryDatabaseName(): string {
-  return `sciforge_identity_v6_it_${process.pid}_${randomBytes(6).toString('hex')}`
+  return `sciforge_identity_v10_it_${process.pid}_${randomBytes(6).toString('hex')}`
 }
 
 function quotedDatabaseIdentifier(value: string): string {

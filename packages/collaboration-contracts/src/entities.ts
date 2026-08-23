@@ -512,6 +512,45 @@ export const projectEndpointBindingSchema = z.object({
 })
 export type ProjectEndpointBinding = z.infer<typeof projectEndpointBindingSchema>
 
+export const projectContentSpaceBindingStatusSchema = z.enum(['active', 'closed'])
+export const projectContentSpaceBindingSchema = z.object({
+  ...entityMetadataShape,
+  type: z.literal('project_content_space_binding'),
+  projectId: projectIdSchema,
+  rootResourceRefId: resourceRefIdSchema,
+  status: projectContentSpaceBindingStatusSchema
+}).strict()
+export type ProjectContentSpaceBinding = z.infer<typeof projectContentSpaceBindingSchema>
+
+export const taskFileDestinationNameSchema = z.string().trim().min(1).max(128)
+  .refine((value) => value !== '.' && value !== '..' && !/[\\/\p{Cc}]/u.test(value), {
+    message: 'Task file destination name must be one safe path component'
+  })
+
+export const taskFileIntentSchema = z.object({
+  schemaVersion: z.literal(1),
+  bindingRevision: revisionSchema,
+  inputs: z.array(z.object({
+    resourceRefId: resourceRefIdSchema,
+    destinationName: taskFileDestinationNameSchema
+  }).strict()).min(1).max(100),
+  output: z.object({
+    containerResourceRefId: resourceRefIdSchema,
+    mode: z.literal('upload-new')
+  }).strict()
+}).strict().superRefine((intent, context) => {
+  if (!uniqueStrings(intent.inputs.map((input) => input.resourceRefId))) {
+    context.addIssue({ code: 'custom', path: ['inputs'], message: 'Task file input ResourceRefs must be unique' })
+  }
+  if (!uniqueStrings(intent.inputs.map((input) => input.destinationName))) {
+    context.addIssue({ code: 'custom', path: ['inputs'], message: 'Task file destination names must be unique' })
+  }
+  if (intent.inputs.some((input) => input.resourceRefId === intent.output.containerResourceRefId)) {
+    context.addIssue({ code: 'custom', path: ['output'], message: 'Task output container cannot also be an input file' })
+  }
+})
+export type TaskFileIntent = z.infer<typeof taskFileIntentSchema>
+
 export const taskStatusSchema = z.enum([
   'offered',
   'accepted',
@@ -614,6 +653,7 @@ export const taskSchema = z.object({
   dependencyTaskIds: z.array(taskIdSchema).max(1_000).refine(uniqueStrings, 'Task dependencies must be unique'),
   requiredCapabilities: workerRequirementSchema,
   resourceRefIds: z.array(resourceRefIdSchema).max(1_000).refine(uniqueStrings, 'Task ResourceRef IDs must be unique'),
+  fileIntent: taskFileIntentSchema.optional(),
   authorizationRequirements: z.array(authorizationRequirementSchema).max(100)
     .refine((requirements) => uniqueStrings(requirements.map((requirement) => requirement.id)), 'Authorization requirement IDs must be unique'),
   status: taskStatusSchema,

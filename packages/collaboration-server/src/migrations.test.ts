@@ -12,8 +12,9 @@ const REQUIRED_TABLES = [
   'device_enrollments', 'devices', 'human_answers', 'human_endpoint_bindings',
   'human_endpoint_challenges', 'human_requests', 'inbox_cursors', 'inbox_messages',
   'managed_provider_container_jobs', 'managed_provider_containers',
-  'oidc_identities', 'participant_profiles', 'project_endpoint_bindings', 'project_input_cursors', 'project_inputs',
-  'project_members', 'project_records', 'projects', 'provider_deliveries', 'provider_diagnostics',
+  'oidc_identities', 'participant_profiles', 'project_content_space_bindings', 'project_endpoint_bindings',
+  'project_input_cursors', 'project_inputs', 'project_members', 'project_records', 'projects',
+  'provider_deliveries', 'provider_diagnostics',
   'provider_event_claims', 'provider_event_cursors', 'receipts', 'remote_session_projections',
   'resource_refs', 'schema_migrations', 'tasks', 'user_principals', 'zulip_binding_requests'
 ] as const
@@ -77,6 +78,10 @@ const REQUIRED_COLUMN_TYPES = {
     status: 'text', revision: 'bigint', created_at: 'timestamp with time zone',
     updated_at: 'timestamp with time zone', revoked_at: 'timestamp with time zone'
   },
+  project_content_space_bindings: {
+    project_id: 'text', root_resource_ref_id: 'text', root_reference_digest: 'bytea', status: 'text',
+    revision: 'bigint', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone'
+  },
   project_records: {
     author_user_id: 'text', status: 'text', source_execution_id: 'text', criterion_evidence: 'jsonb',
     resource_ref_ids: 'jsonb', log_summary: 'text'
@@ -92,7 +97,8 @@ const REQUIRED_COLUMN_TYPES = {
   tasks: {
     task_id: 'text', project_id: 'text', execution_id: 'text', result_record_id: 'text',
     assignee_user_id: 'text', completion_criteria: 'jsonb', required_capabilities: 'jsonb',
-    resource_ref_ids: 'jsonb', authorization_requirements: 'jsonb', status: 'text', progress_percent: 'integer',
+    resource_ref_ids: 'jsonb', authorization_requirements: 'jsonb', file_intent: 'jsonb',
+    status: 'text', progress_percent: 'integer',
     progress_summary: 'text', progress_reported_at: 'timestamp with time zone', result_summary: 'text',
     failure_summary: 'text', safe_failure_code: 'text', safe_failure_summary: 'text', revision: 'bigint'
   },
@@ -157,6 +163,11 @@ const REQUIRED_CONSTRAINTS = {
     'oidc_identities_identity_shape', 'oidc_identities_status_valid', 'oidc_identities_status_timestamps',
     'oidc_identities_revision_valid', 'oidc_identities_times'
   ],
+  project_content_space_bindings: [
+    'project_content_space_bindings_status_valid',
+    'project_content_space_bindings_revision_valid',
+    'project_content_space_bindings_root_digest_valid'
+  ],
   project_records: [
     'project_records_status_valid',
     'project_records_execution_provenance',
@@ -179,7 +190,8 @@ const REQUIRED_CONSTRAINTS = {
     'tasks_result_record_state',
     'tasks_safe_failure_code_format',
     'tasks_safe_failure_code_state',
-    'tasks_safe_failure_summary_state'
+    'tasks_safe_failure_summary_state',
+    'tasks_file_intent_shape'
   ],
   zulip_binding_requests: [
     'zulip_binding_requests_status_valid', 'zulip_binding_requests_confirmation_state',
@@ -205,6 +217,11 @@ const REQUIRED_RELATIONAL_CONSTRAINTS = {
   ],
   oidc_identities: ['oidc_identities_issuer_subject_unique', 'oidc_identities_identity_owner_unique',
     'oidc_identities_user_fk'],
+  project_content_space_bindings: [
+    'project_content_space_bindings_project_fk',
+    'project_content_space_bindings_root_fk'
+  ],
+  resource_refs: ['resource_refs_project_resource_unique'],
   tasks: ['tasks_assignee_owner_fk', 'tasks_result_record_fk'],
   zulip_binding_requests: ['zulip_binding_requests_code_digest_unique',
     'zulip_binding_requests_provider_event_unique', 'zulip_binding_requests_external_identity_fk',
@@ -234,6 +251,10 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
   oidc_identities: {
     oidc_identities_user_fk: { update_action: 'NO ACTION', delete_action: 'NO ACTION' }
   },
+  project_content_space_bindings: {
+    project_content_space_bindings_project_fk: { update_action: 'NO ACTION', delete_action: 'CASCADE' },
+    project_content_space_bindings_root_fk: { update_action: 'NO ACTION', delete_action: 'RESTRICT' }
+  },
   tasks: {
     tasks_assignee_owner_fk: { update_action: 'CASCADE', delete_action: 'NO ACTION' }
   },
@@ -254,6 +275,7 @@ const REQUIRED_INDEXES = {
   human_requests: ['human_requests_project_target_request_id_idx'],
   oidc_identities: ['oidc_identities_active_user_issuer_idx'],
   project_members: ['project_members_active_user_project_idx', 'project_members_active_project_user_idx'],
+  project_content_space_bindings: ['project_content_space_bindings_active_root_unique'],
   project_records: [
     'project_records_task_result_execution_unique',
     'project_records_project_record_id_idx',
@@ -265,6 +287,11 @@ const REQUIRED_INDEXES = {
 } as const
 
 const REQUIRED_PORTAL_INDEX_DEFINITIONS = {
+  'project_content_space_bindings.project_content_space_bindings_active_root_unique': {
+    key_expressions: ['root_reference_digest'],
+    predicate: "(status = 'active'::text)",
+    is_unique: true
+  },
   'agent_nodes.agent_nodes_active_owner_agent_idx': {
     key_expressions: ['owner_user_id', 'agent_id'],
     predicate: "(status = 'active'::text)"
@@ -344,10 +371,10 @@ describe('collaboration database readiness', () => {
   })
 
   it.each([
-    { label: 'a missing migration', versions: [1, 2, 3, 4, 5, 6, 7, 8] },
-    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
-    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 8, 9] },
-    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 'not-a-version'] }
+    { label: 'a missing migration', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
+    { label: 'an extra future migration', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+    { label: 'a duplicate migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 10] },
+    { label: 'a malformed migration marker', versions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 'not-a-version'] }
   ])('rejects $label', async ({ versions }) => {
     await expect(isCollaborationDatabaseReady(poolFor({ versions }))).resolves.toBe(false)
   })
@@ -444,6 +471,15 @@ describe('collaboration database readiness', () => {
     }
   )
 
+  it('rejects a non-unique active Content Space root index', async () => {
+    const indexes = requiredIndexRows().map((row) => (
+      row.index_name === 'project_content_space_bindings_active_root_unique'
+        ? { ...row, is_unique: false }
+        : row
+    ))
+    await expect(isCollaborationDatabaseReady(poolFor({ indexes }))).resolves.toBe(false)
+  })
+
   it.each(['versions', 'tables', 'columns', 'constraints', 'indexes'] as const)(
     'returns false without exposing a %s query or permission error',
     async (failQuery) => {
@@ -453,7 +489,7 @@ describe('collaboration database readiness', () => {
 })
 
 describe('collaboration migrations', () => {
-  it('preserves migrations 1-8 and adds the author repair plus bounded Portal reads as version 9', async () => {
+  it('preserves migrations 1-9 and adds Project Content Space Task I/O as version 10', async () => {
     const statements: string[] = []
     const pool: SqlPool = {
       query: async (text) => {
@@ -466,8 +502,8 @@ describe('collaboration migrations', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
-    expect(statements).toHaveLength(9)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(10)
+    expect(statements).toHaveLength(10)
     expect(statements[1]).toContain('resource_refs')
     expect(statements[1]).not.toContain("'provider_identity'")
     expect(statements[5]).toContain("'provider_identity'")
@@ -513,6 +549,14 @@ IN SHARE ROW EXCLUSIVE MODE`)
     expect(statements[8]).toContain('project_records_candidate_task_result_project_idx')
     expect(statements[8]).toContain('agent_nodes_active_owner_agent_idx')
     expect(statements[8]).toContain('VALUES (9)')
+    expect(statements[9]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.project_content_space_bindings')
+    expect(statements[9]).toContain('root_reference_digest bytea NOT NULL')
+    expect(statements[9]).toContain('resource_refs_project_resource_unique')
+    expect(statements[9]).toContain('project_content_space_bindings_root_fk')
+    expect(statements[9]).toContain('project_content_space_bindings_active_root_unique')
+    expect(statements[9]).toContain('ADD COLUMN IF NOT EXISTS file_intent jsonb')
+    expect(statements[9]).toContain('tasks_file_intent_shape')
+    expect(statements[9]).toContain('VALUES (10)')
   })
 })
 
@@ -521,7 +565,7 @@ function poolFor(state: ReadyState = {}): SqlPool {
     query: async (text) => {
       if (text.includes('schema_migrations')) {
         if (state.failQuery === 'versions') throw new Error('private migration query detail')
-        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6, 7, 8, 9]).map((version) => ({ version }))
+        const rows = (state.versions ?? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).map((version) => ({ version }))
         return { rows, rowCount: rows.length }
       }
       if (text.includes('information_schema.tables')) {
@@ -604,7 +648,7 @@ function requiredIndexRows(): IndexRow[] {
         ...(required
           ? {
               access_method: 'btree',
-              is_unique: false,
+              is_unique: 'is_unique' in required ? required.is_unique : false,
               is_valid: true,
               is_ready: true,
               has_expressions: false,

@@ -279,6 +279,31 @@
     },
     {
       "actors": [
+        "user"
+      ],
+      "availability": "current",
+      "command": "project.content_space.bind",
+      "condition": "Only the Project owner may change the Project Content Space root with exact Project and binding revisions."
+    },
+    {
+      "actors": [
+        "user",
+        "agent"
+      ],
+      "availability": "current",
+      "command": "project.content_space.get",
+      "condition": "The actor must belong to an active Project member; the response exposes only the Cloud binding ResourceRef and revision."
+    },
+    {
+      "actors": [
+        "user"
+      ],
+      "availability": "current",
+      "command": "project.content_space.unbind",
+      "condition": "Only the Project owner may change the Project Content Space root with exact Project and binding revisions."
+    },
+    {
+      "actors": [
         "user",
         "agent"
       ],
@@ -715,6 +740,15 @@
       "paused": [
         "active",
         "cancelled"
+      ]
+    },
+    "project_content_space_binding": {
+      "active": [
+        "active",
+        "closed"
+      ],
+      "closed": [
+        "active"
       ]
     },
     "project_endpoint_binding": {

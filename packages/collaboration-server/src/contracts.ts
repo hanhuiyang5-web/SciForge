@@ -12,6 +12,7 @@ import {
   projectCoordinationViewSchema,
   projectCapabilityDirectorySchema,
   projectEndpointBindingSchema,
+  projectContentSpaceBindingSchema,
   projectRecordSchema,
   resourceRefSchema,
   projectSchema,
@@ -32,6 +33,7 @@ import {
   type ProjectCoordinationView,
   type ProjectCapabilityDirectory,
   type ProjectEndpointBinding,
+  type ProjectContentSpaceBinding,
   type ProjectRecord,
   type ResourceRef,
   type RemoteSessionProjection,
@@ -51,6 +53,7 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   ProjectCapabilityDirectoryView,
@@ -183,7 +186,8 @@ export function toTask(task: StoredTask): Task {
     assigneeAgentId: task.assigneeAgentId, assigneeUserId: task.assigneeUserId,
     title: task.title, objective: task.objective, completionCriteria: task.completionCriteria,
     dependencyTaskIds: task.dependencyTaskIds, requiredCapabilities: task.requiredCapabilities,
-    resourceRefIds: task.resourceRefIds, authorizationRequirements: task.authorizationRequirements,
+    resourceRefIds: task.resourceRefIds, ...(task.fileIntent ? { fileIntent: task.fileIntent } : {}),
+    authorizationRequirements: task.authorizationRequirements,
     status, attempt: task.retryCount + 1, maxRetries: task.maxRetries,
     ...(task.activeTurnId ? { activeTurnId: task.activeTurnId } : {}),
     ...(task.progress ? { progress: task.progress } : {}),
@@ -245,6 +249,21 @@ export function toProjectInput(input: StoredProjectInput): ProjectInput {
 
 export function toProjectEndpointBinding(binding: StoredProjectEndpointBinding): ProjectEndpointBinding {
   return projectEndpointBindingSchema.parse({ schemaVersion: 1, type: 'project_endpoint_binding', ...binding })
+}
+
+export function toProjectContentSpaceBinding(
+  binding: StoredProjectContentSpaceBinding
+): ProjectContentSpaceBinding {
+  return projectContentSpaceBindingSchema.parse({
+    schemaVersion: 1,
+    type: 'project_content_space_binding',
+    projectId: binding.projectId,
+    rootResourceRefId: binding.rootResourceRefId,
+    status: binding.status,
+    revision: binding.revision,
+    createdAt: binding.createdAt,
+    updatedAt: binding.updatedAt
+  })
 }
 
 export function toHumanNeeded(request: StoredHumanRequest): HumanNeeded {

@@ -29,10 +29,12 @@ import {
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { taskFileIntentSchema } from '@sciforge/collaboration-contracts'
 
 import type {
   CollaborationAgentRegisterInput,
   CollaborationEndpointChallengeStartInput,
+  CollaborationProjectContentSpaceBindInput,
   CollaborationProjectCreateInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionQueueItemView,
@@ -919,6 +921,10 @@ export function CollaborationPanel({
               onCreateProject={(input) => void runAction(
                 'project-create',
                 () => client.createProject(input)
+              )}
+              onBindProjectContentSpace={(input) => void runAction(
+                'project-content-space-bind',
+                () => client.bindProjectContentSpace(input)
               )}
               onCreateTask={(input) => void runAction(
                 'task-create',
@@ -1942,12 +1948,45 @@ export function parseCollaborationIdentityList(value: string): string[] {
   return [...new Set(value.split(/[\s,;]+/u).map((item) => item.trim()).filter(Boolean))]
 }
 
+export function buildCollaborationTaskFileIntent(input: Readonly<{
+  bindingRevision: string
+  inputLines: string
+  outputContainerResourceRefId: string
+}>): NonNullable<CollaborationTaskCreateInput['fileIntent']> | undefined {
+  const revision = Number(input.bindingRevision)
+  const parsedInputs = input.inputLines.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf('=')
+      if (separator <= 0 || separator === line.length - 1) return undefined
+      return {
+        resourceRefId: line.slice(0, separator).trim(),
+        destinationName: line.slice(separator + 1).trim()
+      }
+    })
+  if (!Number.isSafeInteger(revision) || revision <= 0 || parsedInputs.some((item) => !item)) {
+    return undefined
+  }
+  const parsed = taskFileIntentSchema.safeParse({
+    schemaVersion: 1,
+    bindingRevision: revision,
+    inputs: parsedInputs,
+    output: {
+      containerResourceRefId: input.outputContainerResourceRefId.trim(),
+      mode: 'upload-new'
+    }
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
 export function ProjectsSection({
   projects,
   participant,
   localAgentId,
   busy,
   onCreateProject,
+  onBindProjectContentSpace,
   onCreateTask
 }: Readonly<{
   projects: readonly ProjectView[]
@@ -1955,6 +1994,7 @@ export function ProjectsSection({
   localAgentId?: string
   busy: boolean
   onCreateProject: (input: CollaborationProjectCreateInput) => void
+  onBindProjectContentSpace: (input: CollaborationProjectContentSpaceBindInput) => void
   onCreateTask: (input: CollaborationTaskCreateInput) => void
 }>): ReactElement {
   const { t } = useTranslation('common')
@@ -1963,17 +2003,36 @@ export function ProjectsSection({
   const [memberUserIds, setMemberUserIds] = useState('')
   const [coordinatorAgentId, setCoordinatorAgentId] = useState(localAgentId ?? '')
   const [projectId, setProjectId] = useState('')
+  const [bindingProjectId, setBindingProjectId] = useState('')
+  const [rootResourceRefId, setRootResourceRefId] = useState('')
   const [assigneeAgentId, setAssigneeAgentId] = useState('')
   const [taskTitle, setTaskTitle] = useState('')
   const [taskObjective, setTaskObjective] = useState('')
   const [completionCriteria, setCompletionCriteria] = useState('')
+  const [fileTaskEnabled, setFileTaskEnabled] = useState(false)
+  const [fileInputs, setFileInputs] = useState('')
   useEffect(() => {
     if (localAgentId) setCoordinatorAgentId((current) => current || localAgentId)
   }, [localAgentId])
   useEffect(() => {
     const active = projects.find((project) => project.state === 'active')
-    if (active) setProjectId((current) => current || active.projectId)
+    if (active) {
+      setProjectId((current) => current || active.projectId)
+      setBindingProjectId((current) => current || active.projectId)
+    }
   }, [projects])
+
+  const selectedTaskProject = projects.find((project) => project.projectId === projectId)
+  const activeContentSpaceBinding = selectedTaskProject?.contentSpaceBinding?.status === 'active'
+    ? selectedTaskProject.contentSpaceBinding
+    : undefined
+  const fileIntent = fileTaskEnabled && activeContentSpaceBinding
+    ? buildCollaborationTaskFileIntent({
+        bindingRevision: String(activeContentSpaceBinding.revision),
+        inputLines: fileInputs,
+        outputContainerResourceRefId: activeContentSpaceBinding.rootResourceRefId
+      })
+    : undefined
 
   const submitProject = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
@@ -1988,12 +2047,25 @@ export function ProjectsSection({
   }
   const submitTask = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
+    if (fileTaskEnabled && !fileIntent) return
     onCreateTask({
       projectId,
       assigneeAgentId: assigneeAgentId.trim(),
       title: taskTitle.trim(),
       objective: taskObjective.trim(),
-      completionCriteria: completionCriteria.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean)
+      completionCriteria: completionCriteria.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean),
+      ...(fileIntent ? { fileIntent } : {})
+    })
+  }
+  const submitBinding = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    const currentBinding = projects.find((project) => (
+      project.projectId === bindingProjectId
+    ))?.contentSpaceBinding
+    onBindProjectContentSpace({
+      projectId: bindingProjectId,
+      rootResourceRefId: rootResourceRefId.trim(),
+      ...(currentBinding ? { expectedBindingRevision: currentBinding.revision } : {})
     })
   }
   return (
@@ -2001,7 +2073,7 @@ export function ProjectsSection({
       <SectionTitle icon={<Server className="h-4 w-4" />}>
         {t('collaborationProjects')}
       </SectionTitle>
-      <div className="mb-3 grid gap-3 xl:grid-cols-2">
+      <div className="mb-3 grid gap-3 xl:grid-cols-3">
         <form className="space-y-2 rounded-md border border-ds-border p-2.5" onSubmit={submitProject}>
           <div className="text-xs font-semibold">{t('collaborationCreateProject')}</div>
           <input className={INPUT} required maxLength={200} value={projectName}
@@ -2029,6 +2101,26 @@ export function ProjectsSection({
           </button>
         </form>
 
+        <form className="space-y-2 rounded-md border border-ds-border p-2.5" onSubmit={submitBinding}>
+          <div className="text-xs font-semibold">{t('collaborationBindContentSpace')}</div>
+          <select className={INPUT} required value={bindingProjectId}
+            onChange={(event) => setBindingProjectId(event.currentTarget.value)}>
+            <option value="" disabled>{t('collaborationSelectProject')}</option>
+            {projects.filter((project) => project.state === 'active' || project.state === 'paused').map((project) => (
+              <option key={project.projectId} value={project.projectId}>{project.name}</option>
+            ))}
+          </select>
+          <input className={INPUT} required value={rootResourceRefId}
+            placeholder={t('collaborationContentSpaceRootResourceRef')}
+            onChange={(event) => setRootResourceRefId(event.currentTarget.value)} />
+          <p className="text-[10px] text-ds-muted">{t('collaborationContentSpaceBindingNotice')}</p>
+          <button type="submit" className={PRIMARY_BUTTON}
+            disabled={busy || !bindingProjectId || !rootResourceRefId.trim()}>
+            <Link2 className="h-3.5 w-3.5" />
+            {t('collaborationBindContentSpace')}
+          </button>
+        </form>
+
         <form className="space-y-2 rounded-md border border-ds-border p-2.5" onSubmit={submitTask}>
           <div className="text-xs font-semibold">{t('collaborationCreateTask')}</div>
           <select className={INPUT} required value={projectId}
@@ -2050,9 +2142,31 @@ export function ProjectsSection({
           <textarea className={INPUT} required rows={3} value={completionCriteria}
             placeholder={t('collaborationCompletionCriteria')}
             onChange={(event) => setCompletionCriteria(event.currentTarget.value)} />
-          <p className="text-[10px] text-ds-muted">{t('collaborationPhaseOneTaskNotice')}</p>
+          <label className="flex items-center gap-2 text-xs text-ds-muted">
+            <input type="checkbox" checked={fileTaskEnabled}
+              onChange={(event) => setFileTaskEnabled(event.currentTarget.checked)} />
+            {t('collaborationFileTask')}
+          </label>
+          {fileTaskEnabled ? (
+            <div className="space-y-2 rounded-md bg-ds-hover p-2" data-collaboration-file-intent="true">
+              {activeContentSpaceBinding ? (
+                <div className="text-[10px] text-ds-muted">
+                  {t('collaborationBindingRevision')}: {activeContentSpaceBinding.revision}
+                  <br />
+                  {t('collaborationOutputContainerResourceRef')}: <code>{activeContentSpaceBinding.rootResourceRefId}</code>
+                </div>
+              ) : (
+                <ExplicitError message={t('collaborationFileTaskBindingRequired')} compact />
+              )}
+              <textarea className={INPUT} required rows={3} value={fileInputs}
+                placeholder={t('collaborationFileInputs')}
+                onChange={(event) => setFileInputs(event.currentTarget.value)} />
+              <p className="text-[10px] text-ds-muted">{t('collaborationFileTaskNotice')}</p>
+            </div>
+          ) : null}
+          <p className="text-[10px] text-ds-muted">{t('collaborationRunZeroTaskNotice')}</p>
           <button type="submit" className={PRIMARY_BUTTON}
-            disabled={busy || !projectId || !assigneeAgentId.trim() || !taskTitle.trim() || !taskObjective.trim() || completionCriteria.split(/\r?\n/u).every((item) => !item.trim())}>
+            disabled={busy || !projectId || !assigneeAgentId.trim() || !taskTitle.trim() || !taskObjective.trim() || completionCriteria.split(/\r?\n/u).every((item) => !item.trim()) || (fileTaskEnabled && !fileIntent)}>
             <Plus className="h-3.5 w-3.5" />
             {t('collaborationCreateTask')}
           </button>
@@ -2085,6 +2199,12 @@ export function ProjectsSection({
                   </dd>
                 </div>
                 <div>Members: {project.memberUserIds.length} · Revision {project.revision}</div>
+                {project.contentSpaceBinding ? (
+                  <div data-content-space-binding-status={project.contentSpaceBinding.status}>
+                    Content Space: <code>{project.contentSpaceBinding.rootResourceRefId}</code>
+                    {' · '}Revision {project.contentSpaceBinding.revision}
+                  </div>
+                ) : null}
               </dl>
               {project.tasks.length ? (
                 <div className="space-y-1.5">
@@ -2122,6 +2242,15 @@ function TaskRow({ task, participant }: Readonly<{
         {t('collaborationAssignee')}: {agent?.displayName || task.assigneeAgentId} · Revision {task.revision}
       </div>
       <p className="mt-1 whitespace-pre-wrap text-ds-muted">{task.objective}</p>
+      {task.fileIntent ? (
+        <div className="mt-2 rounded border border-ds-border p-2" data-task-file-intent="true">
+          <div className="font-medium">{t('collaborationFileTask')}</div>
+          <div className="text-ds-muted">
+            {t('collaborationFileTaskInputCount', { count: task.fileIntent.inputs.length })}
+            {' · '}{t('collaborationBindingRevision')}: {task.fileIntent.bindingRevision}
+          </div>
+        </div>
+      ) : null}
       {task.progress ? (
         <div className="mt-2 rounded border border-ds-border p-2" data-task-progress={task.progress.percent}>
           <div className="font-medium">{task.progress.percent}%</div>

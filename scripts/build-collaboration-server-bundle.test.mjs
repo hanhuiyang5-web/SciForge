@@ -34,6 +34,9 @@ const identityAcceptanceHarnessFixture = Object.freeze({
 const multiWorkerAcceptanceHarnessFixture = Object.freeze({
   relativePath: 'scripts/collaboration-a-multi-worker-acceptance.mjs'
 })
+const realFileRun0ReceiptHarnessFixture = Object.freeze({
+  relativePath: 'scripts/collaboration-real-file-task-loop-run-0.mjs'
+})
 const edgeAssetFixtures = Object.freeze({
   edgeDockerignoreSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/.dockerignore'
@@ -245,7 +248,7 @@ function createContractArtifactFiles(commit) {
       artifactVersion: 1,
       contractVersion: '1.0',
       protocolVersion: '1.0',
-      databaseSchemaVersion: 9,
+      databaseSchemaVersion: 10,
       contractCommit: commit,
       commitInjectionPlaceholder: '__SCIFORGE_COLLABORATION_COMMIT__',
       files
@@ -338,7 +341,8 @@ async function createRepository() {
     ...Object.values(edgeAssetFixtures),
     ...Object.values(identityEdgeAssetFixtures),
     identityAcceptanceHarnessFixture,
-    multiWorkerAcceptanceHarnessFixture
+    multiWorkerAcceptanceHarnessFixture,
+    realFileRun0ReceiptHarnessFixture
   ].map((fixture) => [fixture.relativePath, fixture]))
   for (const { expectedMode, relativePath } of releaseAssetFixtures.values()) {
     const path = join(root, relativePath)
@@ -458,7 +462,7 @@ function createCommandHarness({
         } else if (tamperContractArchive === 'database-schema') {
           const manifestPath = 'artifacts/protocol-1.0/ARTIFACT_MANIFEST.json'
           const manifest = JSON.parse(archiveEntries.get(manifestPath).toString('utf8'))
-          manifest.databaseSchemaVersion = 8
+          manifest.databaseSchemaVersion = 9
           archiveEntries.set(manifestPath, Buffer.from(stringifyJson(manifest)))
         } else if (tamperContractArchive === 'hash') {
           const statePath = 'artifacts/protocol-1.0/state-and-actors.json'
@@ -967,7 +971,7 @@ test('builder emits only immutable release files and pins all official packages'
       .map(([path, content]) => [path.slice('artifacts/protocol-1.0/'.length), content]))
     const packedArtifacts = validateContractArtifactFiles(packedArtifactFiles, approvedCommit)
     assert.equal(packedArtifacts.manifest.contractCommit, manifest.contractCommit)
-    assert.equal(packedArtifacts.manifest.databaseSchemaVersion, 9)
+    assert.equal(packedArtifacts.manifest.databaseSchemaVersion, 10)
     assert.equal(
       JSON.parse(packedArtifactFiles.get('state-and-actors.json')).contractCommit,
       approvedCommit
@@ -1014,7 +1018,7 @@ test('builder emits only immutable release files and pins all official packages'
 test('builder fails closed when the packed contract provenance or artifact hash is changed', async () => {
   for (const [tamperContractArchive, expectedError] of [
     ['commit', /manifest commit does not match the release commit/u],
-    ['database-schema', /database schema version must be 9/u],
+    ['database-schema', /database schema version must be 10/u],
     ['hash', /SHA-256 mismatch/u]
   ]) {
     const repositoryRoot = await createRepository()
@@ -1307,6 +1311,9 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
     assert.equal(manifest.multiWorkerAcceptanceHarnessSha256, createHash('sha256')
       .update(await readFile(join(repositoryRoot, multiWorkerAcceptanceHarnessFixture.relativePath)))
       .digest('hex'))
+    assert.equal(manifest.realFileRun0ReceiptHarnessSha256, createHash('sha256')
+      .update(await readFile(join(repositoryRoot, realFileRun0ReceiptHarnessFixture.relativePath)))
+      .digest('hex'))
     assert.equal(manifest.edgeCaddyImage,
       'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a')
     assert.equal(Object.keys(identityEdgeAssetFixtures).length, 20)
@@ -1352,6 +1359,7 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
       'packageManager',
       'packages',
       'providerMode',
+      'realFileRun0ReceiptHarnessSha256',
       'releaseMode',
       'schemaVersion',
       ...Object.keys(identityEdgeAssetFixtures)
@@ -1365,6 +1373,7 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
     assert.equal(manifest.edgeCaddyfileSha256, undefined)
     assert.equal((await readdir(outputDirectory)).some((entry) => (
       entry.includes('identity-acceptance') || entry.includes('multi-worker-acceptance') ||
+        entry.includes('real-file-task-loop') ||
         entry.endsWith('.test.mjs') || entry.includes('token')
     )), false, 'the bundle contains only the harness digest, never harness/test/token files')
     assert.match(messages.join('\n'), /A-ONLY HTTPS OIDC TEST/u)
@@ -1377,10 +1386,11 @@ test('A HTTPS OIDC test is explicit and freezes the dual-SNI identity boundary',
   }
 })
 
-test('A HTTPS OIDC test fails closed when either acceptance harness is missing or unsafe', async () => {
+test('A HTTPS OIDC test fails closed when any acceptance harness is missing or unsafe', async () => {
   const harnesses = [
     ['identity', identityAcceptanceHarnessFixture],
-    ['multi-worker', multiWorkerAcceptanceHarnessFixture]
+    ['multi-worker', multiWorkerAcceptanceHarnessFixture],
+    ['real-file-run-0', realFileRun0ReceiptHarnessFixture]
   ]
   for (const [label, fixture] of harnesses) {
     for (const scenario of [
@@ -1434,7 +1444,8 @@ test('A HTTPS OIDC test fails closed when either acceptance harness is missing o
 test('post-build acceptance harness tampering no longer matches the frozen manifest', async () => {
   const harnesses = [
     ['identity', 'identityAcceptanceHarnessSha256', identityAcceptanceHarnessFixture],
-    ['multi-worker', 'multiWorkerAcceptanceHarnessSha256', multiWorkerAcceptanceHarnessFixture]
+    ['multi-worker', 'multiWorkerAcceptanceHarnessSha256', multiWorkerAcceptanceHarnessFixture],
+    ['real-file-run-0', 'realFileRun0ReceiptHarnessSha256', realFileRun0ReceiptHarnessFixture]
   ]
   for (const [label, manifestField, fixture] of harnesses) {
     const repositoryRoot = await createRepository()

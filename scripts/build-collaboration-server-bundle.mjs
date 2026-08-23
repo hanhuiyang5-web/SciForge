@@ -32,7 +32,7 @@ const collaborationPortalPackageName = '@sciforge/collaboration-portal'
 const contractArtifactPrefix = 'artifacts/protocol-1.0/'
 const contractArtifactManifestFilename = 'ARTIFACT_MANIFEST.json'
 const contractCommitPlaceholder = '__SCIFORGE_COLLABORATION_COMMIT__'
-const collaborationDatabaseSchemaVersion = 9
+const collaborationDatabaseSchemaVersion = 10
 const maximumUnpackedArchiveBytes = 128 * 1024 * 1024
 const tarBlockBytes = 512
 const immutableSnapshotGuardFilename = '.sciforge-collaboration-bundle-snapshot-guard.json'
@@ -48,6 +48,8 @@ const aHttpsTestEdgeImage = 'caddy:2.11.4-alpine@sha256:98eb57d882ccd5213d168876
 const identityAcceptanceHarnessRelativePath = 'scripts/collaboration-a-identity-acceptance.mjs'
 const multiWorkerAcceptanceHarnessRelativePath =
   'scripts/collaboration-a-multi-worker-acceptance.mjs'
+const realFileRun0ReceiptHarnessRelativePath =
+  'scripts/collaboration-real-file-task-loop-run-0.mjs'
 const aHttpsSharedEdgeAssets = Object.freeze({
   edgeDockerignoreSha256: Object.freeze({
     relativePath: 'deploy/collaboration-private/.dockerignore'
@@ -1534,6 +1536,13 @@ export async function buildCollaborationServerBundle({
           'multi-worker'
         )
       : undefined
+    const realFileRun0ReceiptHarnessSha256 = aHttpsOidcTest
+      ? await hashAcceptanceHarness(
+          root,
+          realFileRun0ReceiptHarnessRelativePath,
+          'real-file-run-0 receipt'
+        )
+      : undefined
     const manifest = {
       schemaVersion: aHttpsOidcTest ? 4 : 1,
       artifact: 'sciforge-collaboration-server-bundle',
@@ -1566,6 +1575,7 @@ export async function buildCollaborationServerBundle({
               identityEdgeNetwork: 'sciforge-keycloak_identity-edge',
               identityAcceptanceHarnessSha256,
               multiWorkerAcceptanceHarnessSha256,
+              realFileRun0ReceiptHarnessSha256,
               portalEnabled: true,
               portalMode: 'confidential-bff',
               portalPackageArchive: portalReleasePackage.filename,

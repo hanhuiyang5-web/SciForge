@@ -74,6 +74,10 @@ export const STATE_TRANSITIONS = {
     error: ['active', 'closed'],
     closed: []
   },
+  project_content_space_binding: {
+    active: ['active', 'closed'],
+    closed: ['active']
+  },
   task: {
     offered: ['offered', 'accepted', 'rejected', 'cancelled'],
     accepted: ['offered', 'running', 'rejected', 'cancelled'],
@@ -214,6 +218,7 @@ export const STABLE_ENTITY_ID_FIELDS = {
   project: 'projectId',
   project_capability_directory: 'projectId',
   project_endpoint_binding: 'projectEndpointBindingId',
+  project_content_space_binding: 'projectId',
   task: 'taskId',
   project_record: 'projectRecordId',
   resource_ref: 'resourceRefId',

@@ -2502,6 +2502,132 @@
     {
       "additionalProperties": false,
       "properties": {
+        "expectedBindingRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "expectedProjectRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 16,
+          "pattern": "^idem_[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "projectId": {
+          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "rootResourceRefId": {
+          "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "project.content_space.bind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "idempotencyKey",
+        "type",
+        "projectId",
+        "expectedProjectRevision",
+        "rootResourceRefId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "expectedBindingRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "expectedProjectRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 16,
+          "pattern": "^idem_[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "projectId": {
+          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "project.content_space.unbind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "idempotencyKey",
+        "type",
+        "projectId",
+        "expectedProjectRevision",
+        "expectedBindingRevision"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "projectId": {
+          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "protocolVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^req_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+          "type": "string"
+        },
+        "type": {
+          "const": "project.content_space.get",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "type",
+        "projectId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
         "assigneeAgentId": {
           "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
           "type": "string"
@@ -2593,6 +2719,69 @@
           "maximum": 9007199254740991,
           "minimum": 1,
           "type": "integer"
+        },
+        "fileIntent": {
+          "additionalProperties": false,
+          "properties": {
+            "bindingRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "inputs": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "destinationName": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resourceRefId": {
+                    "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "resourceRefId",
+                  "destinationName"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            },
+            "output": {
+              "additionalProperties": false,
+              "properties": {
+                "containerResourceRefId": {
+                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "mode": {
+                  "const": "upload-new",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "containerResourceRefId",
+                "mode"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "bindingRevision",
+            "inputs",
+            "output"
+          ],
+          "type": "object"
         },
         "idempotencyKey": {
           "maxLength": 128,

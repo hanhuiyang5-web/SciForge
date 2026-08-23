@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 9
+export const COLLABORATION_SCHEMA_VERSION = 10
 
 const COLLABORATION_MIGRATIONS = [
   '0001_collaboration_schema.sql',
@@ -13,10 +13,11 @@ const COLLABORATION_MIGRATIONS = [
   '0006_provider_identity_inbox.sql',
   '0007_portable_resource_refs.sql',
   '0008_managed_provider_containers.sql',
-  '0009_portal_bounded_reads.sql'
+  '0009_portal_bounded_reads.sql',
+  '0010_project_content_space_task_io.sql'
 ] as const
 
-const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+const REQUIRED_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const
 
 const REQUIRED_TABLES = [
   'action_confirmations',
@@ -36,6 +37,7 @@ const REQUIRED_TABLES = [
   'managed_provider_containers',
   'oidc_identities',
   'participant_profiles',
+  'project_content_space_bindings',
   'project_endpoint_bindings',
   'project_input_cursors',
   'project_inputs',
@@ -190,6 +192,15 @@ const REQUIRED_COLUMN_TYPES = {
     updated_at: 'timestamp with time zone',
     revoked_at: 'timestamp with time zone'
   },
+  project_content_space_bindings: {
+    project_id: 'text',
+    root_resource_ref_id: 'text',
+    root_reference_digest: 'bytea',
+    status: 'text',
+    revision: 'bigint',
+    created_at: 'timestamp with time zone',
+    updated_at: 'timestamp with time zone'
+  },
   project_records: {
     author_user_id: 'text',
     status: 'text',
@@ -232,6 +243,7 @@ const REQUIRED_COLUMN_TYPES = {
     required_capabilities: 'jsonb',
     resource_ref_ids: 'jsonb',
     authorization_requirements: 'jsonb',
+    file_intent: 'jsonb',
     status: 'text',
     progress_percent: 'integer',
     progress_summary: 'text',
@@ -322,6 +334,11 @@ const REQUIRED_CONSTRAINTS = {
     'oidc_identities_revision_valid',
     'oidc_identities_times'
   ],
+  project_content_space_bindings: [
+    'project_content_space_bindings_status_valid',
+    'project_content_space_bindings_revision_valid',
+    'project_content_space_bindings_root_digest_valid'
+  ],
   project_records: [
     'project_records_status_valid',
     'project_records_execution_provenance',
@@ -344,7 +361,8 @@ const REQUIRED_CONSTRAINTS = {
     'tasks_result_record_state',
     'tasks_safe_failure_code_format',
     'tasks_safe_failure_code_state',
-    'tasks_safe_failure_summary_state'
+    'tasks_safe_failure_summary_state',
+    'tasks_file_intent_shape'
   ],
   zulip_binding_requests: [
     'zulip_binding_requests_status_valid',
@@ -377,6 +395,11 @@ const REQUIRED_RELATIONAL_CONSTRAINTS = {
     'oidc_identities_identity_owner_unique',
     'oidc_identities_user_fk'
   ],
+  project_content_space_bindings: [
+    'project_content_space_bindings_project_fk',
+    'project_content_space_bindings_root_fk'
+  ],
+  resource_refs: ['resource_refs_project_resource_unique'],
   tasks: ['tasks_assignee_owner_fk', 'tasks_result_record_fk'],
   zulip_binding_requests: [
     'zulip_binding_requests_code_digest_unique',
@@ -409,6 +432,10 @@ const REQUIRED_FOREIGN_KEY_ACTIONS = {
   oidc_identities: {
     oidc_identities_user_fk: { updateAction: 'NO ACTION', deleteAction: 'NO ACTION' }
   },
+  project_content_space_bindings: {
+    project_content_space_bindings_project_fk: { updateAction: 'NO ACTION', deleteAction: 'CASCADE' },
+    project_content_space_bindings_root_fk: { updateAction: 'NO ACTION', deleteAction: 'RESTRICT' }
+  },
   tasks: {
     tasks_assignee_owner_fk: { updateAction: 'CASCADE', deleteAction: 'NO ACTION' }
   },
@@ -431,6 +458,7 @@ const REQUIRED_INDEXES = {
   human_requests: ['human_requests_project_target_request_id_idx'],
   oidc_identities: ['oidc_identities_active_user_issuer_idx'],
   project_members: ['project_members_active_user_project_idx', 'project_members_active_project_user_idx'],
+  project_content_space_bindings: ['project_content_space_bindings_active_root_unique'],
   project_records: [
     'project_records_task_result_execution_unique',
     'project_records_project_record_id_idx',
@@ -446,6 +474,11 @@ const REQUIRED_INDEXES = {
 } as const
 
 const REQUIRED_PORTAL_INDEX_DEFINITIONS = {
+  'project_content_space_bindings.project_content_space_bindings_active_root_unique': {
+    keyExpressions: ['root_reference_digest'],
+    predicate: "status='active'",
+    isUnique: true
+  },
   'agent_nodes.agent_nodes_active_owner_agent_idx': {
     keyExpressions: ['owner_user_id', 'agent_id'],
     predicate: "status='active'"
@@ -698,7 +731,8 @@ function hasRequiredPortalIndexDefinitions(rows: readonly Readonly<{
     const row = rows.find((candidate) => (
       `${String(candidate.table_name)}.${String(candidate.index_name)}` === qualifiedName
     ))
-    if (!row || String(row.access_method) !== 'btree' || row.is_unique !== false ||
+    const expectedUnique = 'isUnique' in required ? required.isUnique : false
+    if (!row || String(row.access_method) !== 'btree' || row.is_unique !== expectedUnique ||
         row.is_valid !== true || row.is_ready !== true || row.has_expressions !== false ||
         row.has_included_columns !== false || !Array.isArray(row.key_expressions)) return false
     const keyExpressions = row.key_expressions.map((value) => String(value))

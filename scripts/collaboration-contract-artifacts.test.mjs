@@ -70,7 +70,7 @@ test('manifest hashes every schema, state table, and fixture without claiming bu
   assert.equal(manifest.packages['@sciforge/collaboration-contracts'], '0.2.0')
   assert.equal(manifest.packages['@sciforge/domain-sdk'], '0.2.2')
   assert.equal(manifest.packages['@sciforge/domain-content-space'], '1.0.0')
-  assert.equal(manifest.databaseSchemaVersion, 9)
+  assert.equal(manifest.databaseSchemaVersion, 10)
   assert.equal(manifest.portableResourceCarrier.schemaVersion, '1.0.0')
   assert.equal(manifest.portableResourceCarrier.upstreamCommit,
     'e58ed48e94812d0c56da48ab7387f53135439cc5')
@@ -190,6 +190,9 @@ test('JSON Schemas expose the complete strict public roots and actor table', () 
     .map((entry) => entry.command).sort()
   assert.deepEqual(permissions, commands)
   assert.ok(commands.includes('task.create'))
+  assert.ok(commands.includes('project.content_space.bind'))
+  assert.ok(commands.includes('project.content_space.unbind'))
+  assert.ok(commands.includes('project.content_space.get'))
   assert.ok(commands.includes('inbox.ack'))
 
   const permissionByCommand = new Map(actorTable.permissions.map((entry) => [entry.command, entry]))

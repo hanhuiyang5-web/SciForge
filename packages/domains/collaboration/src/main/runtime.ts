@@ -6,6 +6,7 @@ import {
   type AgentInboxMessage,
   type ManagedProviderContainer,
   type Project,
+  type ProjectContentSpaceBinding,
   type RemoteSessionProjection,
   type RestRequest,
   type RestResponse,
@@ -36,6 +37,7 @@ import type {
   CollaborationStatusSnapshot,
   CollaborationSynchronizationRetryInput,
   CollaborationProjectCreateInput,
+  CollaborationProjectContentSpaceBindInput,
   CollaborationTaskCreateInput,
   CollaborationProjectView,
   CollaborationTaskListInput,
@@ -284,17 +286,23 @@ export class CollaborationRuntime {
     const projections = state.projections.map((projection) => (
       this.projectionView(projection.projection)
     ))
-    const projectViews = state.projects.map((project) => ({
-      projectId: project.projectId,
-      name: project.displayName,
-      ownerUserId: project.ownerUserId,
-      goal: project.goal,
-      state: mapProjectState(project.status),
-      revision: project.revision,
-      coordinatorAgentId: project.coordinatorAgentId,
-      memberUserIds: project.memberUserIds,
-      tasks: state.tasks.filter((task) => task.projectId === project.projectId).map(mapTaskView)
-    }))
+    const projectViews = state.projects.map((project) => {
+      const contentSpaceBinding = state.contentSpaceBindings.find((binding) => (
+        binding.projectId === project.projectId
+      ))
+      return {
+        projectId: project.projectId,
+        name: project.displayName,
+        ownerUserId: project.ownerUserId,
+        goal: project.goal,
+        state: mapProjectState(project.status),
+        revision: project.revision,
+        coordinatorAgentId: project.coordinatorAgentId,
+        memberUserIds: project.memberUserIds,
+        ...(contentSpaceBinding ? { contentSpaceBinding } : {}),
+        tasks: state.tasks.filter((task) => task.projectId === project.projectId).map(mapTaskView)
+      }
+    })
     const connectionState = connection.state()
     const deviceCredentialAvailable = await this.options.packageSecrets.has('device-credential')
     const localAgent = configured.settings
@@ -774,6 +782,43 @@ export class CollaborationRuntime {
     return this.projectView(project)
   }
 
+  async bindProjectContentSpace(
+    input: CollaborationProjectContentSpaceBindInput
+  ): Promise<ProjectContentSpaceBinding> {
+    const state = this.store.snapshot()
+    const user = state.user
+    const project = state.projects.find((candidate) => candidate.projectId === input.projectId)
+    if (!user || !project || project.ownerUserId !== user.userId) {
+      throw new Error('Only the active Project Owner can bind its Content Space root.')
+    }
+    if (!['active', 'paused'].includes(project.status)) {
+      throw new Error('A terminal Project cannot bind a Content Space root.')
+    }
+    const requestId = collaborationRequestId()
+    const response = await this.requireConnection().executeAsUser(restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId,
+      type: 'project.content_space.bind',
+      idempotencyKey: `idem_project.content_space.bind.${digest(requestId).slice(0, 48)}`,
+      projectId: project.projectId,
+      rootResourceRefId: input.rootResourceRefId,
+      expectedProjectRevision: project.revision,
+      ...(input.expectedBindingRevision !== undefined
+        ? { expectedBindingRevision: input.expectedBindingRevision }
+        : {})
+    }))
+    const binding = requireProjectContentSpaceBindingResponse(response)
+    await this.store.transact((draft) => {
+      draft.contentSpaceBindings = replaceById(
+        draft.contentSpaceBindings,
+        binding,
+        (candidate) => candidate.projectId
+      )
+    })
+    await this.refreshProject(project.projectId, 'user')
+    return binding
+  }
+
   async createTask(input: CollaborationTaskCreateInput): Promise<CollaborationTaskView> {
     const state = this.store.snapshot()
     const user = state.user
@@ -790,7 +835,7 @@ export class CollaborationRuntime {
       idempotencyKey: `idem_task.create.${digest(requestId).slice(0, 48)}`,
       projectId: project.projectId,
       expectedRevision: project.revision,
-      ...phaseOneTaskProposal(input)
+      ...ownerDirectTaskProposal(input)
     }))
     const task = requireTaskResponse(response)
     await this.store.transact((draft) => {
@@ -867,12 +912,35 @@ export class CollaborationRuntime {
       : await this.requireConnection().executeAsDevice(request)
     if (response.type !== 'rest.entity' || response.entity.type !== 'project') return
     const project = response.entity
+    const bindingRequest = restRequestSchema.parse({
+      protocolVersion: '1.0',
+      requestId: collaborationRequestId(),
+      type: 'project.content_space.get',
+      projectId
+    })
+    const bindingResponse = authority === 'user'
+      ? await this.requireConnection().executeAsUser(bindingRequest)
+      : await this.requireConnection().executeAsDevice(bindingRequest)
+    const binding = bindingResponse.type === 'rest.entity' &&
+      bindingResponse.entity.type === 'project_content_space_binding'
+      ? bindingResponse.entity
+      : undefined
+    if (bindingResponse.type === 'rest.error' && bindingResponse.error.code !== 'not_found') {
+      throw new Error(bindingResponse.error.message)
+    }
     await this.store.transact((draft) => {
       draft.projects = replaceById(draft.projects, project, (candidate) => candidate.projectId)
+      draft.contentSpaceBindings = binding
+        ? replaceById(draft.contentSpaceBindings, binding, (candidate) => candidate.projectId)
+        : draft.contentSpaceBindings.filter((candidate) => candidate.projectId !== projectId)
     })
   }
 
   private projectView(project: Project): CollaborationProjectView {
+    const state = this.store.snapshot()
+    const contentSpaceBinding = state.contentSpaceBindings.find((binding) => (
+      binding.projectId === project.projectId
+    ))
     return {
       projectId: project.projectId,
       ownerUserId: project.ownerUserId,
@@ -882,7 +950,8 @@ export class CollaborationRuntime {
       revision: project.revision,
       coordinatorAgentId: project.coordinatorAgentId,
       memberUserIds: project.memberUserIds,
-      tasks: this.store.snapshot().tasks
+      ...(contentSpaceBinding ? { contentSpaceBinding } : {}),
+      tasks: state.tasks
         .filter((task) => task.projectId === project.projectId)
         .map(mapTaskView)
     }
@@ -986,7 +1055,8 @@ export function activeProjectionBindingsForSession(
   ))
 }
 
-export function phaseOneTaskProposal(input: CollaborationTaskCreateInput) {
+export function ownerDirectTaskProposal(input: CollaborationTaskCreateInput) {
+  const fileIntent = input.fileIntent
   return {
     assigneeAgentId: input.assigneeAgentId,
     title: input.title,
@@ -997,9 +1067,12 @@ export function phaseOneTaskProposal(input: CollaborationTaskCreateInput) {
       capabilityIds: ['project.worker.v1'],
       vpnAccessIds: [] as string[],
       slurmClusterIds: [] as string[],
-      requiredResourceRefIds: [] as string[]
+      requiredResourceRefIds: fileIntent?.inputs.map((item) => item.resourceRefId) ?? []
     },
-    resourceRefIds: [] as string[],
+    resourceRefIds: fileIntent
+      ? [...fileIntent.inputs.map((item) => item.resourceRefId), fileIntent.output.containerResourceRefId]
+      : [] as string[],
+    ...(fileIntent ? { fileIntent } : {}),
     authorizationRequirements: [] as never[]
   }
 }
@@ -1016,6 +1089,14 @@ function requireProjectResponse(response: RestResponse): Project {
   if (response.type === 'rest.error') throw new Error(response.error.message)
   if (response.type !== 'rest.entity' || response.entity.type !== 'project') {
     throw new Error(`Project operation returned unexpected ${response.type}.`)
+  }
+  return response.entity
+}
+
+function requireProjectContentSpaceBindingResponse(response: RestResponse): ProjectContentSpaceBinding {
+  if (response.type === 'rest.error') throw new Error(response.error.message)
+  if (response.type !== 'rest.entity' || response.entity.type !== 'project_content_space_binding') {
+    throw new Error(`Project Content Space binding returned unexpected ${response.type}.`)
   }
   return response.entity
 }
@@ -1059,6 +1140,7 @@ function mapTaskView(task: Task): CollaborationTaskView {
     ...(task.resultSummary ? { resultSummary: task.resultSummary } : {}),
     ...(task.resultProjectRecordId ? { resultProjectRecordId: task.resultProjectRecordId } : {}),
     ...(task.safeFailureSummary ? { safeFailureSummary: task.safeFailureSummary } : {}),
+    ...(task.fileIntent ? { fileIntent: task.fileIntent } : {}),
     ...(task.activeTurnId ? { localTurnId: task.activeTurnId } : {}),
     updatedAt: task.updatedAt
   }

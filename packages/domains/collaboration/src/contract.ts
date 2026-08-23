@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { managedProviderContainerSchema, providerLocatorSchema } from '@sciforge/collaboration-contracts'
+import {
+  managedProviderContainerSchema,
+  projectContentSpaceBindingSchema,
+  providerLocatorSchema,
+  taskFileIntentSchema
+} from '@sciforge/collaboration-contracts'
 
 const idSchema = z.string().trim().min(1).max(256)
 const isoDateSchema = z.iso.datetime({ offset: true })
@@ -18,6 +23,7 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   projectionShare: 'collaboration.projection.share',
   synchronizationRetry: 'collaboration.sync.retry',
   projectCreate: 'collaboration.project.create',
+  projectContentSpaceBind: 'collaboration.project.content-space.bind',
   taskCreate: 'collaboration.task.create',
   taskList: 'collaboration.task.list',
   managedContainerInspect: 'collaboration.managed-container.inspect',
@@ -161,6 +167,7 @@ export const collaborationTaskViewSchema = z.object({
   resultSummary: safeTextSchema.optional(),
   resultProjectRecordId: idSchema.optional(),
   safeFailureSummary: z.string().trim().min(1).max(2_000).optional(),
+  fileIntent: taskFileIntentSchema.optional(),
   localTurnId: idSchema.optional(),
   updatedAt: isoDateSchema,
   error: safeTextSchema.optional()
@@ -175,6 +182,7 @@ export const collaborationProjectViewSchema = z.object({
   revision: z.number().int().nonnegative(),
   coordinatorAgentId: idSchema,
   memberUserIds: z.array(idSchema).max(1_000),
+  contentSpaceBinding: projectContentSpaceBindingSchema.optional(),
   tasks: z.array(collaborationTaskViewSchema).max(10_000)
 }).strict()
 
@@ -356,17 +364,23 @@ export const collaborationProjectCreateResultSchema = z.object({
   project: collaborationProjectViewSchema
 }).strict()
 
-/**
- * Phase one is a metadata-only text Task. ResourceRefs and authorization
- * requirements are intentionally absent from this public input, so the main
- * process can only emit empty arrays for both fields.
- */
+export const collaborationProjectContentSpaceBindInputSchema = z.object({
+  projectId: idSchema,
+  rootResourceRefId: idSchema,
+  expectedBindingRevision: z.number().int().positive().optional()
+}).strict()
+export const collaborationProjectContentSpaceBindResultSchema = z.object({
+  binding: projectContentSpaceBindingSchema
+}).strict()
+
+/** Owner-direct Run-0 accepts either one metadata Task or one explicit file intent. */
 export const collaborationTaskCreateInputSchema = z.object({
   projectId: idSchema,
   assigneeAgentId: idSchema,
   title: displayTextSchema,
   objective: z.string().trim().min(1).max(4_000),
-  completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100)
+  completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100),
+  fileIntent: taskFileIntentSchema.optional()
 }).strict()
 export const collaborationTaskCreateResultSchema = z.object({
   task: collaborationTaskViewSchema
@@ -433,6 +447,9 @@ export type CollaborationProjectionUpdateInput = z.infer<typeof collaborationPro
 export type CollaborationProjectionShareInput = z.infer<typeof collaborationProjectionShareInputSchema>
 export type CollaborationSynchronizationRetryInput = z.infer<typeof collaborationSynchronizationRetryInputSchema>
 export type CollaborationProjectCreateInput = z.infer<typeof collaborationProjectCreateInputSchema>
+export type CollaborationProjectContentSpaceBindInput = z.infer<
+  typeof collaborationProjectContentSpaceBindInputSchema
+>
 export type CollaborationTaskCreateInput = z.infer<typeof collaborationTaskCreateInputSchema>
 export type CollaborationTaskListInput = z.infer<typeof collaborationTaskListInputSchema>
 export type CollaborationManagedContainerManageInput = z.infer<typeof collaborationManagedContainerManageInputSchema>

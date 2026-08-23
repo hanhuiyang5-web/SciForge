@@ -10,6 +10,7 @@ import {
 } from '../contract.js'
 import {
   buildAgentRegistrationInput,
+  buildCollaborationTaskFileIntent,
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
   CurrentSessionBindingSummary,
@@ -272,6 +273,32 @@ test('normalizes copied Worker identities and explicit multi-member input', asyn
     writeText: async (value) => { writes.push(value) }
   }), 'copied')
   assert.deepEqual(writes, ['agt_Worker0000001'])
+})
+
+test('builds one strict Run-0 file intent from ordered ResourceRef mappings', () => {
+  assert.deepEqual(buildCollaborationTaskFileIntent({
+    bindingRevision: '3',
+    inputLines: 'rrf_Input00000001=dataset.csv\nrrf_Config0000001=settings.json',
+    outputContainerResourceRefId: 'rrf_Output0000001'
+  }), {
+    schemaVersion: 1,
+    bindingRevision: 3,
+    inputs: [
+      { resourceRefId: 'rrf_Input00000001', destinationName: 'dataset.csv' },
+      { resourceRefId: 'rrf_Config0000001', destinationName: 'settings.json' }
+    ],
+    output: { containerResourceRefId: 'rrf_Output0000001', mode: 'upload-new' }
+  })
+  assert.equal(buildCollaborationTaskFileIntent({
+    bindingRevision: '3',
+    inputLines: 'rrf_Input00000001=../escape.csv',
+    outputContainerResourceRefId: 'rrf_Output0000001'
+  }), undefined)
+  assert.equal(buildCollaborationTaskFileIntent({
+    bindingRevision: 'not-a-revision',
+    inputLines: 'rrf_Input00000001=dataset.csv',
+    outputContainerResourceRefId: 'rrf_Output0000001'
+  }), undefined)
 })
 
 test('shows a compact personal Topic card with diagnostics folded and no sharing controls', () => {
@@ -680,6 +707,7 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
       localAgentId={snapshot.connection.localAgentId}
       busy={false}
       onCreateProject={NOOP}
+      onBindProjectContentSpace={NOOP}
       onCreateTask={NOOP}
     />
   )
@@ -692,9 +720,25 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
 
   const completedProjects = snapshot.projects.map((project) => ({
     ...project,
+    contentSpaceBinding: {
+      schemaVersion: 1 as const,
+      type: 'project_content_space_binding' as const,
+      projectId: project.projectId,
+      rootResourceRefId: 'rrf_ProjectRoot001',
+      status: 'active' as const,
+      revision: 2,
+      createdAt: '2026-08-15T04:00:00.000Z',
+      updatedAt: '2026-08-15T04:00:00.000Z'
+    },
     tasks: project.tasks.map((task) => ({
       ...task,
       state: 'completed' as const,
+      fileIntent: {
+        schemaVersion: 1 as const,
+        bindingRevision: 2,
+        inputs: [{ resourceRefId: 'rrf_ProjectInput01', destinationName: 'input.csv' }],
+        output: { containerResourceRefId: 'rrf_ProjectRoot001', mode: 'upload-new' as const }
+      },
       resultSummary: 'Worker returned the completed analysis.',
       resultProjectRecordId: 'record-1'
     }))
@@ -702,9 +746,11 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   const completed = renderToStaticMarkup(
     <ProjectsSection projects={completedProjects} participant={snapshot.participant}
       localAgentId={snapshot.connection.localAgentId} busy={false}
-      onCreateProject={NOOP} onCreateTask={NOOP} />
+      onCreateProject={NOOP} onBindProjectContentSpace={NOOP} onCreateTask={NOOP} />
   )
   assert.match(completed, /data-task-result="true"/u)
+  assert.match(completed, /data-content-space-binding-status="active"/u)
+  assert.match(completed, /data-task-file-intent="true"/u)
   assert.match(completed, /Worker returned the completed analysis/u)
 
   const recovery = renderToStaticMarkup(

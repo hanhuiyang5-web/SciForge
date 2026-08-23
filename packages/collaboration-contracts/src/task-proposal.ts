@@ -9,6 +9,7 @@ import {
 } from './core.js'
 import {
   authorizationRequirementSchema,
+  taskFileIntentSchema,
   workerRequirementSchema
 } from './entities.js'
 
@@ -36,6 +37,7 @@ export const taskCreateProposalInputSchema = z.object({
     requiredResourceRefIds: []
   }),
   resourceRefIds: z.array(resourceRefIdSchema).max(1_000).default([]),
+  fileIntent: taskFileIntentSchema.optional(),
   authorizationRequirements: z.array(authorizationRequirementSchema).max(100).default([])
 }).strict().superRefine((proposal, context) => {
   const criterionIds = proposal.completionCriteria.flatMap((criterion) => (
@@ -56,6 +58,22 @@ export const taskCreateProposalInputSchema = z.object({
       message: 'Task authorization requirement IDs must be unique.'
     })
   }
+  if (proposal.fileIntent) {
+    const expectedResourceRefIds = [
+      ...proposal.fileIntent.inputs.map((input) => input.resourceRefId),
+      proposal.fileIntent.output.containerResourceRefId
+    ]
+    if (
+      proposal.resourceRefIds.length !== expectedResourceRefIds.length ||
+      proposal.resourceRefIds.some((resourceRefId, index) => resourceRefId !== expectedResourceRefIds[index])
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['resourceRefIds'],
+        message: 'File Task ResourceRefs must exactly match ordered inputs followed by the output container.'
+      })
+    }
+  }
 })
 
 export type TaskCreateProposalInput = z.input<typeof taskCreateProposalInputSchema>
@@ -69,6 +87,7 @@ export type NormalizedTaskCreateProposal = Readonly<{
   dependencyTaskIds: readonly string[]
   requiredCapabilities: Readonly<z.output<typeof workerRequirementSchema>>
   resourceRefIds: readonly string[]
+  fileIntent?: Readonly<z.output<typeof taskFileIntentSchema>>
   authorizationRequirements: readonly Readonly<z.output<typeof authorizationRequirementSchema>>[]
 }>
 
@@ -88,6 +107,7 @@ export function normalizeTaskCreateProposal(input: unknown): NormalizedTaskCreat
     dependencyTaskIds: [...new Set(parsed.dependencyTaskIds)],
     requiredCapabilities: parsed.requiredCapabilities,
     resourceRefIds: [...new Set(parsed.resourceRefIds)],
+    ...(parsed.fileIntent ? { fileIntent: parsed.fileIntent } : {}),
     authorizationRequirements: parsed.authorizationRequirements
   })
 }

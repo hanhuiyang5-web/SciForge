@@ -4058,6 +4058,69 @@
                         "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                         "type": "string"
                       },
+                      "fileIntent": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "bindingRevision": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "inputs": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "destinationName": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "resourceRefId": {
+                                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "resourceRefId",
+                                "destinationName"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 100,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "output": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "containerResourceRefId": {
+                                "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              "mode": {
+                                "const": "upload-new",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "containerResourceRefId",
+                              "mode"
+                            ],
+                            "type": "object"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "bindingRevision",
+                          "inputs",
+                          "output"
+                        ],
+                        "type": "object"
+                      },
                       "maxRetries": {
                         "maximum": 100,
                         "minimum": 0,
@@ -5208,6 +5271,60 @@
             {
               "additionalProperties": false,
               "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "rootResourceRefId": {
+                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "const": "project_content_space_binding",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "type",
+                "projectId",
+                "rootResourceRefId",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
                 "activeTurnId": {
                   "pattern": "^trn_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                   "type": "string"
@@ -5311,6 +5428,69 @@
                 "executionId": {
                   "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                   "type": "string"
+                },
+                "fileIntent": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bindingRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "inputs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "destinationName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "resourceRefId": {
+                            "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "resourceRefId",
+                          "destinationName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "output": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "containerResourceRefId": {
+                          "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "mode": {
+                          "const": "upload-new",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "containerResourceRefId",
+                        "mode"
+                      ],
+                      "type": "object"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "bindingRevision",
+                    "inputs",
+                    "output"
+                  ],
+                  "type": "object"
                 },
                 "maxRetries": {
                   "maximum": 100,
@@ -9334,6 +9514,69 @@
                           "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                           "type": "string"
                         },
+                        "fileIntent": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "bindingRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "inputs": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "destinationName": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "resourceRefId": {
+                                    "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "resourceRefId",
+                                  "destinationName"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "output": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "containerResourceRefId": {
+                                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "mode": {
+                                  "const": "upload-new",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "containerResourceRefId",
+                                "mode"
+                              ],
+                              "type": "object"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "bindingRevision",
+                            "inputs",
+                            "output"
+                          ],
+                          "type": "object"
+                        },
                         "maxRetries": {
                           "maximum": 100,
                           "minimum": 0,
@@ -10484,6 +10727,60 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "rootResourceRefId": {
+                    "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "closed"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_content_space_binding",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "projectId",
+                  "rootResourceRefId",
+                  "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
                   "activeTurnId": {
                     "pattern": "^trn_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
@@ -10587,6 +10884,69 @@
                   "executionId": {
                     "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
+                  },
+                  "fileIntent": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindingRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "inputs": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "destinationName": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "resourceRefId": {
+                              "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "resourceRefId",
+                            "destinationName"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "output": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "containerResourceRefId": {
+                            "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "mode": {
+                            "const": "upload-new",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "containerResourceRefId",
+                          "mode"
+                        ],
+                        "type": "object"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "bindingRevision",
+                      "inputs",
+                      "output"
+                    ],
+                    "type": "object"
                   },
                   "maxRetries": {
                     "maximum": 100,

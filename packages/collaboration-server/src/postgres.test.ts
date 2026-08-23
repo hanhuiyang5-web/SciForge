@@ -637,7 +637,7 @@ describe('PostgreSQL production transaction path', () => {
     }
   })
 
-  it('runs the ordered collaboration migrations through schema version 9', async () => {
+  it('runs the ordered collaboration migrations through schema version 10', async () => {
     const migrations: string[] = []
     const pool: SqlPool = {
       query: async (text) => { migrations.push(text); return { rows: [], rowCount: 0 } },
@@ -647,8 +647,8 @@ describe('PostgreSQL production transaction path', () => {
 
     await runCollaborationMigrations(pool)
 
-    expect(COLLABORATION_SCHEMA_VERSION).toBe(9)
-    expect(migrations).toHaveLength(9)
+    expect(COLLABORATION_SCHEMA_VERSION).toBe(10)
+    expect(migrations).toHaveLength(10)
     expect(migrations[1]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.resource_refs')
     expect(migrations[1]).toContain('created_by_user_id text NOT NULL')
     expect(migrations[1]).toContain('CONSTRAINT resource_refs_open_url_safe')
@@ -754,6 +754,13 @@ describe('PostgreSQL production transaction path', () => {
     expect(migrations[8]).toContain('tasks_active_assignee_idx')
     expect(migrations[8]).toContain('oidc_identities_active_user_issuer_idx')
     expect(migrations[8]).toContain('VALUES (9)')
+    expect(migrations[9]).toContain('CREATE TABLE IF NOT EXISTS sciforge_collaboration.project_content_space_bindings')
+    expect(migrations[9]).toContain('root_reference_digest bytea NOT NULL')
+    expect(migrations[9]).toContain('resource_refs_project_resource_unique')
+    expect(migrations[9]).toContain('project_content_space_bindings_active_root_unique')
+    expect(migrations[9]).toContain('ADD COLUMN IF NOT EXISTS file_intent jsonb')
+    expect(migrations[9]).toContain('tasks_file_intent_shape')
+    expect(migrations[9]).toContain('VALUES (10)')
   })
 
   it('reconciles representative legacy TaskResult fixtures deterministically', () => {
@@ -840,7 +847,7 @@ describe('PostgreSQL production transaction path', () => {
       dependency_task_ids: task.dependencyTaskIds, required_capabilities: task.requiredCapabilities,
       resource_ref_ids: task.resourceRefIds, authorization_requirements: task.authorizationRequirements,
       status: task.status, retry_count: task.retryCount,
-      max_retries: task.maxRetries, coordination_round: task.coordinationRound, active_turn_id: null,
+      file_intent: task.fileIntent, max_retries: task.maxRetries, coordination_round: task.coordinationRound, active_turn_id: null,
       progress_percent: task.progress?.percent, progress_summary: task.progress?.summary,
       progress_reported_at: new Date(at), result_summary: null, result_record_id: null,
       failure_summary: 'legacy private failure text must not escape', safe_failure_code: null,
@@ -873,18 +880,19 @@ describe('PostgreSQL production transaction path', () => {
 
     expect(writes.find(({ text }) => text.includes('FOR UPDATE'))?.values).toEqual([task.taskId])
     const insert = writes.find(({ text }) => text.includes('INSERT INTO sciforge_collaboration.tasks'))
-    expect(insert?.values.slice(3, 13)).toEqual([
+    expect(insert?.values.slice(3, 14)).toEqual([
       task.assigneeAgentId, task.assigneeUserId, task.createdByAgentId, task.title, task.objective,
       JSON.stringify(task.completionCriteria), JSON.stringify(task.dependencyTaskIds),
       JSON.stringify(task.requiredCapabilities), JSON.stringify(task.resourceRefIds),
-      JSON.stringify(task.authorizationRequirements)
+      JSON.stringify(task.authorizationRequirements), null
     ])
     const update = writes.find(({ text }) => text.includes('UPDATE sciforge_collaboration.tasks'))
-    expect(update?.text).toContain('progress_percent=$17')
-    expect(update?.text).toContain('safe_failure_code=$22')
-    expect(update?.text).toContain('safe_failure_summary=$23')
+    expect(update?.text).toContain('file_intent=$12::jsonb')
+    expect(update?.text).toContain('progress_percent=$18')
+    expect(update?.text).toContain('safe_failure_code=$23')
+    expect(update?.text).toContain('safe_failure_summary=$24')
     expect(update?.text).not.toMatch(/(^|[,\s])failure_summary=/u)
-    expect(update?.values.slice(16, 19)).toEqual([60, 'Analysis is running.', at])
+    expect(update?.values.slice(17, 20)).toEqual([60, 'Analysis is running.', at])
     expect(update?.values.at(-1)).toBe(4)
   })
 

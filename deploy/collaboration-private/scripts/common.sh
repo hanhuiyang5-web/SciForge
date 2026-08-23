@@ -382,6 +382,7 @@ validate_release_bundle() {
   local manifest_identity_edge_network
   local manifest_identity_acceptance_harness_sha256
   local manifest_multi_worker_acceptance_harness_sha256
+  local manifest_real_file_run0_receipt_harness_sha256
   local manifest_portal_enabled
   local manifest_portal_mode
   local manifest_portal_package_archive
@@ -508,6 +509,7 @@ validate_release_bundle() {
   manifest_identity_edge_network="$(awk -F'"' '$2 == "identityEdgeNetwork" { print $4 }' "$manifest_file")"
   manifest_identity_acceptance_harness_sha256="$(awk -F'"' '$2 == "identityAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
   manifest_multi_worker_acceptance_harness_sha256="$(awk -F'"' '$2 == "multiWorkerAcceptanceHarnessSha256" { print $4 }' "$manifest_file")"
+  manifest_real_file_run0_receipt_harness_sha256="$(awk -F'"' '$2 == "realFileRun0ReceiptHarnessSha256" { print $4 }' "$manifest_file")"
   manifest_portal_enabled="$(awk '$1 == "\"portalEnabled\":" { gsub(/,/, "", $2); print $2 }' "$manifest_file")"
   manifest_portal_mode="$(awk -F'"' '$2 == "portalMode" { print $4 }' "$manifest_file")"
   manifest_portal_package_archive="$(awk -F'"' '$2 == "portalPackageArchive" { print $4 }' "$manifest_file")"
@@ -640,6 +642,7 @@ validate_release_bundle() {
           && "$manifest_identity_edge_network" == "$A_HTTPS_OIDC_TEST_IDENTITY_NETWORK" \
           && "$manifest_identity_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
           && "$manifest_multi_worker_acceptance_harness_sha256" =~ ^[0-9a-f]{64}$ \
+          && "$manifest_real_file_run0_receipt_harness_sha256" =~ ^[0-9a-f]{64}$ \
           && "$manifest_portal_enabled" == true \
           && "$manifest_portal_mode" == confidential-bff \
           && "$manifest_portal_package_archive" == sciforge-collaboration-portal-*.tgz \

@@ -23,6 +23,8 @@ import {
   collaborationProjectionShareResultSchema,
   collaborationProjectionUpdateInputSchema,
   collaborationProjectionUpdateResultSchema,
+  collaborationProjectContentSpaceBindInputSchema,
+  collaborationProjectContentSpaceBindResultSchema,
   collaborationProjectCreateInputSchema,
   collaborationProjectCreateResultSchema,
   collaborationStatusReadInputSchema,
@@ -42,6 +44,7 @@ import {
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
+  type CollaborationProjectContentSpaceBindInput,
   type CollaborationProjectCreateInput,
   type CollaborationStatusSnapshot,
   type CollaborationSynchronizationRetryInput,
@@ -60,6 +63,7 @@ type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSc
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
 type ProjectCreateResult = z.infer<typeof collaborationProjectCreateResultSchema>
+type ProjectContentSpaceBindResult = z.infer<typeof collaborationProjectContentSpaceBindResultSchema>
 type TaskCreateResult = z.infer<typeof collaborationTaskCreateResultSchema>
 type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
@@ -136,6 +140,12 @@ const contracts = Object.freeze({
     inputSchema: collaborationProjectCreateInputSchema,
     outputSchema: collaborationProjectCreateResultSchema
   }),
+  projectContentSpaceBind: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.projectContentSpaceBind,
+    effect: 'external-write' as const,
+    inputSchema: collaborationProjectContentSpaceBindInputSchema,
+    outputSchema: collaborationProjectContentSpaceBindResultSchema
+  }),
   taskCreate: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.taskCreate,
     effect: 'external-write' as const,
@@ -177,6 +187,9 @@ export type CollaborationRendererClient = Readonly<{
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
   createProject(input: CollaborationProjectCreateInput): Promise<ProjectCreateResult>
+  bindProjectContentSpace(
+    input: CollaborationProjectContentSpaceBindInput
+  ): Promise<ProjectContentSpaceBindResult>
   createTask(input: CollaborationTaskCreateInput): Promise<TaskCreateResult>
   manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
@@ -216,6 +229,11 @@ export function createCollaborationRendererClient(
     ),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
     createProject: (input) => invoker.invoke(contracts.projectCreate, input, CONFIRMED),
+    bindProjectContentSpace: (input) => invoker.invoke(
+      contracts.projectContentSpaceBind,
+      input,
+      CONFIRMED
+    ),
     createTask: (input) => invoker.invoke(contracts.taskCreate, input, CONFIRMED),
     manageContainer: (input) => {
       if (input.action === 'refresh-status' || input.action === 'refresh-locators') {

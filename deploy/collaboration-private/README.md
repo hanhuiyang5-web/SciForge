@@ -364,7 +364,7 @@ sudo "$current_edge_release/deploy/collaboration-private/scripts/disable-a-https
 
 `deploy.sh` 和 `deploy-provider-zulip.sh` 都会在任何 app/数据库变更前拒绝仍存在的 edge、任何宿主或 Docker 443 暴露，以及被其他容器污染的 `private-edge` 网络。不得绕过这一步让动态 `app` DNS 提前指向未验证的新候选。
 
-随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v9 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
+随后使用新 `a-https-test-edge` bundle 运行当前 PostgreSQL schema v10 隔离门禁（脚本名为兼容既有发布接口仍保留 `verify-postgres-v5-integration.sh`）和 `deploy.sh`，确保 app 已以新 fixed commit、精确 Origin、空 OIDC issuer 和空 Provider catalog 运行；最后执行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -409,7 +409,7 @@ external_sha="$(node -e '
 
 该探针通过公共 DNS 精确校验 A/AAAA，直连 `47.76.230.118:443` 验证受信任 TLS、不可缓存的 exact commit 响应头、HTTP 与 WSS 拒绝边界，并从该独立观察点补充验证 80、8080、8787、5432 不可达；ECS 本地门禁同时以宿主 listener 和 Docker PortBindings 证明这些后端端口没有公网绑定，因此不会只依赖外部网络自身的出口策略。它不会声称 OIDC、Provider、成功认证 WSS 或业务 E2E 已完成。首次启动失败后，从该候选所属的 fixed release 运行零参数 `disable-a-https-test-edge.sh` 删除停止的精确候选，再重试。
 
-回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state。若数据库已经迁移到 schema v9，旧 app 不得连接该数据库；尤其 live 基线 `7ad/schema5` 不能作为“直接上一 release”重新启动。此时只有两个安全入口：（a）继续运行同一 schema9-compatible app，但关闭 Portal/公网 edge，在 loopback 下排查；或（b）把维护前的兼容备份恢复到新的 volume/隔离数据库，完成 restore/schema/row-count 验证后，再让目标旧 fixed release 连接该兼容数据库。只有目标 release、数据库 schema 和 edge profile 全部兼容且重新通过对应本地/外部门禁时才可重开 443。绝不让旧 app 直连 schema9，也绝不覆盖唯一生产 volume、删除 collaboration volume、database network 或固定 ACME state。
+回滚顺序固定为：先关闭安全组 443；从当前 edge 的可信 fixed release 运行 `disable-a-https-test-edge.sh`；保留 ACME state。若数据库已经迁移到 schema v10，旧 app 不得连接该数据库；尤其 live 基线 `7ad/schema5` 不能作为“直接上一 release”重新启动。此时只有两个安全入口：（a）继续运行同一 schema10-compatible app，但关闭 Portal/公网 edge，在 loopback 下排查；或（b）把维护前的兼容备份恢复到新的 volume/隔离数据库，完成 restore/schema/row-count 验证后，再让目标旧 fixed release 连接该兼容数据库。只有目标 release、数据库 schema 和 edge profile 全部兼容且重新通过对应本地/外部门禁时才可重开 443。绝不让旧 app 直连 schema10，也绝不覆盖唯一生产 volume、删除 collaboration volume、database network 或固定 ACME state。
 
 ### 显式启用 `cloud-test` + `login-test` OIDC 测试 edge
 
@@ -425,7 +425,7 @@ external_sha="$(node -e '
 
 A Caddy 只对 `login-test` 放行 `/realms/SciForge`、其后代和 `/resources/*`；`/admin*`、`/metrics*`、`/health*`、其他 realm 与根路径统一 404。`cloud-test` 继续让 `/console*` 返回 404，只把 `/portal`、`/portal/*` 交给 app；固定入口为 `/portal/`，登录/回调/登出在 `/portal/auth/*`，同源 BFF 只开放 resource-shaped typed routes（Project/Worker/owned-Agent/coordination 读取，以及 Project/member/Task/cancel/retry/record-review 写入），`/portal/api/commands` 固定为 404 tombstone，Portal WebSocket 精确为 `/portal/events`。Portal reverse proxy 会把任意来访 `X-Forwarded-For` 覆盖为单个 `{remote_host}`，不会追加客户端链；app 也只在 socket peer 属于 private/loopback 时接受一个 canonical IP。local verifier 用恶意多值 header 证明该覆盖仍能得到正确登录跳转。edge 只加入 Cloud 的 `private-edge` 和 Keycloak 的 `identity-edge`，不加入双方数据库网络；local verifier 还要求 identity-edge 精确只有 Keycloak app + A edge，并证明 Keycloak 没有加入 Cloud app/database network。
 
-切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v9 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
+切换顺序不可交换：先关闭安全组 443 并从当前 fixed release 运行相应 `disable-a-https-*-test.sh`；确认任何 edge 和宿主/Docker 443 均已关闭；用 OIDC exact env 运行新 release 的当前 PostgreSQL schema v10 门禁和 `deploy.sh`；Keycloak owner 准备好上述窄 endpoint。随后只重新开放公网入站 TCP 443（80、UDP 443、8080、8787、5432 继续关闭），确认 ECS 出站可达 ACME 后立即运行：
 
 ```bash
 release_dir="/srv/sciforge-collaboration/releases/<获批的完整40位contract-commit>"
@@ -447,6 +447,7 @@ external_verifier="$fixed_release_copy/deploy/collaboration-private/scripts/veri
 fixed_source_root=/absolute/path/to/trusted-fixed-source
 identity_harness="$fixed_source_root/scripts/collaboration-a-identity-acceptance.mjs"
 multi_worker_harness="$fixed_source_root/scripts/collaboration-a-multi-worker-acceptance.mjs"
+real_file_receipt_harness="$fixed_source_root/scripts/collaboration-real-file-task-loop-run-0.mjs"
 owner_token_file=/absolute/path/owner-oidc-access-token-0600
 owner_revoke_token_file=/absolute/path/owner-fresh-oidc-access-token-0600
 worker_descriptor_file_1=/absolute/path/worker-1-descriptor-0600.json
@@ -458,7 +459,7 @@ worker_descriptor_file_2=/absolute/path/worker-2-descriptor-0600.json
   unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy NO_PROXY no_proxy
   unset SSL_CERT_FILE ssl_cert_file SSL_CERT_DIR ssl_cert_dir CURL_CA_BUNDLE curl_ca_bundle
 
-  IFS=$'\t' read -r external_sha identity_harness_sha multi_worker_harness_sha < <(node -e '
+  IFS=$'\t' read -r external_sha identity_harness_sha multi_worker_harness_sha real_file_harness_sha < <(node -e '
     const m = require(process.argv[1])
     const commit = process.argv[2]
     if (m.schemaVersion !== 4 || m.contractCommit !== commit
@@ -471,15 +472,18 @@ worker_descriptor_file_2=/absolute/path/worker-2-descriptor-0600.json
         || m.portalOidcRedirectUri !== "https://cloud-test.sciforge.cn/portal/auth/callback"
         || !/^[0-9a-f]{64}$/.test(m.identityEdgeExternalVerifyScriptSha256 ?? "")
         || !/^[0-9a-f]{64}$/.test(m.identityAcceptanceHarnessSha256 ?? "")
-        || !/^[0-9a-f]{64}$/.test(m.multiWorkerAcceptanceHarnessSha256 ?? "")) process.exit(1)
-    process.stdout.write(`${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\t${m.multiWorkerAcceptanceHarnessSha256}\n`)
+        || !/^[0-9a-f]{64}$/.test(m.multiWorkerAcceptanceHarnessSha256 ?? "")
+        || !/^[0-9a-f]{64}$/.test(m.realFileRun0ReceiptHarnessSha256 ?? "")) process.exit(1)
+    process.stdout.write(`${m.identityEdgeExternalVerifyScriptSha256}\t${m.identityAcceptanceHarnessSha256}\t${m.multiWorkerAcceptanceHarnessSha256}\t${m.realFileRun0ReceiptHarnessSha256}\n`)
   ' "$manifest" "$release_commit")
   "$external_verifier" "$release_commit" "$external_sha"
 
   test -f "$identity_harness" && test ! -L "$identity_harness"
   test -f "$multi_worker_harness" && test ! -L "$multi_worker_harness"
+  test -f "$real_file_receipt_harness" && test ! -L "$real_file_receipt_harness"
   test "$(shasum -a 256 "$identity_harness" | awk '{print $1}')" = "$identity_harness_sha"
   test "$(shasum -a 256 "$multi_worker_harness" | awk '{print $1}')" = "$multi_worker_harness_sha"
+  test "$(shasum -a 256 "$real_file_receipt_harness" | awk '{print $1}')" = "$real_file_harness_sha"
   node "$multi_worker_harness" \
     --base-url https://cloud-test.sciforge.cn \
     --owner-token-file "$owner_token_file" \
@@ -511,7 +515,28 @@ owner 的初始 Token 与 fresh revoke Token，以及每个 Worker descriptor �
 
 该 multi-worker harness 不接受 Zulip 参数，也不会执行或冒充 D 的 `/bind`；A 的部署门禁已单独证明 binding confirm 保持 401/fail-closed。任何 receipt 也不得包含 Token、claims、设备私钥、Agent credential 或 binding code。
 
-回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。若数据库已经迁移到 schema v9，不能直接重启 `7ad/schema5` 或其他只支持旧 schema 的 app：可保持当前 schema9-compatible app 仅在 loopback 运行并关闭 Portal/edge，或先将维护前备份恢复到新的兼容数据库并验明 schema/表集/row count 后再部署旧 app。如需恢复 core-only edge，还必须使用与该数据库兼容的 app、重新配置空 issuer profile并通过对应 core-only 本地/外部门禁，不能只换 Caddy。
+`REAL_FILE_TASK_LOOP_RUN_0` 另使用 manifest 固定摘要的
+`scripts/collaboration-real-file-task-loop-run-0.mjs` 验证真实回执；它不创建 fixture，也不执行
+Provider API。只有 E 的 packaged download/upload-new 回执、两套 packaged Desktop 身份、schema
+v10 Cloud release、Task result、ProjectRecord 和 Coordinator 重新下载哈希全部生成后，才运行：
+
+```bash
+real_file_receipt=/absolute/path/REAL_FILE_TASK_LOOP_RUN_0.receipt.json
+node "$real_file_receipt_harness" \
+  --receipt "$real_file_receipt" \
+  --expected-commit "$release_commit" \
+  --expected-release-manifest-sha256 "$(shasum -a 256 "$manifest" | awk '{print $1}')"
+```
+
+该 verifier 要求 Coordinator/Worker 使用同一 final commit、两个不同 OIDC User/Device/Agent 与
+两个不同 OpenContent principal digest；input source 与 Worker download SHA-256/bytes 必须相等，
+Worker upload 与 Coordinator re-download SHA-256/bytes 必须相等，且唯一 output ResourceRef 必须
+同时出现在 succeeded Task result 和 candidate/accepted ProjectRecord 中。回执只能保存 portable
+reference/Provider receipt 的 SHA-256，不能保存 Token、credential、email、raw Provider DTO 或本地路径。
+在 E production Task file port 尚未安装、真实 packaged transfer 尚未执行或任一字段为 fixture 时，
+Run-0 状态必须保持 `NOT READY`。
+
+回滚时先关闭安全组 443，再从当前 OIDC fixed release 运行零参数 `disable-a-https-oidc-test.sh`。若数据库已经迁移到 schema v10，不能直接重启 `7ad/schema5` 或其他只支持旧 schema 的 app：可保持当前 schema10-compatible app 仅在 loopback 运行并关闭 Portal/edge，或先将维护前备份恢复到新的兼容数据库并验明 schema/表集/row count 后再部署旧 app。如需恢复 core-only edge，还必须使用与该数据库兼容的 app、重新配置空 issuer profile并通过对应 core-only 本地/外部门禁，不能只换 Caddy。
 
 ### 旧两用户 Zulip harness 的状态
 
@@ -592,9 +617,9 @@ sudo deploy/collaboration-private/scripts/verify-backup-restore.sh \
 
 本地备份只是第一层。每份 dump 和 sidecar 还应复制到加密的异机存储。灾难恢复仍应使用新的 volume；不得直接覆盖唯一生产 volume。
 
-### PostgreSQL 当前 schema v9 隔离业务语义验收
+### PostgreSQL 当前 schema v10 隔离业务语义验收
 
-固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。生成并封装进 contracts tarball 的 `ARTIFACT_MANIFEST.json` 必须先通过 `databaseSchemaVersion: 9` 门禁；bundle builder 会拒绝旧值 8。脚本文件名、`/run/sciforge-collaboration-private-postgres-v5.attestation` 路径及 manifest 的 `edgePostgresV5*`/attestation 既有字段名为兼容固定发布接口而保留，不能重命名；实际数据库真值仍从 release server tarball 的 migration 清单推导，并在本 release 要求 schema v9：
+固定 bundle 传到 release 目录后、运行 `deploy.sh` 迁移生产库之前，在无业务写入的维护窗口先运行一次真实 PostgreSQL 隔离验收。生成并封装进 contracts tarball 的 `ARTIFACT_MANIFEST.json` 必须先通过 `databaseSchemaVersion: 10` 门禁；bundle builder 会拒绝旧值 9。脚本文件名、`/run/sciforge-collaboration-private-postgres-v5.attestation` 路径及 manifest 的 `edgePostgresV5*`/attestation 既有字段名为兼容固定发布接口而保留，不能重命名；实际数据库真值仍从 release server tarball 的 migration 清单推导，并在本 release 要求 schema v10：
 
 ```bash
 sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
@@ -605,7 +630,7 @@ sudo deploy/collaboration-private/scripts/verify-postgres-v5-integration.sh \
 
 脚本与 core/provider 部署共享同一个非阻塞 deploy lock，并在锁内先执行候选 release 的 `docker compose build app`；这一步只构建带固定 revision 的候选 image，不停止或替换当前 app、不启动或重启 PostgreSQL，也不迁移生产库。当前 live app 可以仍是上一固定 commit，脚本会记录它的 container ID、host PID、RestartCount、image 和 revision，并要求前后完全不变。它还要求 PostgreSQL 只连接 `internal=true` 的专用 Compose network 且没有宿主机端口，然后用候选 runtime image 中已经安装的生产 `dist`、migration 和依赖启动一次性非 root runner；不会向 ECS 复制源码、test fixture、Vitest、tsx 或开发依赖。隔离验收通过后再运行 `deploy.sh`；后者会复用候选 image build cache、备份并迁移生产库。
 
-管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v9_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 `0006` provider identity Inbox、`0007` portable ResourceRef、`0008` managed provider container 与 `0009` Portal bounded reads 迁移，验证 `[1,2,3,4,5,6,7,8,9]` 的完整表、列、索引与约束后进入 ready。该基线还会建立 0004 生成的 NULL ProjectRecord 作者、两次会级联改写 Task assignee User 的 Agent 所有权转移审计，以及转移前已有的非空历史作者，证明 0009 使用记录之后第一条 accepted transfer 的旧 owner actor 回填前者、保持后者不变，并把 `author_user_id` 固化为 `NOT NULL`；相同时间戳导致的转移顺序歧义必须 fail closed。迁移还会先冻结涉及的写关系并拒绝任何已超过“每 User 1000 个 active Project memberships、每 Project 50000 条 records、每 Project 10000 条 HumanNeeded”的历史库；运行时 Project create/add/reactivate 按稳定 User 顺序取得事务 advisory lock，record/HumanNeeded 则在 Project row lock 内完成 count-and-insert，确保并发不能越界。v9 回执必须逐项列出并核验 `agent_nodes_active_owner_agent_idx`、`human_answers_project_created_answer_idx`、`human_requests_project_target_request_id_idx`、`oidc_identities_active_user_issuer_idx`、`project_members_active_project_user_idx`、`project_members_active_user_project_idx`、`project_records_candidate_task_result_project_idx`、`project_records_project_record_id_idx`、`tasks_active_assignee_idx` 和 `tasks_project_task_id_idx` 十个 bounded-read index；只有名称、目标表、B-tree/非 unique 属性、键列及 partial predicate 均匹配才通过。随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。生产迁移后，`verify.sh` 会对 live schema9 重做三项 hard cap 与同一十项 catalog 语义核验，并在最终 pass receipt 中明确记录；不能只凭 migration version 或同名错误 index 通过。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
+管理员密码不会进入 Docker Config、命令参数、URL 环境变量或日志。宿主机只在 `/run` tmpfs 创建一个 `root:10001/0440` 的 64 位十六进制单值文件，并只读挂载给 runner；runner 在内存中构造固定指向 `postgres:5432/postgres` 的管理员 URL。它创建名称严格匹配 `sciforge_identity_v10_it_<pid>_<12位hex>` 的随机临时数据库，先显式建立 `[1,2,3,4,5]` 基线并证明当前 ready 门禁拒绝 v5，再执行 `0006` provider identity Inbox、`0007` portable ResourceRef、`0008` managed provider container、`0009` Portal bounded reads 与 `0010` Project Content Space Task I/O 迁移，验证 `[1,2,3,4,5,6,7,8,9,10]` 的完整表、列、索引与约束后进入 ready。该基线还会建立 0004 生成的 NULL ProjectRecord 作者、两次会级联改写 Task assignee User 的 Agent 所有权转移审计，以及转移前已有的非空历史作者，证明 0009 使用记录之后第一条 accepted transfer 的旧 owner actor 回填前者、保持后者不变，并把 `author_user_id` 固化为 `NOT NULL`；相同时间戳导致的转移顺序歧义必须 fail closed。迁移还会先冻结涉及的写关系并拒绝任何已超过“每 User 1000 个 active Project memberships、每 Project 50000 条 records、每 Project 10000 条 HumanNeeded”的历史库；运行时 Project create/add/reactivate 按稳定 User 顺序取得事务 advisory lock，record/HumanNeeded 则在 Project row lock 内完成 count-and-insert，确保并发不能越界。v10 回执必须逐项列出并核验 `agent_nodes_active_owner_agent_idx`、`human_answers_project_created_answer_idx`、`human_requests_project_target_request_id_idx`、`oidc_identities_active_user_issuer_idx`、`project_members_active_project_user_idx`、`project_members_active_user_project_idx`、`project_records_candidate_task_result_project_idx`、`project_records_project_record_id_idx`、`tasks_active_assignee_idx` 和 `tasks_project_task_id_idx` 十个 bounded-read index；只有名称、目标表、B-tree/非 unique 属性、键列及 partial predicate 均匹配才通过。它还必须证明 `project_content_space_bindings`、nullable `tasks.file_intent`、Project/root 外键、严格 shape checks 与基于 portable root digest 的 active unique index 存在。随后继续验证旧 Agent 撤销、并发 OIDC JIT、Device→Agent 生命周期和 Zulip binding 唯一性，并在 `finally` 中终止连接并删除该库。生产迁移后，`verify.sh` 会对 live schema10 重做三项 hard cap、同一十项 catalog 语义核验与 Project Content Space Task I/O 结构核验，并在最终 pass receipt 中明确记录；不能只凭 migration version 或同名错误 index 通过。外层 trap 只在运行前确认没有同前缀遗留库后，才会按同一严格正则清理本次异常退出的残留；绝不把 `sciforge_collaboration` 作为删除目标。
 
 验收会以生产库当时的实际 migration versions 和实际表集为准（允许它仍是 v3/v4/v5）。前后快照各自在独立的、受限的候选镜像容器内运行，不向 live app 容器注入代码或占用其 cgroup；容器只读挂载单值 `sciforge_collab` 密码文件，不把数据库 URL 或密码放进 Docker env/argv。每次快照使用单个 `REPEATABLE READ READ ONLY` 事务，对每张实际表声明 server-side cursor，并以 `FETCH FORWARD 512` 有界流式计算 row count 和稳定内容 SHA-256；只保留表名、计数及摘要，不输出行内容，并要求运行前后整个快照完全相同。为避免并发业务写入造成误报或掩盖边界，本步骤必须处于无业务写入的维护窗口。live app 的 container ID、host PID、RestartCount、image 和 revision 也必须完全相同。runner 原始日志先保存在 root-only tmpfs 文件中，并同时扫描实际管理员密码、应用数据库密码、认证 URL、连接参数、stack 和 `secretKey`；只有通过扫描后才输出脱敏 pass receipt。注意：`CREATE/DROP DATABASE` 必然写 PostgreSQL 集群 catalog/WAL，但所有业务 fixture 只写随机临时数据库，不写生产 `sciforge_collaboration`。
 

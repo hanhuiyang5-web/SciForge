@@ -14,6 +14,7 @@ import type {
   StoredInboxMessage,
   StoredParticipant,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
@@ -129,6 +130,10 @@ export interface CollaborationReadRepository {
   getProjectEndpointBinding(projectId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectEndpointBindingById(projectEndpointBindingId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectBindingByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjectEndpointBinding | null>
+  getProjectContentSpaceBinding(projectId: string): Promise<StoredProjectContentSpaceBinding | null>
+  getActiveProjectContentSpaceBindingByRootReferenceDigest(
+    rootReferenceDigest: string
+  ): Promise<StoredProjectContentSpaceBinding | null>
   getProjectInputByProviderMessage(endpointId: string, providerMessageId: string): Promise<StoredProjectInput | null>
   getHumanRequest(humanRequestId: string): Promise<StoredHumanRequest | null>
   getHumanAnswerForRequest(humanRequestId: string): Promise<StoredHumanAnswer | null>
@@ -162,6 +167,7 @@ export interface CollaborationReadRepository {
   countProjectHumanRequests(projectId: string): Promise<number>
   countProjectTasks(projectId: string, coordinationRound?: number): Promise<number>
   countOpenProjectTasks(projectId: string): Promise<number>
+  countOpenProjectFileTasks(projectId: string): Promise<number>
   listOpenTasksForAgent(agentId: string): Promise<StoredTask[]>
   getTask(taskId: string): Promise<StoredTask | null>
   listProjectTasks(projectId: string): Promise<StoredTask[]>
@@ -212,6 +218,8 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   getZulipBindingRequestByCodeDigestForUpdate(codeDigest: string): Promise<StoredZulipBindingRequest | null>
   getExternalIdentityForUpdate(externalIdentityId: string): Promise<StoredExternalIdentity | null>
   getProjectForUpdate(projectId: string): Promise<StoredProject | null>
+  getProjectContentSpaceBindingForUpdate(projectId: string): Promise<StoredProjectContentSpaceBinding | null>
+  getResourceRefForUpdate(resourceRefId: string): Promise<StoredResourceRef | null>
   getAgentForUpdate(agentId: string): Promise<StoredAgent | null>
   getTaskForUpdate(taskId: string): Promise<StoredTask | null>
   getHumanRequestForUpdate(humanRequestId: string): Promise<StoredHumanRequest | null>
@@ -262,6 +270,10 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateManagedContainer(container: StoredManagedContainer, expectedRevision: number): Promise<void>
   insertManagedContainerJob(job: StoredManagedContainerJob): Promise<void>
   upsertProjectEndpointBinding(binding: StoredProjectEndpointBinding, expectedRevision: number | null): Promise<void>
+  upsertProjectContentSpaceBinding(
+    binding: StoredProjectContentSpaceBinding,
+    expectedRevision: number | null
+  ): Promise<void>
   insertProjectInput(input: Omit<StoredProjectInput, 'sequence'>): Promise<StoredProjectInput>
   insertHumanRequest(request: StoredHumanRequest): Promise<void>
   expireHumanRequestIfPending(

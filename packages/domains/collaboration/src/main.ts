@@ -36,6 +36,8 @@ import {
   collaborationProjectionUpdateResultSchema,
   collaborationProjectCreateInputSchema,
   collaborationProjectCreateResultSchema,
+  collaborationProjectContentSpaceBindInputSchema,
+  collaborationProjectContentSpaceBindResultSchema,
   collaborationStatusReadInputSchema,
   collaborationStatusReadResultSchema,
   collaborationSynchronizationRetryInputSchema,
@@ -54,6 +56,7 @@ import {
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
   type CollaborationProjectCreateInput,
+  type CollaborationProjectContentSpaceBindInput,
   type CollaborationSynchronizationRetryInput,
   type CollaborationTaskCreateInput,
   type CollaborationTaskListInput
@@ -483,13 +486,26 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.taskCreate,
         'Create collaboration Task',
-        'Creates an Owner-direct phase-one Task for an explicit Worker Agent without ResourceRefs or authorization requirements.',
+        'Creates an Owner-direct metadata or explicit Project Content Space file Task for one Worker Agent.',
         'external-write',
         collaborationTaskCreateInputSchema,
         collaborationTaskCreateResultSchema,
         async (raw) => ({
           output: { task: await options.getRuntime().createTask(
             collaborationTaskCreateInputSchema.parse(raw) as CollaborationTaskCreateInput
+          ) }
+        })
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.projectContentSpaceBind,
+        'Bind Project Content Space root',
+        'Binds one available Project-level portable container ResourceRef as the exclusive Project Content Space root.',
+        'external-write',
+        collaborationProjectContentSpaceBindInputSchema,
+        collaborationProjectContentSpaceBindResultSchema,
+        async (raw) => ({
+          output: { binding: await options.getRuntime().bindProjectContentSpace(
+            collaborationProjectContentSpaceBindInputSchema.parse(raw) as CollaborationProjectContentSpaceBindInput
           ) }
         })
       ),

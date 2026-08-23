@@ -83,6 +83,16 @@ test('global collaboration mutations satisfy the production broker contract with
     state: 'offered' as const,
     updatedAt: '2026-08-15T09:00:00.000Z'
   }
+  const contentSpaceBinding = {
+    schemaVersion: 1 as const,
+    type: 'project_content_space_binding' as const,
+    projectId: 'prj_Project000001',
+    rootResourceRefId: 'rrf_ContentRoot01',
+    status: 'active' as const,
+    revision: 1,
+    createdAt: '2026-08-15T09:00:00.000Z',
+    updatedAt: '2026-08-15T09:00:00.000Z'
+  }
   const runtime = {
     changeConnection: async () => connection,
     startChallenge: async () => ({
@@ -106,6 +116,7 @@ test('global collaboration mutations satisfy the production broker contract with
     shareProjection: async () => projection,
     retrySynchronization: async () => undefined,
     createProject: async () => project,
+    bindProjectContentSpace: async () => contentSpaceBinding,
     createTask: async () => task,
     manageContainer: async () => ({ managedContainer: null }),
     status: async () => status
@@ -156,6 +167,10 @@ test('global collaboration mutations satisfy the production broker contract with
       memberUserIds: [TEST_IDS.userId],
       coordinatorAgentId: TEST_IDS.agentId
     },
+    [COLLABORATION_CAPABILITY_IDS.projectContentSpaceBind]: {
+      projectId: contentSpaceBinding.projectId,
+      rootResourceRefId: contentSpaceBinding.rootResourceRefId
+    },
     [COLLABORATION_CAPABILITY_IDS.taskCreate]: {
       projectId: project.projectId,
       assigneeAgentId: TEST_IDS.agentId,
@@ -173,7 +188,7 @@ test('global collaboration mutations satisfy the production broker contract with
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 11)
+  assert.equal(mutations.length, 12)
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)

@@ -7,7 +7,7 @@ import {
   remoteSessionProjectionFixture
 } from '@sciforge/collaboration-contracts/testing'
 import { localProjectionFromRemote } from './projection-coordinator.js'
-import { activeProjectionBindingsForSession, phaseOneTaskProposal } from './runtime.js'
+import { activeProjectionBindingsForSession, ownerDirectTaskProposal } from './runtime.js'
 
 test('a closed Topic history does not block outbound mirroring for the active Topic on the same Session', () => {
   const active = localProjectionFromRemote(remoteSessionProjectionFixture, {
@@ -32,8 +32,8 @@ test('a closed Topic history does not block outbound mirroring for the active To
   )
 })
 
-test('Owner-direct phase-one Tasks cannot smuggle ResourceRefs or authorization requirements', () => {
-  assert.deepEqual(phaseOneTaskProposal({
+test('Owner-direct metadata Tasks cannot smuggle ResourceRefs or authorization requirements', () => {
+  assert.deepEqual(ownerDirectTaskProposal({
     projectId: 'prj_PhaseOneTest001',
     assigneeAgentId: 'agt_PhaseOneWorker01',
     title: 'Return a text result',
@@ -52,6 +52,41 @@ test('Owner-direct phase-one Tasks cannot smuggle ResourceRefs or authorization 
       requiredResourceRefIds: []
     },
     resourceRefIds: [],
+    authorizationRequirements: []
+  })
+})
+
+test('Owner-direct file Tasks project one typed file intent into exact A ResourceRefs', () => {
+  const fileIntent = {
+    schemaVersion: 1 as const,
+    bindingRevision: 3,
+    inputs: [
+      { resourceRefId: 'rrf_FileInput00001', destinationName: 'input.csv' },
+      { resourceRefId: 'rrf_FileInput00002', destinationName: 'metadata.json' }
+    ],
+    output: { containerResourceRefId: 'rrf_OutputRoot0001', mode: 'upload-new' as const }
+  }
+  assert.deepEqual(ownerDirectTaskProposal({
+    projectId: 'prj_PhaseOneTest001',
+    assigneeAgentId: 'agt_PhaseOneWorker01',
+    title: 'Process real files',
+    objective: 'Read the two inputs and upload one new result.',
+    completionCriteria: ['Upload the deterministic result.'],
+    fileIntent
+  }), {
+    assigneeAgentId: 'agt_PhaseOneWorker01',
+    title: 'Process real files',
+    objective: 'Read the two inputs and upload one new result.',
+    completionCriteria: ['Upload the deterministic result.'],
+    dependencyTaskIds: [],
+    requiredCapabilities: {
+      capabilityIds: ['project.worker.v1'],
+      vpnAccessIds: [],
+      slurmClusterIds: [],
+      requiredResourceRefIds: ['rrf_FileInput00001', 'rrf_FileInput00002']
+    },
+    resourceRefIds: ['rrf_FileInput00001', 'rrf_FileInput00002', 'rrf_OutputRoot0001'],
+    fileIntent,
     authorizationRequirements: []
   })
 })

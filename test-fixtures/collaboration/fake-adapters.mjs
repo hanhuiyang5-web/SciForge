@@ -299,6 +299,7 @@ export class FakeCollaborationRepository {
       managedContainers: new Map(),
       managedContainerJobs: new Map(),
       projectEndpointBindings: new Map(),
+      projectContentSpaceBindings: new Map(),
       projectInputs: new Map(),
       humanRequests: new Map(),
       humanAnswers: new Map(),
@@ -941,6 +942,37 @@ export class FakeCollaborationRepository {
     this.state.projectEndpointBindings.set(binding.projectId, copy(binding))
   }
 
+  async getProjectContentSpaceBinding(projectId) {
+    return copy(this.state.projectContentSpaceBindings.get(projectId) ?? null)
+  }
+
+  async getProjectContentSpaceBindingForUpdate(projectId) {
+    return this.getProjectContentSpaceBinding(projectId)
+  }
+
+  async getActiveProjectContentSpaceBindingByRootReferenceDigest(rootReferenceDigest) {
+    return copy([...this.state.projectContentSpaceBindings.values()].find((binding) => (
+      binding.status === 'active' && binding.rootReferenceDigest === rootReferenceDigest
+    )) ?? null)
+  }
+
+  async upsertProjectContentSpaceBinding(binding, expectedRevision) {
+    const current = this.state.projectContentSpaceBindings.get(binding.projectId)
+    if (expectedRevision === null) {
+      if (current) throw new Error('fake repository duplicate Project Content Space binding')
+    } else if (!current || current.revision !== expectedRevision) {
+      throw new Error('fake repository Project Content Space binding revision conflict')
+    }
+    const other = [...this.state.projectContentSpaceBindings.values()].find((candidate) => (
+      candidate.projectId !== binding.projectId && candidate.status === 'active' &&
+      candidate.rootReferenceDigest === binding.rootReferenceDigest
+    ))
+    if (binding.status === 'active' && other) {
+      throw new Error('fake repository duplicate active Project Content Space root')
+    }
+    this.state.projectContentSpaceBindings.set(binding.projectId, copy(binding))
+  }
+
   async getProjectInputByProviderMessage(endpointId, providerMessageId) {
     return copy([...this.state.projectInputs.values()].find((item) => (
       item.sourceHumanEndpointId === endpointId && item.providerMessageId === providerMessageId
@@ -1219,6 +1251,13 @@ export class FakeCollaborationRepository {
     )).length
   }
 
+  async countOpenProjectFileTasks(projectId) {
+    const closed = new Set(['rejected', 'completed', 'failed', 'cancelled'])
+    return [...this.state.tasks.values()].filter((item) => (
+      item.projectId === projectId && item.fileIntent && !closed.has(item.status)
+    )).length
+  }
+
   async listActiveProjectsForCoordinator(agentId) {
     return copy([...this.state.projects.values()].filter((item) => (
       item.coordinatorAgentId === agentId && item.status === 'active'
@@ -1262,6 +1301,10 @@ export class FakeCollaborationRepository {
 
   async getProjectForUpdate(projectId) {
     return copy(this.state.projects.get(projectId) ?? null)
+  }
+
+  async getResourceRefForUpdate(resourceRefId) {
+    return this.getResourceRef(resourceRefId)
   }
 
   async getAgentForUpdate(agentId) {

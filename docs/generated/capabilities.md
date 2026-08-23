@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **248**
+Registered actions: **249**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -66,6 +66,7 @@ Registered actions: **248**
 | `collaboration.managed-container.inspect` | 1.0.0 | ui | read | none | global |
 | `collaboration.managed-container.provision` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.participant.primary-agent.select` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.project.content-space.bind` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.project.create` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
@@ -18527,6 +18528,127 @@ Selects an active Agent owned by the current user without guessing from presence
 }
 ```
 
+## `collaboration.project.content-space.bind`
+
+Binds one available Project-level portable container ResourceRef as the exclusive Project Content Space root.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedBindingRevision": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer"
+      },
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "rootResourceRefId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "rootResourceRefId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "binding": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "projectId": {
+            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rootResourceRefId": {
+            "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "const": "project_content_space_binding",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "revision",
+          "createdAt",
+          "updatedAt",
+          "type",
+          "projectId",
+          "rootResourceRefId",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "binding"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Bind Project Content Space root"
+}
+```
+
 ## `collaboration.project.create`
 
 Creates an Owner-direct Project with explicit members and an active local Coordinator Agent.
@@ -18591,6 +18713,60 @@ Creates an Owner-direct Project with explicit members and an active local Coordi
       "project": {
         "additionalProperties": false,
         "properties": {
+          "contentSpaceBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rootResourceRefId": {
+                "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "const": "project_content_space_binding",
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "revision",
+              "createdAt",
+              "updatedAt",
+              "type",
+              "projectId",
+              "rootResourceRefId",
+              "status"
+            ],
+            "type": "object"
+          },
           "coordinatorAgentId": {
             "maxLength": 256,
             "minLength": 1,
@@ -18685,6 +18861,69 @@ Creates an Owner-direct Project with explicit members and an active local Coordi
                   "maxLength": 256,
                   "minLength": 1,
                   "type": "string"
+                },
+                "fileIntent": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bindingRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "inputs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "destinationName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "resourceRefId": {
+                            "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "resourceRefId",
+                          "destinationName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "output": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "containerResourceRefId": {
+                          "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "mode": {
+                          "const": "upload-new",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "containerResourceRefId",
+                        "mode"
+                      ],
+                      "type": "object"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "bindingRevision",
+                    "inputs",
+                    "output"
+                  ],
+                  "type": "object"
                 },
                 "localTurnId": {
                   "maxLength": 256,
@@ -20542,6 +20781,60 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
         "items": {
           "additionalProperties": false,
           "properties": {
+            "contentSpaceBinding": {
+              "additionalProperties": false,
+              "properties": {
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "rootResourceRefId": {
+                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "const": "project_content_space_binding",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "type",
+                "projectId",
+                "rootResourceRefId",
+                "status"
+              ],
+              "type": "object"
+            },
             "coordinatorAgentId": {
               "maxLength": 256,
               "minLength": 1,
@@ -20636,6 +20929,69 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                     "maxLength": 256,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "fileIntent": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindingRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "inputs": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "destinationName": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "resourceRefId": {
+                              "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "resourceRefId",
+                            "destinationName"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "output": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "containerResourceRefId": {
+                            "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "mode": {
+                            "const": "upload-new",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "containerResourceRefId",
+                          "mode"
+                        ],
+                        "type": "object"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "bindingRevision",
+                      "inputs",
+                      "output"
+                    ],
+                    "type": "object"
                   },
                   "localTurnId": {
                     "maxLength": 256,
@@ -21085,7 +21441,7 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
 
 ## `collaboration.task.create`
 
-Creates an Owner-direct phase-one Task for an explicit Worker Agent without ResourceRefs or authorization requirements.
+Creates an Owner-direct metadata or explicit Project Content Space file Task for one Worker Agent.
 
 - Version: `1.0.0`
 - Audiences: ui
@@ -21120,6 +21476,69 @@ Creates an Owner-direct phase-one Task for an explicit Worker Agent without Reso
         "maxItems": 100,
         "minItems": 1,
         "type": "array"
+      },
+      "fileIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "bindingRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "inputs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "destinationName": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "resourceRefId": {
+                  "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "resourceRefId",
+                "destinationName"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "output": {
+            "additionalProperties": false,
+            "properties": {
+              "containerResourceRefId": {
+                "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "mode": {
+                "const": "upload-new",
+                "type": "string"
+              }
+            },
+            "required": [
+              "containerResourceRefId",
+              "mode"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "bindingRevision",
+          "inputs",
+          "output"
+        ],
+        "type": "object"
       },
       "objective": {
         "maxLength": 4000,
@@ -21196,6 +21615,69 @@ Creates an Owner-direct phase-one Task for an explicit Worker Agent without Reso
             "maxLength": 256,
             "minLength": 1,
             "type": "string"
+          },
+          "fileIntent": {
+            "additionalProperties": false,
+            "properties": {
+              "bindingRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "inputs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "destinationName": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resourceRefId": {
+                      "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "resourceRefId",
+                    "destinationName"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              "output": {
+                "additionalProperties": false,
+                "properties": {
+                  "containerResourceRefId": {
+                    "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "const": "upload-new",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "containerResourceRefId",
+                  "mode"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "bindingRevision",
+              "inputs",
+              "output"
+            ],
+            "type": "object"
           },
           "localTurnId": {
             "maxLength": 256,
@@ -21417,6 +21899,69 @@ Reads local canonical cloud Task projections and restart reconciliation state.
               "maxLength": 256,
               "minLength": 1,
               "type": "string"
+            },
+            "fileIntent": {
+              "additionalProperties": false,
+              "properties": {
+                "bindingRevision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "inputs": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "destinationName": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "resourceRefId": {
+                        "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "resourceRefId",
+                      "destinationName"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 100,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "output": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "containerResourceRefId": {
+                      "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "mode": {
+                      "const": "upload-new",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "containerResourceRefId",
+                    "mode"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "bindingRevision",
+                "inputs",
+                "output"
+              ],
+              "type": "object"
             },
             "localTurnId": {
               "maxLength": 256,

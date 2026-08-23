@@ -110,7 +110,7 @@ const outcome = supportedInvocation
 
 if (!outcome.ok) {
   process.stderr.write(`${JSON.stringify({
-    event: 'postgres.v9.integration',
+    event: 'postgres.v10.integration',
     status: 'failed',
     stage,
     failureCode: outcome.failureCode
@@ -120,7 +120,7 @@ if (!outcome.ok) {
   process.stdout.write(`${JSON.stringify(outcome.snapshot)}\n`)
 } else {
   process.stdout.write(`${JSON.stringify({
-    event: 'postgres.v9.integration',
+    event: 'postgres.v10.integration',
     status: 'passed',
     node: process.version,
     postgresVersion: outcome.postgresVersion,
@@ -268,14 +268,15 @@ async function run() {
     const readyAtV5 = await runtime.isCollaborationDatabaseReady(databasePool)
     await prepareLegacyProjectRecordTransferFixture(databasePool)
 
-    stage = 'migration_v9_hard_cap_rejection'
+    stage = 'migration_v10_hard_cap_rejection'
     await verifyMigrationHardCaps(databasePool)
 
-    stage = 'migration_v5_to_v9'
+    stage = 'migration_v5_to_v10'
     await runtime.runCollaborationMigrations(databasePool)
-    const versionsAtV9 = await migrationVersions(databasePool)
-    const readyAtV9 = await runtime.isCollaborationDatabaseReady(databasePool)
+    const versionsAtV10 = await migrationVersions(databasePool)
+    const readyAtV10 = await runtime.isCollaborationDatabaseReady(databasePool)
     const portalBoundedReadIndexes = await verifyPortalBoundedReadIndexes(databasePool)
+    await verifyProjectContentSpaceTaskIoSchema(databasePool)
     await verifyLegacyProjectRecordAuthorMigration(databasePool)
     const legacyAgent = await databasePool.query(
       `SELECT agent.status, agent.device_id,
@@ -288,13 +289,13 @@ async function run() {
     )
     const legacy = legacyAgent.rows[0]
     assert.ok(legacy)
-    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 9)
+    assert.equal(runtime.COLLABORATION_SCHEMA_VERSION, 10)
     assert.deepEqual(versionsAtV1, [1])
     assert.deepEqual(versionsAtV5, [1, 2, 3, 4, 5])
-    assert.deepEqual(versionsAtV9, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+    assert.deepEqual(versionsAtV10, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     assert.equal(readyAtV1, false)
     assert.equal(readyAtV5, false)
-    assert.equal(readyAtV9, true)
+    assert.equal(readyAtV10, true)
     assert.equal(legacy.status, 'revoked')
     assert.equal(legacy.device_id, null)
     assert.equal(legacy.credential_revoked, true)
@@ -322,15 +323,16 @@ async function run() {
     evidence = {
       postgresVersion: String(version.rows[0]?.server_version),
       postgresVersionNumber: String(versionNumber.rows[0]?.server_version_num),
-      migrations: versionsAtV9,
+      migrations: versionsAtV10,
       portalBoundedReadIndexes,
       checks: [
-        'v1_to_v5_to_v9_readiness',
+        'v1_to_v5_to_v10_readiness',
         'portal_bounded_read_indexes',
         'portal_hard_caps',
         'provider_identity_inbox_constraint',
         'portable_resource_reference_constraint',
         'managed_provider_container_schema',
+        'project_content_space_task_io_schema',
         'legacy_agent_revocation',
         'legacy_project_record_author_backfill',
         'legacy_project_record_author_transfer_ambiguity',
@@ -692,7 +694,7 @@ function createDeviceFixture(canonicalEnrollmentBytes, overrides) {
 }
 
 function temporaryDatabaseName() {
-  return `sciforge_identity_v9_it_${process.pid}_${randomBytes(6).toString('hex')}`
+  return `sciforge_identity_v10_it_${process.pid}_${randomBytes(6).toString('hex')}`
 }
 
 async function verifyPortalBoundedReadIndexes(pool) {
@@ -739,6 +741,60 @@ async function verifyPortalBoundedReadIndexes(pool) {
     assert.equal(actual.predicate, expected.predicate)
   }
   return expectedNames
+}
+
+async function verifyProjectContentSpaceTaskIoSchema(pool) {
+  const columns = await pool.query(
+    `SELECT table_name,column_name,data_type,is_nullable
+       FROM information_schema.columns
+      WHERE table_schema='sciforge_collaboration'
+        AND (table_name='project_content_space_bindings'
+          OR (table_name='tasks' AND column_name='file_intent'))
+      ORDER BY table_name,column_name`
+  )
+  assert.deepEqual(columns.rows, [
+    { table_name: 'project_content_space_bindings', column_name: 'created_at', data_type: 'timestamp with time zone', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'project_id', data_type: 'text', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'revision', data_type: 'bigint', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'root_reference_digest', data_type: 'bytea', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'root_resource_ref_id', data_type: 'text', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'status', data_type: 'text', is_nullable: 'NO' },
+    { table_name: 'project_content_space_bindings', column_name: 'updated_at', data_type: 'timestamp with time zone', is_nullable: 'NO' },
+    { table_name: 'tasks', column_name: 'file_intent', data_type: 'jsonb', is_nullable: 'YES' }
+  ])
+  const requiredConstraints = [
+    'project_content_space_bindings_project_fk',
+    'project_content_space_bindings_revision_valid',
+    'project_content_space_bindings_root_digest_valid',
+    'project_content_space_bindings_root_fk',
+    'project_content_space_bindings_status_valid',
+    'resource_refs_project_resource_unique',
+    'tasks_file_intent_shape'
+  ]
+  const constraints = await pool.query(
+    `SELECT constraint_name
+       FROM information_schema.table_constraints
+      WHERE constraint_schema='sciforge_collaboration'
+        AND constraint_name=ANY($1::text[])
+      ORDER BY constraint_name`,
+    [requiredConstraints]
+  )
+  assert.deepEqual(constraints.rows.map((row) => row.constraint_name), requiredConstraints)
+  const index = await pool.query(
+    `SELECT index_metadata.indisunique AS is_unique,
+            pg_catalog.pg_get_indexdef(index_relation.oid,1,true) AS key_column,
+            pg_catalog.pg_get_expr(index_metadata.indpred,index_metadata.indrelid,true) AS predicate
+       FROM pg_catalog.pg_index AS index_metadata
+       JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid=index_metadata.indexrelid
+       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=index_relation.relnamespace
+      WHERE namespace.nspname='sciforge_collaboration'
+        AND index_relation.relname='project_content_space_bindings_active_root_unique'`
+  )
+  assert.deepEqual(index.rows, [{
+    is_unique: true,
+    key_column: 'root_reference_digest',
+    predicate: "status = 'active'::text"
+  }])
 }
 
 async function applyMigrationUrls(pool, migrationUrls) {

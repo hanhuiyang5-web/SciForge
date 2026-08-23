@@ -33,6 +33,7 @@ test('restart recovery reconciles in-flight projection, outbox, and Task identit
       nextSequence: 2
     }],
     projects: [],
+    contentSpaceBindings: [],
     tasks: [taskFixture],
     taskRuns: [{
       task: taskFixture,

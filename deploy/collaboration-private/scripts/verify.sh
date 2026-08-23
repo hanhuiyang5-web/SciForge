@@ -62,8 +62,8 @@ schema_version="$("${COMPOSE[@]}" exec -T --user postgres postgres \
 expected_schema_version="$(expected_collaboration_schema_version)"
 [[ "$schema_version" == "$expected_schema_version" ]] \
   || die "Live database schema version does not match the validated release migrations."
-[[ "$expected_schema_version" == 9 ]] \
-  || die "This fixed release verifier requires collaboration schema v9 exactly."
+[[ "$expected_schema_version" == 10 ]] \
+  || die "This fixed release verifier requires collaboration schema v10 exactly."
 
 project_record_author_nullable="$("${COMPOSE[@]}" exec -T --user postgres postgres \
   psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
@@ -72,7 +72,7 @@ project_record_author_nullable="$("${COMPOSE[@]}" exec -T --user postgres postgr
                AND table_name='project_records'
                AND column_name='author_user_id';")"
 [[ "$project_record_author_nullable" == NO ]] \
-  || die "Live database schema v9 does not require a ProjectRecord User author."
+  || die "Live database schema v10 does not require a ProjectRecord User author."
 
 portal_hard_cap_violation_count="$("${COMPOSE[@]}" exec -T --user postgres postgres \
   psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
@@ -93,7 +93,7 @@ portal_hard_cap_violation_count="$("${COMPOSE[@]}" exec -T --user postgres postg
          GROUP BY project_id HAVING count(*)>10000
        ) AS over_human_needed);")"
 [[ "$portal_hard_cap_violation_count" == 0 ]] \
-  || die "Live database schema v9 violates a fixed Portal collection cap."
+  || die "Live database schema v10 violates a fixed Portal collection cap."
 
 portal_bounded_read_index_receipt="$("${COMPOSE[@]}" exec -T --user postgres postgres \
   psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
@@ -151,7 +151,56 @@ portal_bounded_read_index_receipt="$("${COMPOSE[@]}" exec -T --user postgres pos
      ORDER BY expected.index_name;")"
 expected_portal_bounded_read_index_receipt=$'agent_nodes_active_owner_agent_idx\nhuman_answers_project_created_answer_idx\nhuman_requests_project_target_request_id_idx\noidc_identities_active_user_issuer_idx\nproject_members_active_project_user_idx\nproject_members_active_user_project_idx\nproject_records_candidate_task_result_project_idx\nproject_records_project_record_id_idx\ntasks_active_assignee_idx\ntasks_project_task_id_idx'
 [[ "$portal_bounded_read_index_receipt" == "$expected_portal_bounded_read_index_receipt" ]] \
-  || die "Live database schema v9 is missing an exact Portal bounded-read index."
+  || die "Live database schema v10 is missing an exact Portal bounded-read index."
+
+task_file_intent_type="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="SELECT data_type || ':' || is_nullable
+             FROM information_schema.columns
+             WHERE table_schema='sciforge_collaboration'
+               AND table_name='tasks'
+               AND column_name='file_intent';")"
+[[ "$task_file_intent_type" == jsonb:YES ]] \
+  || die "Live database schema v10 is missing the nullable Task file intent."
+
+content_space_binding_shape="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="
+    SELECT
+      (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='sciforge_collaboration'
+         AND table_name='project_content_space_bindings'
+         AND is_nullable='NO')
+      || ':' ||
+      (SELECT count(*) FROM information_schema.table_constraints
+       WHERE constraint_schema='sciforge_collaboration'
+         AND constraint_name=ANY(ARRAY[
+           'project_content_space_bindings_project_fk',
+           'project_content_space_bindings_revision_valid',
+           'project_content_space_bindings_root_digest_valid',
+           'project_content_space_bindings_root_fk',
+           'project_content_space_bindings_status_valid',
+           'resource_refs_project_resource_unique',
+           'tasks_file_intent_shape'
+         ]));")"
+[[ "$content_space_binding_shape" == 7:7 ]] \
+  || die "Live database schema v10 is missing the exact Project Content Space binding shape."
+
+content_space_root_index="$("${COMPOSE[@]}" exec -T --user postgres postgres \
+  psql -U sciforge_collab -d sciforge_collaboration --tuples-only --no-align \
+  --command="
+    SELECT index_metadata.indisunique || ':' ||
+           pg_catalog.pg_get_indexdef(index_relation.oid,1,true) || ':' ||
+           pg_catalog.pg_get_expr(index_metadata.indpred,index_metadata.indrelid,true)
+      FROM pg_catalog.pg_index AS index_metadata
+      JOIN pg_catalog.pg_class AS index_relation
+        ON index_relation.oid=index_metadata.indexrelid
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid=index_relation.relnamespace
+     WHERE namespace.nspname='sciforge_collaboration'
+       AND index_relation.relname='project_content_space_bindings_active_root_unique';")"
+[[ "$content_space_root_index" == "t:root_reference_digest:status = 'active'::text" ]] \
+  || die "Live database schema v10 is missing the exact active Project Content Space root uniqueness gate."
 
 expected_tables="$(expected_collaboration_tables)"
 expected_table_count="$(printf '%s\n' "$expected_tables" | awk 'END { print NR }')"
@@ -325,4 +374,4 @@ websocket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' 
   "$base_url/v1/events" || true)"
 [[ "$websocket_status" == "401" ]] || die "Unauthenticated WebSocket Upgrade was not rejected with HTTP 401."
 
-echo "Verification passed: loopback-only app, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, required ProjectRecord User authors, fixed Portal hard caps, ten exact Portal/coordination bounded-read indexes, fixed image revision/UID/GID, A console, probes and fail-closed auth boundaries."
+echo "Verification passed: loopback-only app, least-privilege database role, release schema v${expected_schema_version}/${expected_table_count} tables, required ProjectRecord User authors, fixed Portal hard caps, ten exact Portal/coordination bounded-read indexes, exact Project Content Space Task I/O schema, fixed image revision/UID/GID, A console, probes and fail-closed auth boundaries."

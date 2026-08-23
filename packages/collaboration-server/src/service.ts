@@ -31,6 +31,7 @@ import type {
   StoredParticipant,
   StoredProjection,
   StoredProject,
+  StoredProjectContentSpaceBinding,
   StoredProjectEndpointBinding,
   StoredProjectInput,
   StoredProjectMember,
@@ -1087,6 +1088,106 @@ export class CollaborationService {
     return required(await this.repository.getProjectEndpointBinding(projectId), 'Project endpoint binding')
   }
 
+  async bindProjectContentSpace(actor: UserActor, input: {
+    projectId: string
+    rootResourceRefId: string
+    expectedProjectRevision: number
+    expectedBindingRevision?: number
+    idempotencyKey: string
+  }): Promise<StoredProjectContentSpaceBinding> {
+    return this.commit(actor, 'project.content_space.bind', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      const member = await tx.getProjectMember(project.projectId, actor.userId)
+      authorize({ actor, operation: 'project_admin', projectRole: member?.role })
+      expectRevision(project.revision, input.expectedProjectRevision)
+      if (!['active', 'paused'].includes(project.status)) {
+        fail('invalid_state_transition', 'A terminal Project cannot bind a Content Space root.')
+      }
+      const existing = await tx.getProjectContentSpaceBindingForUpdate(project.projectId)
+      if ((existing?.revision ?? undefined) !== input.expectedBindingRevision) {
+        fail('revision_conflict', 'The Project Content Space binding revision is stale.', {
+          retryable: true,
+          details: { currentRevision: existing?.revision ?? null }
+        })
+      }
+      if (existing && await tx.countOpenProjectFileTasks(project.projectId) > 0) {
+        fail('invalid_state_transition', 'Close every open file Task before changing the Project Content Space binding.')
+      }
+      // The ResourceRef row is the cross-Project serialization point. Every bind
+      // of the same root takes this lock before checking the active unique claim.
+      const root = required(await tx.getResourceRefForUpdate(input.rootResourceRefId), 'Content Space root ResourceRef')
+      assertProjectContentSpaceRoot(root, project.projectId)
+      const rootReferenceDigest = stableDigest(root.portableReference)
+      const other = await tx.getActiveProjectContentSpaceBindingByRootReferenceDigest(rootReferenceDigest)
+      if (other && other.projectId !== project.projectId) {
+        fail('identity_conflict', 'The Content Space root is already active for another Project.')
+      }
+      const binding: StoredProjectContentSpaceBinding = existing
+        ? { ...existing, rootResourceRefId: root.resourceRefId, rootReferenceDigest, status: 'active',
+            revision: existing.revision + 1, updatedAt: at }
+        : { projectId: project.projectId, rootResourceRefId: root.resourceRefId, rootReferenceDigest, status: 'active',
+            revision: 1, createdAt: at, updatedAt: at }
+      await tx.upsertProjectContentSpaceBinding(binding, existing?.revision ?? null)
+      await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
+      return {
+        response: entityResponse('project_content_space_binding.updated', binding),
+        resourceKind: 'project_content_space_binding',
+        resourceId: binding.projectId
+      }
+    }).then(responseEntity<StoredProjectContentSpaceBinding>)
+  }
+
+  async unbindProjectContentSpace(actor: UserActor, input: {
+    projectId: string
+    expectedProjectRevision: number
+    expectedBindingRevision: number
+    idempotencyKey: string
+  }): Promise<StoredProjectContentSpaceBinding> {
+    return this.commit(actor, 'project.content_space.unbind', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      const member = await tx.getProjectMember(project.projectId, actor.userId)
+      authorize({ actor, operation: 'project_admin', projectRole: member?.role })
+      expectRevision(project.revision, input.expectedProjectRevision)
+      const binding = required(
+        await tx.getProjectContentSpaceBindingForUpdate(project.projectId),
+        'Project Content Space binding'
+      )
+      expectRevision(binding.revision, input.expectedBindingRevision)
+      if (binding.status !== 'active') {
+        fail('invalid_state_transition', 'The Project Content Space binding is already closed.')
+      }
+      if (await tx.countOpenProjectFileTasks(project.projectId) > 0) {
+        fail('invalid_state_transition', 'Close every open file Task before closing the Project Content Space binding.')
+      }
+      const updated: StoredProjectContentSpaceBinding = {
+        ...binding,
+        status: 'closed',
+        revision: binding.revision + 1,
+        updatedAt: at
+      }
+      await tx.upsertProjectContentSpaceBinding(updated, binding.revision)
+      await tx.updateProject({ ...project, revision: project.revision + 1, updatedAt: at }, project.revision)
+      return {
+        response: entityResponse('project_content_space_binding.updated', updated),
+        resourceKind: 'project_content_space_binding',
+        resourceId: updated.projectId
+      }
+    }).then(responseEntity<StoredProjectContentSpaceBinding>)
+  }
+
+  async getProjectContentSpaceBinding(
+    actor: AuthContext,
+    projectId: string
+  ): Promise<StoredProjectContentSpaceBinding> {
+    if (actor.kind === 'system') fail('permission_denied', 'System context cannot read Project bindings.')
+    const member = await this.repository.getProjectMember(projectId, actor.userId)
+    authorize({ actor, operation: 'project_read', projectMember: Boolean(member?.active) })
+    return required(
+      await this.repository.getProjectContentSpaceBinding(projectId),
+      'Project Content Space binding'
+    )
+  }
+
   async updateProjectEndpointBinding(actor: UserActor, input: {
     projectEndpointBindingId: string
     expectedRevision: number
@@ -1586,6 +1687,7 @@ export class CollaborationService {
     dependencyTaskIds: string[]
     requiredCapabilities?: StoredWorkerRequirement
     resourceRefIds?: string[]
+    fileIntent?: StoredTask['fileIntent']
     authorizationRequirements?: StoredAuthorizationRequirement[]
     expectedProjectRevision: number
     confirmationId?: string
@@ -1603,6 +1705,7 @@ export class CollaborationService {
       dependencyTaskIds: input.dependencyTaskIds,
       requiredCapabilities: input.requiredCapabilities,
       resourceRefIds: input.resourceRefIds,
+      fileIntent: input.fileIntent,
       authorizationRequirements: input.authorizationRequirements
     }
     let proposal: ReturnType<typeof normalizeTaskCreateProposal>
@@ -1624,6 +1727,13 @@ export class CollaborationService {
       requiredResourceRefIds: [...proposal.requiredCapabilities.requiredResourceRefIds]
     }
     const resourceRefIds = [...proposal.resourceRefIds]
+    const fileIntent = proposal.fileIntent
+      ? {
+          ...proposal.fileIntent,
+          inputs: proposal.fileIntent.inputs.map((file) => ({ ...file })),
+          output: { ...proposal.fileIntent.output }
+        }
+      : undefined
     const authorizationRequirements = proposal.authorizationRequirements.map((requirement) => ({ ...requirement }))
     for (const requirement of authorizationRequirements) validateProjectSummary(requirement.description)
     return this.commit(actor, 'task.create', input.idempotencyKey, { ...input, ...proposal,
@@ -1679,10 +1789,44 @@ export class CollaborationService {
         if (dependency.projectId !== project.projectId) fail('validation_failed', 'Dependencies must belong to the same Project.')
       }
       const referencedResourceIds = new Set([...resourceRefIds, ...requiredCapabilities.requiredResourceRefIds])
+      const referencedResources = new Map<string, StoredResourceRef>()
       for (const resourceRefId of referencedResourceIds) {
         const resource = required(await tx.getResourceRef(resourceRefId), 'Task ResourceRef')
         if (resource.projectId !== project.projectId || resource.status !== 'available') {
           fail('resource_unavailable', 'Task requirements cite a ResourceRef unavailable to this Project.')
+        }
+        referencedResources.set(resourceRefId, resource)
+      }
+      if (fileIntent) {
+        const binding = required(
+          await tx.getProjectContentSpaceBinding(project.projectId),
+          'Project Content Space binding'
+        )
+        if (binding.status !== 'active') {
+          fail('resource_unavailable', 'The Project Content Space binding is not active.')
+        }
+        expectRevision(binding.revision, fileIntent.bindingRevision)
+        if (fileIntent.output.containerResourceRefId !== binding.rootResourceRefId) {
+          fail('validation_failed', 'Task output container must be the active Project Content Space root.')
+        }
+        const output = required(
+          referencedResources.get(fileIntent.output.containerResourceRefId) ?? null,
+          'Task output container ResourceRef'
+        )
+        assertProjectContentSpaceRoot(output, project.projectId)
+        for (const file of fileIntent.inputs) {
+          const resource = required(
+            referencedResources.get(file.resourceRefId) ?? null,
+            'Task input ResourceRef'
+          )
+          if (
+            resource.projectId !== project.projectId ||
+            resource.kind !== 'content-space.file-reference' ||
+            !resource.portableReference ||
+            resource.taskId !== undefined
+          ) {
+            fail('resource_unavailable', 'Task file inputs must be portable Project-level Content Space files.')
+          }
         }
       }
       const taskId = newId('tsk')
@@ -1697,7 +1841,8 @@ export class CollaborationService {
         assigneeAgentId: assignee.agentId, assigneeUserId: assignee.ownerUserId,
         createdByAgentId: project.coordinatorAgentId, title: proposal.title, objective: proposal.objective,
         completionCriteria: criteria,
-        dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds, authorizationRequirements,
+        dependencyTaskIds: dependencies, requiredCapabilities, resourceRefIds,
+        ...(fileIntent ? { fileIntent } : {}), authorizationRequirements,
         status: 'offered', retryCount: 0, maxRetries: project.budgets.maxTaskRetries,
         coordinationRound: project.coordinationRound, revision: 1, createdAt: at, updatedAt: at }
       await tx.insertTask(task)
@@ -4065,6 +4210,21 @@ function validateProjectSummary(summary: string): void {
   ]
   if (forbidden.some((pattern) => pattern.test(summary))) {
     fail('validation_failed', 'Project records accept bounded shared summaries only; credentials, local paths, transcripts, and tool logs are forbidden.')
+  }
+}
+
+function assertProjectContentSpaceRoot(resource: StoredResourceRef, projectId: string): void {
+  if (
+    resource.projectId !== projectId ||
+    resource.status !== 'available' ||
+    resource.kind !== 'content-space.container-reference' ||
+    !resource.portableReference ||
+    resource.taskId !== undefined
+  ) {
+    fail(
+      'resource_unavailable',
+      'A Project Content Space root must be an available portable Project-level container ResourceRef.'
+    )
   }
 }
 

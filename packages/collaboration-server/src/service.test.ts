@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { computeTaskCreateProposalDigest } from '@sciforge/collaboration-contracts'
+// @ts-expect-error Test-only E contract bridge is runtime-typed by its source package.
+import {
+  toPortableContentContainerReference,
+  toPortableContentFileReference
+} from '../../../test-fixtures/collaboration/e-content-space-portable.mjs'
 
 import {
   FakeCollaborationRepository,
@@ -2381,6 +2386,195 @@ describe('CollaborationService canonical transactions', () => {
       action: 'resource.invalidate', outcome: 'rejected',
       metadata: expect.objectContaining({ errorCode: 'revision_conflict' })
     }))
+  })
+
+  it('binds one exclusive Content Space root and creates a revision-fenced real file Task', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const authentication = new AuthenticationService(repository, now)
+    const owner = await onboard(service, authentication, 'file-loop-owner', 'provider-file-loop-owner')
+    const worker = await onboard(service, authentication, 'file-loop-worker', 'provider-file-loop-worker')
+    const coordinator = await registerAgent(service, owner.user, 'fileloopcoord')
+    const workerAgent = await registerAgent(service, worker.user, 'fileloopwork1')
+    const workerDevice = await authentication.resolveBearer(workerAgent.deviceCredential!)
+    if (workerDevice.kind !== 'agent_device') throw new Error('Expected Worker Agent actor')
+    const project = await service.createProject(owner.user, {
+      displayName: 'Real file loop',
+      goal: 'Download one real input and upload one new output.',
+      memberUserIds: [owner.userId, worker.userId],
+      coordinatorAgentId: coordinator.agent.agentId,
+      idempotencyKey: 'idem_file_loop_project_01'
+    })
+    const otherProject = await service.createProject(owner.user, {
+      displayName: 'Other file loop',
+      goal: 'Prove one provider root cannot serve two Projects.',
+      memberUserIds: [owner.userId],
+      coordinatorAgentId: coordinator.agent.agentId,
+      idempotencyKey: 'idem_file_loop_other_project_01'
+    })
+    const portableRoot = toPortableContentContainerReference({
+      providerInstanceRef: 'opencontent.file-loop-team',
+      containerId: 'team-root-001'
+    })
+    const portableInput = toPortableContentFileReference({
+      providerInstanceRef: 'opencontent.file-loop-team',
+      fileId: 'input-file-001'
+    })
+    const root = await service.createResourceRef(owner.user, {
+      projectId: project.projectId,
+      provider: 'opencontent',
+      externalId: 'team-root-001',
+      kind: 'content-space.container-reference',
+      name: 'Run 0 Team root',
+      portableReference: portableRoot,
+      idempotencyKey: 'idem_file_loop_root_01'
+    })
+    const input = await service.createResourceRef(owner.user, {
+      projectId: project.projectId,
+      provider: 'opencontent',
+      externalId: 'input-file-001',
+      kind: 'content-space.file-reference',
+      name: 'input.csv',
+      portableReference: portableInput,
+      version: 'sha256-input-v1',
+      idempotencyKey: 'idem_file_loop_input_01'
+    })
+    const duplicateRoot = await service.createResourceRef(owner.user, {
+      projectId: otherProject.projectId,
+      provider: 'opencontent',
+      externalId: 'same-team-root-another-ref',
+      kind: 'content-space.container-reference',
+      name: 'Same Run 0 Team root',
+      portableReference: portableRoot,
+      idempotencyKey: 'idem_file_loop_duplicate_root_01'
+    })
+
+    const binding = await service.bindProjectContentSpace(owner.user, {
+      projectId: project.projectId,
+      rootResourceRefId: root.resourceRefId,
+      expectedProjectRevision: project.revision,
+      idempotencyKey: 'idem_file_loop_bind_01'
+    })
+    expect(binding).toMatchObject({
+      projectId: project.projectId,
+      rootResourceRefId: root.resourceRefId,
+      status: 'active',
+      revision: 1
+    })
+    await expect(service.bindProjectContentSpace(owner.user, {
+      projectId: otherProject.projectId,
+      rootResourceRefId: duplicateRoot.resourceRefId,
+      expectedProjectRevision: otherProject.revision,
+      idempotencyKey: 'idem_file_loop_duplicate_bind_01'
+    })).rejects.toMatchObject({ code: 'identity_conflict' })
+
+    const fileIntent = {
+      schemaVersion: 1 as const,
+      bindingRevision: binding.revision,
+      inputs: [{ resourceRefId: input.resourceRefId, destinationName: 'input.csv' }],
+      output: { containerResourceRefId: root.resourceRefId, mode: 'upload-new' as const }
+    }
+    await expect(service.createTask(owner.user, {
+      projectId: project.projectId,
+      assigneeAgentId: workerAgent.agent.agentId,
+      title: 'Stale binding Task',
+      objective: 'This Task must not be created.',
+      completionCriteria: ['No Task is created.'],
+      dependencyTaskIds: [],
+      resourceRefIds: [input.resourceRefId, root.resourceRefId],
+      fileIntent: { ...fileIntent, bindingRevision: binding.revision + 1 },
+      expectedProjectRevision: project.revision + 1,
+      idempotencyKey: 'idem_file_loop_stale_task_01'
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    const task = await service.createTask(owner.user, {
+      projectId: project.projectId,
+      assigneeAgentId: workerAgent.agent.agentId,
+      title: 'Process one real file',
+      objective: 'Download input.csv and upload one new output file.',
+      completionCriteria: ['Return one uploaded output ResourceRef.'],
+      dependencyTaskIds: [],
+      resourceRefIds: [input.resourceRefId, root.resourceRefId],
+      fileIntent,
+      expectedProjectRevision: project.revision + 1,
+      idempotencyKey: 'idem_file_loop_task_01'
+    })
+    expect(task).toMatchObject({
+      resourceRefIds: [input.resourceRefId, root.resourceRefId],
+      fileIntent
+    })
+    expect(repository.state.tasks).toHaveProperty('size', 1)
+    await expect(service.unbindProjectContentSpace(owner.user, {
+      projectId: project.projectId,
+      expectedProjectRevision: project.revision + 2,
+      expectedBindingRevision: binding.revision,
+      idempotencyKey: 'idem_file_loop_unbind_open_rejected_01'
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+    const accepted = await service.transitionTask(workerDevice, {
+      taskId: task.taskId,
+      executionId: task.executionId,
+      status: 'accepted',
+      expectedRevision: task.revision,
+      idempotencyKey: 'idem_file_loop_accept_01'
+    })
+    const running = await service.transitionTask(workerDevice, {
+      taskId: task.taskId,
+      executionId: task.executionId,
+      status: 'in_progress',
+      expectedRevision: accepted.revision,
+      idempotencyKey: 'idem_file_loop_run_01'
+    })
+    const output = await service.createResourceRef(workerDevice, {
+      projectId: project.projectId,
+      taskId: task.taskId,
+      executionId: task.executionId,
+      expectedTaskRevision: running.revision,
+      provider: 'opencontent',
+      externalId: 'output-file-001',
+      kind: 'content-space.file-reference',
+      name: 'result.csv',
+      portableReference: toPortableContentFileReference({
+        providerInstanceRef: 'opencontent.file-loop-team',
+        fileId: 'output-file-001'
+      }),
+      version: 'sha256-output-v1',
+      idempotencyKey: 'idem_file_loop_output_01'
+    })
+    const completed = await service.transitionTask(workerDevice, {
+      taskId: task.taskId,
+      executionId: task.executionId,
+      status: 'completed',
+      expectedRevision: running.revision,
+      result: {
+        summary: 'Downloaded input.csv and uploaded result.csv as a new file.',
+        criterionEvidence: [{
+          criterionId: task.completionCriteria[0]!.criterionId,
+          summary: 'The uploaded output is registered in A.',
+          resourceRefIds: [output.resourceRefId]
+        }],
+        resourceRefIds: [output.resourceRefId],
+        logSummary: 'Run-0 transfer receipts were retained by the packaged Worker.'
+      },
+      idempotencyKey: 'idem_file_loop_complete_01'
+    })
+    expect(completed).toMatchObject({
+      status: 'completed',
+      resultSummary: 'Downloaded input.csv and uploaded result.csv as a new file.'
+    })
+    const resultRecord = await service.getProjectRecord(owner.user, completed.resultRecordId!)
+    expect(resultRecord).toMatchObject({
+      projectId: project.projectId,
+      kind: 'task_result',
+      status: 'candidate',
+      sourceTaskId: task.taskId,
+      sourceExecutionId: task.executionId,
+      resourceRefIds: [output.resourceRefId]
+    })
+    await expect(service.unbindProjectContentSpace(owner.user, {
+      projectId: project.projectId,
+      expectedProjectRevision: project.revision + 2,
+      expectedBindingRevision: binding.revision,
+      idempotencyKey: 'idem_file_loop_unbind_01'
+    })).resolves.toMatchObject({ status: 'closed', revision: 2 })
   })
 
   it('exposes a minimal member capability directory and governs monotonic Task progress per attempt', async () => {

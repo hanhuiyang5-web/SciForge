@@ -1,4 +1,7 @@
-import type { PortableResourceReferenceCarrier } from '@sciforge/collaboration-contracts'
+import type {
+  PortableResourceReferenceCarrier,
+  TaskFileIntent
+} from '@sciforge/collaboration-contracts'
 
 export type Assurance = 'basic' | 'verified' | 'strong' | 'device'
 export type ResourceStatus = 'active' | 'suspended' | 'revoked'
@@ -249,6 +252,16 @@ export type StoredProjectMember = {
   createdAt: string
 }
 
+export type StoredProjectContentSpaceBinding = {
+  projectId: string
+  rootResourceRefId: string
+  rootReferenceDigest: string
+  status: 'active' | 'closed'
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
 export type ProjectCapabilityAgentView = {
   agentId: string
   ownerUserId: string
@@ -383,6 +396,7 @@ export type StoredTask = {
   dependencyTaskIds: string[]
   requiredCapabilities: StoredWorkerRequirement
   resourceRefIds: string[]
+  fileIntent?: TaskFileIntent
   authorizationRequirements: StoredAuthorizationRequirement[]
   status: TaskStatus
   retryCount: number

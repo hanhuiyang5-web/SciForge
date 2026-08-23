@@ -36,6 +36,7 @@ import {
   toProject,
   toProjectCapabilityDirectory,
   toProjectCoordinationView,
+  toProjectContentSpaceBinding,
   toProjectEndpointBinding,
   toProjectInput,
   toProjectRecord,
@@ -535,10 +536,17 @@ export async function dispatchCollaborationCommand(
     }
     case 'project.endpoint.get': return entityResponse(command,
       toProjectEndpointBinding(await service.getProjectEndpointBinding(requiredActor(actor), command.projectId)))
+    case 'project.content_space.bind': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.bindProjectContentSpace(requiredUser(actor), command)))
+    case 'project.content_space.unbind': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.unbindProjectContentSpace(requiredUser(actor), command)))
+    case 'project.content_space.get': return entityResponse(command,
+      toProjectContentSpaceBinding(await service.getProjectContentSpaceBinding(requiredActor(actor), command.projectId)))
     case 'task.create': return entityResponse(command, toTask(await service.createTask(requiredHumanOrAgent(actor), {
       projectId: command.projectId, assigneeAgentId: command.assigneeAgentId, title: command.title,
       objective: command.objective, completionCriteria: command.completionCriteria, dependencyTaskIds: command.dependencyTaskIds,
       requiredCapabilities: command.requiredCapabilities, resourceRefIds: command.resourceRefIds,
+      fileIntent: command.fileIntent,
       authorizationRequirements: command.authorizationRequirements,
       expectedProjectRevision: command.expectedRevision, confirmationId: command.confirmationId,
       idempotencyKey: command.idempotencyKey })))
