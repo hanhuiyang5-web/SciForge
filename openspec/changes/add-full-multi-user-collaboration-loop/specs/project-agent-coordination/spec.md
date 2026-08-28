@@ -108,6 +108,12 @@ Coordinator 的 Project plan 与 Worker 的 Task transformation SHALL 通过 run
 - **AND** Cloud SHALL 在创建 Offer 时确认该 User 至少有一个当前合格运行时，并将 Task 的 required capability tags 作为权威事实保存
 - **AND** 每台 Device SHALL 在 claim 事务中重验当前 User/Device/Agent authority、online/ready、接单状态、Task capability 与 content readiness；任一事实过期或不合格 SHALL fail closed。
 
+#### Scenario: Runtime 返回通用任务对象而非 canonical Plan task
+
+- **WHEN** Runtime 返回包含 `id`、`description`、`assignee`、`dependencies` 或 `status` 的通用任务对象，且缺少 canonical `planItemId`、`objective`、`completionCriteria`、`dependencyPlanItemIds`、`requiredCapabilityTags` 或 `fileIntent`
+- **THEN** Project Coordinator SHALL 拒绝该响应且不得持久化 Plan draft
+- **AND** HCI SHALL 显示有界、可操作的失败原因，不得暴露 Provider 原始错误或内部 schema diagnostic。
+
 ### Requirement: HumanNeeded 使用统一 scope 合同且权威回答者是显式目标 Project 成员 User
 
 `HumanNeeded` SHALL 使用一套带显式 scope discriminator 与必填 `targetUserId` 的严格合同。`worker_execution` SHALL 绑定一个当前、未 fenced 的 Task/execution 及其 expected revisions，并默认定向该 execution 的 Worker User；`coordinator_project` SHALL 只绑定 Project、当前 Coordinator Agent 和 expected Coordinator authority epoch，由 Coordinator 显式选择一个 active Project member User，不得伪造 Task/execution。Cloud SHALL 持久化 question、scope、targetUserId、expiry 和 answer receipt；HumanAnswer SHALL 只由该 target User 的 OIDC 操作提交，或由 Cloud 将 verified Human Endpoint 精确解析到同一个已存在 target User 且核验当前 Project endpoint 后提交。Pairing SHALL 只绑定 endpoint，不得创建 User；未经验证的 IM 文本 SHALL NOT 直接生成 HumanAnswer。

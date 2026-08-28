@@ -57,6 +57,8 @@
 - [x] 6.4 实现 Owner Desktop provisioning/reconcile orchestrator、Device-signed attestation、dynamic add/removal pending 和 Owner root loss recovery HCI。
 - [x] 6.5 实现 outcome_unknown exact observation/link-or-abandon 流程，禁止无 observation 的 mark-success。
 - [x] 6.6 实现 Coordinator transfer HCI 和旧 Coordinator fencing 反馈；与 identity/collaboration/content-space 只通过标准 contracts/contributions 组合。
+- [x] 6.7 修复 Runtime 返回通用 task JSON 导致 Plan draft 生成失败：由 generic Agent execution Host 传递版本化 strict JSON Schema，Codex/Claude 使用原生 structured output，Project Coordinator 最终严格校验且只向 Renderer 返回有界失败原因；增加错误 `id/description/assignee/status` 形状不得落盘的回归测试。
+  - 在 `codex/plan-draft-pr94-on-latest`（`origin/test_colab@b42d3ce8`）复核：Project Coordinator `72/72`、Domain SDK `145/145`、Codex Runtime `14/14`、Root Runtime/IPC focused Vitest `247/247`、Root full Vitest `371/371` files / `3430/3430` tests、architecture/domain composition `27/27` 和 private skill `3/3` 均通过；Node/Web/domain typecheck、全仓 ESLint、capability/generated composition、package version audit、OpenSpec strict validation与 production build 均通过。文件选择回归证明模型只提交 `sourceInputIndex`，main 绑定原始 locator 与 Cloud active binding revision；paused planning-only 状态从激活所需的 membership/content facts 投影 scope，激活后仍由真实 Task Authority 重新门禁。相对当前 `origin/test_colab` 的 changed production source audit 检查 30 个生产源码且 findings 为空。真实 Cloud 草稿持久化和 Task Offer UI 复测仍待用户重新登录后执行，不冒充已通过。
 
 ## 7. 既有 A 测试环境蓝绿升级
 

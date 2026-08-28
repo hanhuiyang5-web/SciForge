@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import type { CoordinatorCloudCommandService } from '@sciforge/domain-collaboration/coordinator-cloud-command'
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
-import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import type {
+  DomainMainAgentExecutionHost,
+  DomainMainAgentExecutionRequest
+} from '@sciforge/domain-sdk/agent-execution'
 import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import {
   restResponseSchema,
@@ -16,13 +19,15 @@ import {
 
 import {
   createProjectCoordinatorPlanPort,
-  defineProjectCoordinatorWorkspacePort
+  defineProjectCoordinatorWorkspacePort,
+  ProjectCoordinatorPlanGenerationError
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 
 test('local Coordinator Runtime creates an editable durable Plan draft with Worker User assignment', async () => {
   const settings = inMemorySettings()
   const prompts: string[] = []
+  const requests: DomainMainAgentExecutionRequest[] = []
   const workspace = workspaceFixture()
   const firstAgent = workspace.projects[0]!.workerGroups[0]!.agents[0]!
   workspace.projects[0]!.workerGroups[0]!.agents.push({
@@ -40,6 +45,7 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   })
   const agentExecution: DomainMainAgentExecutionHost = {
     run: async (request) => {
+      requests.push(request)
       prompts.push(request.prompt)
       return {
         runtimeId: 'codex-runtime',
@@ -82,6 +88,16 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
   assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
+  assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
+  assert.equal(requests[0]?.clientDirectiveId, 'project-plan:v2:prj_ProjectCreated01:1')
+  assert.equal(requests[0]?.outputSchema?.type, 'object')
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"planItemId"/u)
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"completionCriteria"/u)
+  assert.match(JSON.stringify(requests[0]?.outputSchema), /"dependencyPlanItemIds"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"assignee"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"propertyNames"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"\$ref"/u)
+  assert.doesNotMatch(JSON.stringify(requests[0]?.outputSchema), /"definitions"/u)
 
   const edited = await port.editDraft({
     projectId: generated.projectId,
@@ -124,6 +140,133 @@ test('local Coordinator Runtime creates an editable durable Plan draft with Work
       recommendationReason: 'An invented candidate must be rejected.'
     }]
   }), /active Project member/u)
+})
+
+test('generic task JSON is rejected without persisting a Plan draft', async () => {
+  const settings = inMemorySettings()
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspaceFixture()
+    }),
+    getAgentExecution: () => ({
+      run: async () => ({
+        runtimeId: 'codex-runtime',
+        threadId: 'thread-plan-invalid-1',
+        turnId: 'turn-plan-invalid-1',
+        state: 'completed',
+        text: JSON.stringify({
+          tasks: [{
+            id: 'task-1',
+            title: 'Summarize decisions',
+            description: 'Produce a summary.',
+            assignee: 'usr_Worker000001',
+            dependencies: [],
+            status: 'pending'
+          }],
+          rationale: 'Assign the available Worker User.'
+        })
+      })
+    }),
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  await assert.rejects(
+    port.generateDraft({
+      projectId: 'prj_ProjectCreated01',
+      instruction: 'Split the meeting into independently reviewable work.',
+      sourceInputLocators: [],
+      modelId: null
+    }),
+    (error: unknown) => (
+      error instanceof ProjectCoordinatorPlanGenerationError &&
+      error.reason === 'invalid_structured_output'
+    )
+  )
+  assert.equal(await port.readDraft({ projectId: 'prj_ProjectCreated01' }), null)
+})
+
+test('file selections bind only exact supplied locators and the active Cloud binding revision', async () => {
+  const settings = inMemorySettings()
+  const sourceLocator = {
+    contractVersion: 1 as const,
+    kind: 'content-space.file-reference' as const,
+    authority: 'opencontent.test',
+    identity: { fileId: 'agenda-1' }
+  }
+  let request: DomainMainAgentExecutionRequest | undefined
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => fileWorkspaceFixture()
+    }),
+    getAgentExecution: () => ({
+      run: async (input) => {
+        request = input
+        return {
+          runtimeId: 'codex-runtime',
+          threadId: 'thread-plan-file-1',
+          turnId: 'turn-plan-file-1',
+          state: 'completed',
+          text: JSON.stringify({
+            tasks: [{
+              planItemId: 'item_file_summary',
+              title: 'Write summary',
+              objective: 'Read the agenda and write a reviewable summary.',
+              completionCriteria: ['One Markdown summary is uploaded.'],
+              dependencyPlanItemIds: [],
+              requiredCapabilityTags: ['meeting.review'],
+              fileIntent: {
+                inputs: [{
+                  sourceInputIndex: 0,
+                  destinationName: 'agenda.md',
+                  expectedSemanticRevision: null,
+                  expectedMediaType: 'text/markdown'
+                }],
+                output: {
+                  fileName: 'summary.md',
+                  mediaType: 'text/markdown',
+                  maxBytes: 100_000
+                }
+              }
+            }],
+            rationale: 'The supplied agenda is the exact source for the summary.'
+          })
+        }
+      }
+    }),
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+
+  const draft = await port.generateDraft({
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Create one file-backed summary task.',
+    sourceInputLocators: [sourceLocator],
+    modelId: null
+  })
+
+  assert.deepEqual(draft.tasks[0]?.fileIntent, {
+    schemaVersion: 1,
+    bindingRevision: 3,
+    inputs: [{
+      kind: 'content-space.input-file',
+      locator: sourceLocator,
+      destinationName: 'agenda.md',
+      expectedSemanticRevision: null,
+      expectedMediaType: 'text/markdown'
+    }],
+    output: {
+      kind: 'content-space.output-new',
+      target: 'project-binding-root',
+      mode: 'upload-new',
+      fileName: 'summary.md',
+      mediaType: 'text/markdown',
+      maxBytes: 100_000
+    }
+  })
+  assert.match(JSON.stringify(request?.outputSchema), /"sourceInputIndex"/u)
+  assert.doesNotMatch(JSON.stringify(request?.outputSchema), /"identity"/u)
+  assert.match(request?.prompt ?? '', /Never copy or invent a locator identity/u)
 })
 
 test('immutable Plan submit uses Coordinator Agent authority before Owner confirmation and activation', async () => {
@@ -380,9 +523,9 @@ function workspaceFixture() {
               projectId: 'prj_ProjectCreated01',
               userId: 'usr_Worker000001',
               scope: 'text_tasks' as const,
-              state: 'eligible' as const,
+              state: 'suspended' as const,
               authorityEpoch: 1,
-              reason: null,
+              reason: 'project_paused' as const,
               effectiveAt: createdAt,
               revision: 1,
               createdAt,
@@ -414,6 +557,119 @@ function workspaceFixture() {
         recoveryActions: []
       }
     }]
+  }
+}
+
+function fileWorkspaceFixture() {
+  const base = workspaceFixture()
+  const now = base.observedAt
+  const providerInstance = {
+    schemaVersion: 1 as const,
+    type: 'provider_instance_reference' as const,
+    providerInstanceRef: 'opencontent.test'
+  }
+  const providerPrincipal = {
+    schemaVersion: 1 as const,
+    type: 'provider_directory_principal_reference' as const,
+    providerInstance,
+    principalKind: 'user' as const,
+    principalId: 'principal-worker'
+  }
+  const principalFact = {
+    schemaVersion: 1 as const,
+    type: 'provider_directory_principal_fact' as const,
+    providerPrincipalFactId: 'ppf_WorkerPlanFile01',
+    userId: 'usr_Worker000001',
+    providerPrincipal,
+    principalIdentityRevision: 1,
+    providerBindingAttestationDigest: 'c'.repeat(64),
+    publishedByDeviceId: 'dev_WorkerDevice01',
+    readiness: 'ready' as const,
+    readinessReason: null,
+    observedAt: now,
+    revision: 1,
+    createdAt: now,
+    updatedAt: now
+  }
+  const contentReadiness = {
+    schemaVersion: 1 as const,
+    type: 'project_content_readiness' as const,
+    projectId: 'prj_ProjectCreated01',
+    userId: 'usr_Worker000001',
+    providerInstance,
+    state: 'ready' as const,
+    reason: null,
+    providerPrincipalFactId: principalFact.providerPrincipalFactId,
+    snapshottedFactRevision: principalFact.revision,
+    providerPrincipal,
+    bindingRevision: 3,
+    lastObservationId: 'pob_WorkerPlanFile01',
+    effectiveAt: now,
+    revision: 2,
+    createdAt: now,
+    updatedAt: now
+  }
+  return {
+    ...base,
+    projects: base.projects.map((project) => ({
+      ...project,
+      project: {
+        ...project.project,
+        contentMode: 'required' as const
+      },
+      workerGroups: project.workerGroups.map((group) => ({
+        ...group,
+        agents: group.agents.map((agent) => ({
+          ...agent,
+          projectAvailability: {
+            ...agent.projectAvailability,
+            taskAuthorities: [
+              ...agent.projectAvailability.taskAuthorities,
+              {
+                ...agent.projectAvailability.taskAuthorities[0]!,
+                taskAuthorityId: 'tau_WorkerFile001',
+                scope: 'file_tasks' as const
+              }
+            ],
+            providerPrincipalFact: principalFact,
+            providerPrincipalSnapshotStatus: 'match' as const,
+            contentReadiness
+          }
+        }))
+      })),
+      provisioning: {
+        ...project.provisioning,
+        binding: {
+          schemaVersion: 1 as const,
+          revision: 3,
+          createdAt: now,
+          updatedAt: now,
+          type: 'project_content_space_binding' as const,
+          projectContentBindingId: 'pcb_PlanFileBinding01',
+          projectId: project.project.projectId,
+          contentOwnerUserId: 'usr_Owner0000001',
+          providerInstance,
+          rootLocator: {
+            contractVersion: 1 as const,
+            kind: 'content-space.container-reference' as const,
+            authority: 'opencontent.test',
+            identity: { containerId: 'project-root-1' }
+          },
+          rootLocatorDigest: 'a'.repeat(64),
+          provisioningIntentId: 'pci_PlanFileIntent01',
+          provisioningRevision: 2,
+          attestationId: 'pca_PlanFileAttest01',
+          attestationDigest: 'b'.repeat(64),
+          status: 'active' as const,
+          statusReason: null,
+          activatedAt: now,
+          degradedAt: null,
+          closedAt: null
+        },
+        providerPrincipalFacts: [principalFact],
+        contentReadiness: [contentReadiness]
+      }
+    }))
   }
 }
 
@@ -461,7 +717,13 @@ function workflowWorkspace(
             availability: {
               ...agent.projectAvailability.availability,
               revision: phase === 'active' ? 11 : agent.projectAvailability.availability.revision
-            }
+            },
+            taskAuthorities: agent.projectAvailability.taskAuthorities.map((authority) => ({
+              ...authority,
+              state: phase === 'active' ? 'eligible' as const : 'suspended' as const,
+              reason: phase === 'active' ? null : 'project_paused' as const,
+              revision: phase === 'active' ? 2 : authority.revision
+            }))
           }
         }))
       })),
