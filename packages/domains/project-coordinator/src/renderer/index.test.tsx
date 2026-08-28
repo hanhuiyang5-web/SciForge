@@ -1009,6 +1009,7 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorPlanSection, {
     project: awaitingConfirmationProjectFixture(),
     draft: null,
+    observedAt: '2026-08-25T01:08:00.000Z',
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
@@ -1018,6 +1019,24 @@ test('an awaiting-confirmation Plan renders its Owner action as a default-visibl
 
   assert.match(markup, /data-default-visible-card="plan-confirmation"/u)
   assert.match(markup, /projectCoordinatorConfirmActivate/u)
+})
+
+test('content-free Project labels member content readiness as not required', () => {
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorProvisioningSection, {
+    project: awaitingConfirmationProjectFixture(),
+    plan: null,
+    busy: false,
+    onPreview: () => undefined,
+    onApply: () => undefined,
+    onAddMember: () => undefined,
+    onRemoveMember: () => undefined,
+    onObserveAndLinkRecovery: () => undefined,
+    onAbandonRecovery: () => undefined,
+    onRetryRecoverySuccessor: () => undefined
+  }))
+
+  assert.match(markup, /projectCoordinatorContentNotRequired/u)
+  assert.doesNotMatch(markup, /not_applicable/u)
 })
 
 test('a local Plan draft exposes full content editing before immutable submit', () => {
@@ -1044,6 +1063,7 @@ test('a local Plan draft exposes full content editing before immutable submit', 
       createdAt: project.project.createdAt,
       updatedAt: project.project.updatedAt
     },
+    observedAt: project.project.updatedAt,
     busy: false,
     onGenerate: () => undefined,
     onEditDraft: () => undefined,
@@ -1058,6 +1078,55 @@ test('a local Plan draft exposes full content editing before immutable submit', 
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
   assert.match(markup, /projectCoordinatorSavePlanEdits/u)
+})
+
+test('paused Project Plan draft enables a matching online Worker before activation', () => {
+  const project = coordinatorTransferProjectFixture()
+  const baseTask = awaitingConfirmationProjectFixture().plan.plan.tasks[0]!
+  const renderDraft = (requiredCapabilityTags: string[]) => renderToStaticMarkup(
+    createElement(ProjectCoordinatorPlanSection, {
+      project: { ...project, plan: null },
+      draft: {
+        draftId: 'draft_PausedPlanning01',
+        draftRevision: 1,
+        projectId: project.project.projectId,
+        expectedProjectRevision: project.project.revision,
+        expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+        supersedesProjectPlanId: null,
+        sourceInputLocators: [],
+        tasks: [{ ...baseTask, requiredCapabilityTags }],
+        rationale: 'Choose one Runtime-ready Worker before activation.',
+        runtimeProvenance: awaitingConfirmationProjectFixture().plan.plan.runtimeProvenance,
+        assignments: [{
+          planItemId: baseTask.planItemId,
+          workerUserId: null,
+          recommendationReason: null
+        }],
+        createdAt: project.project.createdAt,
+        updatedAt: project.project.updatedAt
+      },
+      observedAt: project.project.updatedAt,
+      busy: false,
+      onGenerate: () => undefined,
+      onEditDraft: () => undefined,
+      onSubmitDraft: () => undefined,
+      onConfirmActivate: () => undefined
+    })
+  )
+
+  const matchingMarkup = renderDraft(['research.execute'])
+  const matchingOption = matchingMarkup.match(
+    /<option[^>]*value="usr_ProjectMember01"[^>]*>Project Member<\/option>/u
+  )?.[0]
+  assert.ok(matchingOption)
+  assert.doesNotMatch(matchingOption, /disabled/u)
+
+  const mismatchedMarkup = renderDraft(['document.write'])
+  const mismatchedOption = mismatchedMarkup.match(
+    /<option[^>]*value="usr_ProjectMember01"[^>]*>Project Member<\/option>/u
+  )?.[0]
+  assert.ok(mismatchedOption)
+  assert.match(mismatchedOption, /disabled/u)
 })
 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {

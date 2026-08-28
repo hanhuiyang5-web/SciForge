@@ -59,6 +59,7 @@ import type {
   ProjectCoordinatorResultReviewInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
+import { canProjectCoordinatorWorkerGroupAcceptPlannedTask } from '../plan-worker-eligibility.js'
 import {
   ProjectCoordinatorPlanDraftGenerationClientError,
   type ProjectCoordinatorRendererClient
@@ -997,6 +998,7 @@ export function ProjectCoordinatorPanel({
                 <ProjectCoordinatorPlanSection
                   project={project}
                   draft={draft}
+                  observedAt={workspace?.observedAt ?? new Date(nowMilliseconds).toISOString()}
                   busy={Boolean(busyAction?.startsWith('plan-'))}
                   onGenerate={generateDraft}
                   onEditDraft={editDraft}
@@ -1945,6 +1947,7 @@ export function ProjectCoordinatorTransferSection({
 export function ProjectCoordinatorPlanSection({
   project,
   draft,
+  observedAt,
   busy,
   onGenerate,
   onEditDraft,
@@ -1953,6 +1956,7 @@ export function ProjectCoordinatorPlanSection({
 }: Readonly<{
   project?: ProjectCoordinatorProject
   draft: ProjectCoordinatorPlanDraft | null
+  observedAt: string
   busy: boolean
   onGenerate(): void
   onEditDraft(content: Pick<
@@ -2039,15 +2043,18 @@ export function ProjectCoordinatorPlanSection({
                 >
                   <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
                   {visibleWorkerGroups.map((group) => {
-                    const online = group.agents.some((agent) => {
-                      const operational = projectCoordinatorAgentOperationalState(agent)
-                      return operational.state !== 'blocked' && operational.state !== 'offline'
-                    })
+                    const selectable = project !== undefined &&
+                      canProjectCoordinatorWorkerGroupAcceptPlannedTask(
+                        project,
+                        group,
+                        item,
+                        observedAt
+                      )
                     return (
                       <option
                         key={group.userId}
                         value={group.userId}
-                        disabled={!online}
+                        disabled={!selectable}
                       >
                         {group.displayName}
                       </option>
@@ -2958,7 +2965,9 @@ export function ProjectCoordinatorProvisioningSection({
                     <Status value={membership.state} />
                   </div>
                   <div className="flex items-center justify-between gap-2 text-ds-muted">
-                    <span>{readiness?.state ?? 'not_applicable'}</span>
+                    <span>{readiness?.state ?? t(project.project.contentMode === 'none'
+                      ? 'projectCoordinatorContentNotRequired'
+                      : 'projectCoordinatorContentBlocked')}</span>
                     {authoritySuspended ? (
                       <span>{t('projectCoordinatorTaskAuthoritySuspended')}</span>
                     ) : null}

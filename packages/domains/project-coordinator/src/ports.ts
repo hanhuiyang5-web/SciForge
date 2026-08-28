@@ -90,6 +90,11 @@ import {
   type ProjectCoordinatorWorkspace,
   type ProjectCoordinatorWorkspaceReadInput
 } from './contract.js'
+import {
+  canProjectCoordinatorWorkerGroupAcceptPlannedTask,
+  canUseProjectCoordinatorTaskScopeWhilePlanning,
+  isProjectCoordinatorRuntimeOnlineForPlanning
+} from './plan-worker-eligibility.js'
 import { ProjectCoordinatorStateStore } from './state.js'
 import type { ProjectCoordinatorProvisioningPort } from './provisioning.js'
 import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
@@ -408,88 +413,6 @@ function generatedTaskFileIntent(options: Readonly<{
   }
 }
 
-function isOnlineEligibleRuntime(
-  projectAvailability: ProjectWorkerAvailabilityView,
-  observedAt: string
-): boolean {
-  const { availability } = projectAvailability
-  return projectAvailability.membership?.state === 'active' &&
-    availability.agentActive &&
-    availability.deviceActive &&
-    availability.connectionStatus === 'online' &&
-    availability.runtimeReadiness === 'ready' &&
-    availability.acceptsNewOffers &&
-    availability.expiresAt > observedAt
-}
-
-function canUseTaskScopeWhilePlanning(
-  project: ProjectCoordinatorProject,
-  projectAvailability: ProjectWorkerAvailabilityView,
-  scope: TaskAuthority['scope']
-): boolean {
-  if (projectAvailability.membership?.state !== 'active') return false
-  if (project.project.status === 'completed' || project.project.status === 'cancelled') return false
-  if (project.project.status === 'active') {
-    return projectAvailability.taskAuthorities.some((authority) => (
-      authority.scope === scope && authority.state === 'eligible'
-    ))
-  }
-  if (scope === 'text_tasks') return true
-  const binding = project.provisioning.binding
-  const readiness = projectAvailability.contentReadiness
-  const principal = projectAvailability.providerPrincipalFact
-  return project.project.contentMode === 'required' &&
-    binding?.status === 'active' &&
-    binding.rootLocator !== null &&
-    binding.rootLocatorDigest !== null &&
-    readiness?.state === 'ready' &&
-    readiness.bindingRevision === binding.revision &&
-    readiness.providerPrincipalFactId !== null &&
-    readiness.snapshottedFactRevision !== null &&
-    projectAvailability.providerPrincipalSnapshotStatus === 'match' &&
-    principal?.readiness === 'ready'
-}
-
-function workerRuntimeCanAcceptPlannedTask(
-  project: ProjectCoordinatorProject,
-  projectAvailability: ProjectWorkerAvailabilityView,
-  task: ProjectPlanTask,
-  observedAt: string
-): boolean {
-  if (!isOnlineEligibleRuntime(projectAvailability, observedAt)) return false
-  const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'
-  if (!canUseTaskScopeWhilePlanning(project, projectAvailability, scope)) return false
-  if (task.requiredCapabilityTags.some((tag) => (
-    !projectAvailability.availability.runtimeCapabilityTags.includes(tag)
-  ))) return false
-  if (task.fileIntent === null) return true
-  const binding = project.provisioning.binding
-  const readiness = projectAvailability.contentReadiness
-  const principal = projectAvailability.providerPrincipalFact
-  return project.project.contentMode === 'required' &&
-    binding?.status === 'active' &&
-    binding.rootLocator !== null &&
-    binding.rootLocatorDigest !== null &&
-    binding.revision === task.fileIntent.bindingRevision &&
-    readiness?.state === 'ready' &&
-    readiness.bindingRevision === binding.revision &&
-    readiness.providerPrincipalFactId !== null &&
-    readiness.snapshottedFactRevision !== null &&
-    projectAvailability.providerPrincipalSnapshotStatus === 'match' &&
-    principal?.readiness === 'ready'
-}
-
-function workerGroupCanAcceptPlannedTask(
-  project: ProjectCoordinatorProject,
-  group: ProjectCoordinatorProject['workerGroups'][number],
-  task: ProjectPlanTask,
-  observedAt: string
-): boolean {
-  return group.agents.some(({ projectAvailability }) => (
-    workerRuntimeCanAcceptPlannedTask(project, projectAvailability, task, observedAt)
-  ))
-}
-
 function assertTasksHaveEligibleWorker(
   project: ProjectCoordinatorProject,
   tasks: readonly ProjectPlanTask[],
@@ -497,7 +420,7 @@ function assertTasksHaveEligibleWorker(
 ): void {
   for (const task of tasks) {
     if (project.workerGroups.some((group) => (
-      workerGroupCanAcceptPlannedTask(project, group, task, observedAt)
+      canProjectCoordinatorWorkerGroupAcceptPlannedTask(project, group, task, observedAt)
     ))) continue
     throw new Error(`Plan item ${task.planItemId} has no online eligible Runtime with one complete capability profile.`)
   }
@@ -518,7 +441,7 @@ function assertAssignmentsHaveEligibleRuntime(
     if (!task || !group) {
       throw new Error('A Plan assignment must select an active Project member User.')
     }
-    if (!workerGroupCanAcceptPlannedTask(project, group, task, observedAt)) {
+    if (!canProjectCoordinatorWorkerGroupAcceptPlannedTask(project, group, task, observedAt)) {
       throw new Error(`Plan item ${task.planItemId} requires one online eligible Runtime owned by the selected Worker User.`)
     }
   }
@@ -577,11 +500,15 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
       const candidates = project.workerGroups
         .map((group) => {
           const eligibleAgents = group.agents.filter(({ projectAvailability }) => (
-            isOnlineEligibleRuntime(projectAvailability, observedAt)
+            isProjectCoordinatorRuntimeOnlineForPlanning(projectAvailability, observedAt)
           ))
           const profiles = new Map(eligibleAgents.flatMap(({ projectAvailability }) => {
             const eligibleTaskScopes = (['text_tasks', 'file_tasks'] as const).filter((scope) => (
-              canUseTaskScopeWhilePlanning(project, projectAvailability, scope)
+              canUseProjectCoordinatorTaskScopeWhilePlanning(
+                project,
+                projectAvailability,
+                scope
+              )
             ))
             if (eligibleTaskScopes.length === 0) return []
             const profile = {
